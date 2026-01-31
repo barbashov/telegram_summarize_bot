@@ -15,6 +15,7 @@ type Config struct {
 	TelegramBotToken    string
 	TelegramAPIBaseURL  string
 	OpenAIAPIKey        string
+	OpenAIAPIBaseURL    string
 	WhitelistedChannels []int64
 
 	DefaultHistoryWindow time.Duration
@@ -40,6 +41,11 @@ func Load() (*Config, error) {
 	cfg.OpenAIAPIKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 	if cfg.OpenAIAPIKey == "" {
 		return nil, fmt.Errorf("OPENAI_API_KEY is required")
+	}
+
+	cfg.OpenAIAPIBaseURL = strings.TrimSpace(os.Getenv("OPENAI_API_BASE_URL"))
+	if cfg.OpenAIAPIBaseURL == "" {
+		cfg.OpenAIAPIBaseURL = "https://api.openai.com/v1"
 	}
 
 	cfg.TelegramAPIBaseURL = strings.TrimSpace(os.Getenv("TELEGRAM_API_BASE_URL"))

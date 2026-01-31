@@ -38,7 +38,7 @@ func main() {
 
 	store := storage.NewSQLiteStore(db)
 	timeParser := timeutil.NewParser(cfg.DefaultHistoryWindow, cfg.MaxHistoryWindow)
-	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, logger)
+	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, logger).WithBaseURL(cfg.OpenAIAPIBaseURL)
 
 	whitelist := service.NewWhitelist(cfg.WhitelistedChannels)
 	summarizer := service.NewSummarizer(store, llmClient, timeParser, whitelist, logger)

@@ -30,6 +30,10 @@ type OpenAIClient struct {
 	log    *log.Logger
 	http   *http.Client
 
+	// baseURL is configurable to allow pointing at compatible API gateways or
+	// self-hosted proxies instead of the public OpenAI endpoint.
+	baseURL string
+
 	// model is configurable to allow swapping models without code changes.
 	model string
 }
@@ -42,8 +46,19 @@ func NewOpenAIClient(apiKey string, logger *log.Logger) *OpenAIClient {
 		http: &http.Client{
 			Timeout: 30 * time.Second,
 		},
-		model: "gpt-4.1-mini",
+		baseURL: "https://api.openai.com/v1",
+		model:   "gpt-4.1-mini",
 	}
+}
+
+// WithBaseURL allows overriding the default OpenAI API base URL. This is
+// useful for testing or for routing traffic through a compatible proxy.
+func (c *OpenAIClient) WithBaseURL(baseURL string) *OpenAIClient {
+	if baseURL == "" {
+		return c
+	}
+	c.baseURL = baseURL
+	return c
 }
 
 // openAIChatRequest mirrors the subset of the OpenAI Chat Completions API we
@@ -98,7 +113,9 @@ func (c *OpenAIClient) Summarize(ctx context.Context, messages []ChatMessage) (s
 		return "", fmt.Errorf("marshal openai request: %w", err)
 	}
 
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.openai.com/v1/chat/completions", bytes.NewReader(buf))
+	url := c.baseURL + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(buf))
 	if err != nil {
 		return "", fmt.Errorf("create openai request: %w", err)
 	}
