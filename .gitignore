@@ -1,0 +1,32 @@
+# Binaries
+summary_bot
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Build artifacts
+*.test
+*.out
+coverage.*
+
+# Go modules
+vendor/
+
+# IDE/editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*.tmp
+
+# OS files
+.DS_Store
+
+# Logs
+*.log
+
+# Local databases
+*.db
+summary_bot.db
