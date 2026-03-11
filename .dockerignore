@@ -1,0 +1,30 @@
+# Git
+.git
+.gitignore
+
+# Documentation
+README.md
+agents.md
+*.md
+
+# Environment
+.env
+.env.*
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Test coverage
+coverage.*
+
+# Build artifacts
+*.test
+*.out

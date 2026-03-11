@@ -2,77 +2,77 @@ package main
 
 import (
 	"context"
-	"database/sql"
-	"log"
-	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
-	"summary_bot/config"
-	"summary_bot/llm"
-	"summary_bot/service"
-	"summary_bot/storage"
-	"summary_bot/telegram"
-	"summary_bot/timeutil"
+	"telegram_summarize_bot/bot"
+	"telegram_summarize_bot/config"
+	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/summarizer"
 )
 
 func main() {
-	logger := log.New(os.Stdout, "summary_bot ", log.LstdFlags|log.LUTC|log.Lshortfile)
+	logger.Init(true)
 
 	cfg, err := config.Load()
 	if err != nil {
-		logger.Fatalf("failed to load config: %v", err)
+		logger.Fatal().Err(err).Msg("Failed to load config")
 	}
 
-	db, err := sql.Open("sqlite3", cfg.DatabasePath)
+	database, err := db.New(cfg.DBPath)
 	if err != nil {
-		logger.Fatalf("failed to open database: %v", err)
+		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
-	defer db.Close()
+	defer database.Close()
 
-	if err := storage.InitSchema(db); err != nil {
-		logger.Fatalf("failed to init database schema: %v", err)
-	}
-
-	store := storage.NewSQLiteStore(db)
-	timeParser := timeutil.NewParser(cfg.DefaultHistoryWindow, cfg.MaxHistoryWindow)
-	llmClient := llm.NewOpenAIClient(cfg.OpenAIAPIKey, logger).WithBaseURL(cfg.OpenAIAPIBaseURL)
-
-	whitelist := service.NewWhitelist(cfg.WhitelistedChannels)
-	summarizer := service.NewSummarizer(store, llmClient, timeParser, whitelist, logger)
-
-	telegramClient := telegram.NewClient(cfg.TelegramBotToken, cfg.TelegramAPIBaseURL, logger)
-	handler := telegram.NewWebhookHandler(telegramClient, summarizer, store, whitelist, logger)
-
-	mux := http.NewServeMux()
-	mux.Handle(cfg.WebhookPath, handler)
-
-	server := &http.Server{
-		Addr:              cfg.ListenAddr,
-		Handler:           mux,
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	go func() {
-		logger.Printf("starting HTTP server on %s", cfg.ListenAddr)
-		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			logger.Fatalf("http server error: %v", err)
+	if len(cfg.InitialAdmins) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := database.EnsureGlobalAdmins(ctx, cfg.InitialAdmins); err != nil {
+			logger.Warn().Err(err).Msg("Failed to ensure initial admins")
+		} else {
+			logger.Info().Int("count", len(cfg.InitialAdmins)).Msg("Initial global admins added")
 		}
-	}()
+	}
 
-	// Graceful shutdown
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
+	logger.Info().
+		Str("db_path", cfg.DBPath).
+		Int("summary_hours", cfg.SummaryHours).
+		Int("retention_days", cfg.RetentionDays).
+		Int("max_messages", cfg.MaxMessages).
+		Int("rate_limit_sec", cfg.RateLimitSec).
+		Str("model", cfg.Model).
+		Msg("Configuration loaded")
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize summarizer")
+	}
+
+	tgBot, err := bot.NewBot(cfg, database, sum)
+	if err != nil {
+		logger.Fatal().Err(err).Msg("Failed to initialize bot")
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	if err := server.Shutdown(ctx); err != nil {
-		logger.Printf("http server shutdown error: %v", err)
+	sigChan := make(chan os.Signal, 1)
+	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigChan
+		logger.Info().Msg("Received shutdown signal")
+		cancel()
+	}()
+
+	logger.Info().Msg("Starting bot...")
+	if err := tgBot.Start(ctx); err != nil {
+		logger.Error().Err(err).Msg("Bot stopped with error")
 	}
 
-	logger.Println("shutdown complete")
+	logger.Info().Msg("Bot shutdown complete")
 }

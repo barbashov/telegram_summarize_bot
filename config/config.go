@@ -1,114 +1,128 @@
 package config
 
 import (
-	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/joho/godotenv"
 )
 
-// Config holds all runtime configuration loaded from environment variables.
-// This is intentionally simple and uses only the standard library so the
-// service can run as a single binary with minimal dependencies.
 type Config struct {
-	TelegramBotToken    string
-	TelegramAPIBaseURL  string
-	OpenAIAPIKey        string
-	OpenAIAPIBaseURL    string
-	WhitelistedChannels []int64
-
-	DefaultHistoryWindow time.Duration
-	MaxHistoryWindow     time.Duration
-
-	ListenAddr  string
-	WebhookPath string
-
-	DatabasePath string
+	BotToken      string
+	OpenRouterKey string
+	SummaryHours  int
+	RetentionDays int
+	MaxMessages   int
+	RateLimitSec  int
+	OpenRouterURL string
+	Model         string
+	DBPath        string
+	InitialAdmins []int64
 }
 
-// Load reads configuration from environment variables and applies sensible
-// defaults where possible. It performs validation and returns an error if
-// required configuration is missing or invalid.
 func Load() (*Config, error) {
-	cfg := &Config{}
+	_ = godotenv.Load()
 
-	cfg.TelegramBotToken = strings.TrimSpace(os.Getenv("TELEGRAM_BOT_TOKEN"))
-	if cfg.TelegramBotToken == "" {
-		return nil, fmt.Errorf("TELEGRAM_BOT_TOKEN is required")
-	}
-
-	cfg.OpenAIAPIKey = strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
-	if cfg.OpenAIAPIKey == "" {
-		return nil, fmt.Errorf("OPENAI_API_KEY is required")
-	}
-
-	cfg.OpenAIAPIBaseURL = strings.TrimSpace(os.Getenv("OPENAI_API_BASE_URL"))
-	if cfg.OpenAIAPIBaseURL == "" {
-		cfg.OpenAIAPIBaseURL = "https://api.openai.com/v1"
-	}
-
-	cfg.TelegramAPIBaseURL = strings.TrimSpace(os.Getenv("TELEGRAM_API_BASE_URL"))
-	if cfg.TelegramAPIBaseURL == "" {
-		cfg.TelegramAPIBaseURL = "https://api.telegram.org"
-	}
-
-	whitelistRaw := strings.TrimSpace(os.Getenv("WHITELISTED_CHANNELS"))
-	if whitelistRaw != "" {
-		parts := strings.Split(whitelistRaw, ",")
-		for _, p := range parts {
-			p = strings.TrimSpace(p)
-			if p == "" {
-				continue
-			}
-			id, err := strconv.ParseInt(p, 10, 64)
-			if err != nil {
-				return nil, fmt.Errorf("invalid channel id %q in WHITELISTED_CHANNELS: %w", p, err)
-			}
-			cfg.WhitelistedChannels = append(cfg.WhitelistedChannels, id)
+	summaryHours := 24
+	if v := os.Getenv("SUMMARY_HOURS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			summaryHours = parsed
 		}
 	}
 
-	defaultWindowStr := strings.TrimSpace(os.Getenv("DEFAULT_HISTORY_WINDOW"))
-	if defaultWindowStr == "" {
-		cfg.DefaultHistoryWindow = 24 * time.Hour
-	} else {
-		d, err := time.ParseDuration(defaultWindowStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid DEFAULT_HISTORY_WINDOW: %w", err)
+	retentionDays := 7
+	if v := os.Getenv("RETENTION_DAYS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			retentionDays = parsed
 		}
-		cfg.DefaultHistoryWindow = d
 	}
 
-	maxWindowStr := strings.TrimSpace(os.Getenv("MAX_HISTORY_WINDOW"))
-	if maxWindowStr == "" {
-		cfg.MaxHistoryWindow = 7 * 24 * time.Hour
-	} else {
-		d, err := time.ParseDuration(maxWindowStr)
-		if err != nil {
-			return nil, fmt.Errorf("invalid MAX_HISTORY_WINDOW: %w", err)
+	maxMessages := 100
+	if v := os.Getenv("MAX_MESSAGES"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			maxMessages = parsed
 		}
-		cfg.MaxHistoryWindow = d
 	}
 
-	if cfg.MaxHistoryWindow < cfg.DefaultHistoryWindow {
-		return nil, fmt.Errorf("MAX_HISTORY_WINDOW must be >= DEFAULT_HISTORY_WINDOW")
+	rateLimitSec := 60
+	if v := os.Getenv("RATE_LIMIT_SEC"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			rateLimitSec = parsed
+		}
 	}
 
-	cfg.ListenAddr = strings.TrimSpace(os.Getenv("LISTEN_ADDR"))
-	if cfg.ListenAddr == "" {
-		cfg.ListenAddr = ":8080"
+	botToken := os.Getenv("BOT_TOKEN")
+	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
+	openRouterURL := os.Getenv("OPENROUTER_URL")
+	model := os.Getenv("MODEL")
+	dbPath := os.Getenv("DB_PATH")
+
+	if botToken == "" {
+		return nil, &ConfigError{Field: "BOT_TOKEN"}
+	}
+	if openRouterKey == "" {
+		return nil, &ConfigError{Field: "OPENROUTER_API_KEY"}
 	}
 
-	cfg.WebhookPath = strings.TrimSpace(os.Getenv("WEBHOOK_PATH"))
-	if cfg.WebhookPath == "" {
-		cfg.WebhookPath = "/telegram/webhook"
+	if openRouterURL == "" {
+		openRouterURL = "https://openrouter.ai/api/v1"
+	}
+	if model == "" {
+		model = "meta-llama/llama-3.3-70b-instruct"
+	}
+	if dbPath == "" {
+		dbPath = "./data/bot.db"
 	}
 
-	cfg.DatabasePath = strings.TrimSpace(os.Getenv("DATABASE_PATH"))
-	if cfg.DatabasePath == "" {
-		cfg.DatabasePath = "summary_bot.db"
+	initialAdmins := parseInitialAdmins(os.Getenv("INITIAL_ADMINS"))
+
+	return &Config{
+		BotToken:      botToken,
+		OpenRouterKey: openRouterKey,
+		SummaryHours:  summaryHours,
+		RetentionDays: retentionDays,
+		MaxMessages:   maxMessages,
+		RateLimitSec:  rateLimitSec,
+		OpenRouterURL: openRouterURL,
+		Model:         model,
+		DBPath:        dbPath,
+		InitialAdmins: initialAdmins,
+	}, nil
+}
+
+type ConfigError struct {
+	Field string
+}
+
+func (e *ConfigError) Error() string {
+	return "config: missing required field: " + e.Field
+}
+
+func (c *Config) SummaryDuration() time.Duration {
+	return time.Duration(c.SummaryHours) * time.Hour
+}
+
+func (c *Config) RetentionDuration() time.Duration {
+	return time.Duration(c.RetentionDays) * 24 * time.Hour
+}
+
+func parseInitialAdmins(value string) []int64 {
+	if value == "" {
+		return nil
 	}
 
-	return cfg, nil
+	var admins []int64
+	parts := strings.Split(value, ",")
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
+			admins = append(admins, id)
+		}
+	}
+	return admins
 }

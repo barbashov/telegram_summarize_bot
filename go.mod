@@ -1,14 +1,43 @@
-module summary_bot
+module telegram_summarize_bot
 
-go 1.22
+go 1.22.3
 
 require (
-	github.com/mattn/go-sqlite3 v1.14.22
-	github.com/stretchr/testify v1.9.0
+	github.com/glebarez/sqlite v1.11.0
+	github.com/joho/godotenv v1.5.1
+	github.com/mymmrac/telego v0.31.0
+	github.com/rs/zerolog v1.33.0
+	github.com/sashabaranov/go-openai v1.28.2
 )
 
 require (
-	github.com/davecgh/go-spew v1.1.1 // indirect
-	github.com/pmezard/go-difflib v1.0.0 // indirect
-	gopkg.in/yaml.v3 v3.0.1 // indirect
+	github.com/andybalholm/brotli v1.1.0 // indirect
+	github.com/bytedance/sonic v1.11.9 // indirect
+	github.com/bytedance/sonic/loader v0.1.1 // indirect
+	github.com/cloudwego/base64x v0.1.4 // indirect
+	github.com/cloudwego/iasm v0.2.0 // indirect
+	github.com/dustin/go-humanize v1.0.1 // indirect
+	github.com/fasthttp/router v1.5.2 // indirect
+	github.com/glebarez/go-sqlite v1.21.2 // indirect
+	github.com/google/uuid v1.6.0 // indirect
+	github.com/grbit/go-json v0.11.0 // indirect
+	github.com/jinzhu/inflection v1.0.0 // indirect
+	github.com/jinzhu/now v1.1.5 // indirect
+	github.com/klauspost/compress v1.17.9 // indirect
+	github.com/klauspost/cpuid/v2 v2.2.7 // indirect
+	github.com/mattn/go-colorable v0.1.13 // indirect
+	github.com/mattn/go-isatty v0.0.20 // indirect
+	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
+	github.com/savsgio/gotils v0.0.0-20240704082632-aef3928b8a38 // indirect
+	github.com/twitchyliquid64/golang-asm v0.15.1 // indirect
+	github.com/valyala/bytebufferpool v1.0.0 // indirect
+	github.com/valyala/fasthttp v1.55.0 // indirect
+	github.com/valyala/fastjson v1.6.4 // indirect
+	golang.org/x/arch v0.8.0 // indirect
+	golang.org/x/sys v0.22.0 // indirect
+	gorm.io/gorm v1.25.7 // indirect
+	modernc.org/libc v1.22.5 // indirect
+	modernc.org/mathutil v1.5.0 // indirect
+	modernc.org/memory v1.5.0 // indirect
+	modernc.org/sqlite v1.23.1 // indirect
 )
