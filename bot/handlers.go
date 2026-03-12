@@ -21,6 +21,7 @@ type Bot struct {
 	summarizer  *summarizer.Summarizer
 	rateLimiter *RateLimiter
 	cfg         *config.Config
+	username    string
 }
 
 func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer) (*Bot, error) {
@@ -29,12 +30,18 @@ func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer) (*B
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
 
+	me, err := bot.GetMe()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get bot info: %w", err)
+	}
+
 	return &Bot{
 		telegram:    bot,
 		db:          database,
 		summarizer:  sum,
 		rateLimiter: NewRateLimiter(cfg.RateLimitSec),
 		cfg:         cfg,
+		username:    strings.ToLower(me.Username),
 	}, nil
 }
 
@@ -121,12 +128,14 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	if strings.HasPrefix(text, "/") {
-		b.handleCommand(ctx, update)
+	if msg.Chat.Type == "private" {
+		b.handleCommand(ctx, update, text)
 		return
 	}
 
-	if msg.Chat.Type == "private" {
+	command := b.extractCommandFromMention(text, msg.Entities)
+	if command != "" {
+		b.handleCommand(ctx, update, command)
 		return
 	}
 
@@ -139,34 +148,77 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	})
 }
 
-func (b *Bot) handleCommand(ctx context.Context, update telego.Update) {
+func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command string) {
 	msg := update.Message
 	if msg == nil {
 		return
 	}
 
-	groupID := msg.Chat.ID
-	text := msg.Text
-
-	parts := strings.Fields(text)
+	parts := strings.Fields(command)
 	if len(parts) == 0 {
+		b.handleHelp(ctx, update)
 		return
 	}
 
-	command := parts[0]
+	cmd := parts[0]
 
-	switch command {
-	case "/summarize":
+	switch cmd {
+	case "summarize":
 		b.handleSummarize(ctx, update)
-	case "/addadmin":
+	case "addadmin":
 		b.handleAddAdmin(ctx, update, parts)
-	case "/removeadmin":
+	case "removeadmin":
 		b.handleRemoveAdmin(ctx, update, parts)
-	case "/listadmins":
+	case "listadmins":
 		b.handleListAdmins(ctx, update)
+	case "help":
+		b.handleHelp(ctx, update)
 	default:
-		b.sendMessage(ctx, groupID, "Неизвестная команда. Доступные: /summarize, /addadmin, /removeadmin, /listadmins")
+		b.handleHelp(ctx, update)
 	}
+}
+
+func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
+	msg := update.Message
+	if msg == nil {
+		return
+	}
+
+	helpText := `📖 *Доступные команды:*
+
+• ` + "`summarize`" + ` — суммировать сообщения за последние 24 часа
+• ` + "`addadmin <user_id>`" + ` — добавить админа в группу
+• ` + "`removeadmin <user_id>`" + ` — удалить админа из группы
+• ` + "`listadmins`" + ` — список админов группы
+• ` + "`help`" + ` — показать это сообщение
+
+_Пример: @bot summarize_`
+
+	b.sendMessage(ctx, msg.Chat.ID, helpText)
+}
+
+func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) string {
+	mention := "@" + b.username
+
+	if strings.HasPrefix(text, mention) {
+		cmd := strings.TrimPrefix(text, mention)
+		cmd = strings.TrimSpace(cmd)
+		return cmd
+	}
+
+	for _, entity := range entities {
+		entityType := string(entity.Type)
+		if entityType == "mention" || entityType == "text_mention" {
+			entityText := text[entity.Offset : entity.Offset+entity.Length]
+			if strings.ToLower(entityText) == mention {
+				cmd := text[entity.Offset+entity.Length:]
+				cmd = strings.TrimSpace(cmd)
+				return cmd
+			}
+		}
+	}
+
+	return ""
 }
 
 func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
@@ -232,7 +284,7 @@ func (b *Bot) handleAddAdmin(ctx context.Context, update telego.Update, parts []
 	}
 
 	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: /addadmin <user_id>")
+		b.sendMessage(ctx, groupID, "Использование: addadmin <user_id>")
 		return
 	}
 
@@ -263,7 +315,7 @@ func (b *Bot) handleRemoveAdmin(ctx context.Context, update telego.Update, parts
 	}
 
 	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: /removeadmin <user_id>")
+		b.sendMessage(ctx, groupID, "Использование: removeadmin <user_id>")
 		return
 	}
 
