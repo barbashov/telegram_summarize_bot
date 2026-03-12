@@ -7,12 +7,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mymmrac/telego"
-	tu "github.com/mymmrac/telego/telegoutil"
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/summarizer"
+
+	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 func formatDuration(d time.Duration) string {
@@ -165,7 +166,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
-		b.handleHelp(ctx, update)
+		b.handleHelp(ctx, update, nil)
 		return
 	}
 
@@ -181,26 +182,31 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	case "list_admins":
 		b.handleListAdmins(ctx, update)
 	case "help":
-		b.handleHelp(ctx, update)
+		b.handleHelp(ctx, update, parts)
 	default:
-		b.handleHelp(ctx, update)
+		b.handleHelp(ctx, update, nil)
 	}
 }
 
-func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
+func (b *Bot) handleHelp(ctx context.Context, update telego.Update, parts []string) {
 	msg := update.Message
 	if msg == nil {
 		return
 	}
 
-	helpText := "📖 *Доступные команды:*\n\n" +
-		"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
-		"• `help` — показать это сообщение\n\n" +
-		"*Администрирование:*\n" +
-		"• `add_admin <user_id>` — добавить админа в группу\n" +
-		"• `remove_admin <user_id>` — удалить админа из группы\n" +
-		"• `list_admins` — список админов группы\n\n" +
-		"_Пример: @bot summarize_"
+	var helpText string
+	if len(parts) > 1 && parts[1] == "admin" {
+		helpText = "📖 *Команды администрирования:*\n\n" +
+			"• `add_admin <user_id>` — добавить админа в группу\n" +
+			"• `remove_admin <user_id>` — удалить админа из группы\n" +
+			"• `list_admins` — список админов группы"
+	} else {
+		helpText = "📖 *Доступные команды:*\n\n" +
+			"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
+			"• `help` — показать это сообщение\n" +
+			"• `help admin` — показать команды администрирования\n\n" +
+			"_Пример: @bot summarize_"
+	}
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
