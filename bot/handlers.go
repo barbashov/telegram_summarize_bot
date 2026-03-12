@@ -282,18 +282,18 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 
 	messagesText := b.db.FormatMessagesForSummary(messages)
 
-	b.sendMessage(ctx, groupID, "Собираю сообщения за последние 24 часа...")
+	statusMsgID := b.sendMessage(ctx, groupID, "Собираю сообщения за последние 24 часа...")
 
 	summary, err := b.summarizer.Summarize(ctx, messagesText)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
-		b.sendMessage(ctx, groupID, "Ошибка суммаризации. Попробуйте позже.")
+		b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
 	b.db.SetLastSummarizeTime(ctx, groupID, time.Now())
 
-	b.sendMessage(ctx, groupID, "📝 *Суммаризация:*\n\n"+summary)
+	b.editMessage(groupID, statusMsgID, "📝 *Суммаризация:*\n\n"+summary)
 }
 
 func (b *Bot) handleAddAdmin(ctx context.Context, update telego.Update, parts []string) {
@@ -390,12 +390,26 @@ func (b *Bot) handleListAdmins(ctx context.Context, update telego.Update) {
 	b.sendMessage(ctx, groupID, sb.String())
 }
 
-func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) {
-	_, err := b.telegram.SendMessage(tu.Message(
+func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {
+	msg, err := b.telegram.SendMessage(tu.Message(
 		tu.ID(chatID),
 		text,
 	).WithParseMode("Markdown"))
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send message")
+		return 0
+	}
+	return int64(msg.MessageID)
+}
+
+func (b *Bot) editMessage(chatID int64, messageID int64, text string) {
+	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
+		ChatID:    tu.ID(chatID),
+		MessageID: int(messageID),
+		Text:      text,
+		ParseMode: "Markdown",
+	})
+	if err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
 	}
 }
