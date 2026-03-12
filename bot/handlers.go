@@ -3,7 +3,6 @@ package bot
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -175,7 +174,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
-		b.handleHelp(ctx, update, nil)
+		b.handleHelp(ctx, update)
 		return
 	}
 
@@ -184,38 +183,23 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	switch cmd {
 	case "summarize", "sub", "s":
 		b.handleSummarize(ctx, update)
-	case "add_admin":
-		b.handleAddAdmin(ctx, update, parts)
-	case "remove_admin":
-		b.handleRemoveAdmin(ctx, update, parts)
-	case "list_admins":
-		b.handleListAdmins(ctx, update)
 	case "help":
-		b.handleHelp(ctx, update, parts)
+		b.handleHelp(ctx, update)
 	default:
-		b.handleHelp(ctx, update, nil)
+		b.handleHelp(ctx, update)
 	}
 }
 
-func (b *Bot) handleHelp(ctx context.Context, update telego.Update, parts []string) {
+func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
 	}
 
-	var helpText string
-	if len(parts) > 1 && parts[1] == "admin" {
-		helpText = "📖 *Команды администрирования:*\n\n" +
-			"• `add_admin <user_id>` — добавить админа в группу\n" +
-			"• `remove_admin <user_id>` — удалить админа из группы\n" +
-			"• `list_admins` — список админов группы"
-	} else {
-		helpText = "📖 *Доступные команды:*\n\n" +
-			"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
-			"• `help` — показать это сообщение\n" +
-			"• `help admin` — показать команды администрирования\n\n" +
-			"_Пример: @bot summarize_"
-	}
+	helpText := "📖 *Доступные команды:*\n\n" +
+		"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
+		"• `help` — показать это сообщение\n\n" +
+		"_Пример: @bot summarize_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
@@ -306,100 +290,6 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	b.db.SetLastSummarizeTime(ctx, groupID, time.Now())
 
 	b.editMessage(groupID, statusMsgID, "📝 *Суммаризация:*\n\n"+summary)
-}
-
-func (b *Bot) handleAddAdmin(ctx context.Context, update telego.Update, parts []string) {
-	msg := update.Message
-	groupID := msg.Chat.ID
-	userID := msg.From.ID
-
-	isAdmin, err := b.db.IsAdmin(ctx, groupID, userID)
-	if err != nil || !isAdmin {
-		b.sendMessage(ctx, groupID, "У вас нет прав для выполнения этой команды.")
-		return
-	}
-
-	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: add_admin <user_id>")
-		return
-	}
-
-	newAdminID, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		b.sendMessage(ctx, groupID, "Неверный формат user_id.")
-		return
-	}
-
-	if err := b.db.AddAdmin(ctx, groupID, newAdminID); err != nil {
-		logger.Error().Err(err).Msg("failed to add admin")
-		b.sendMessage(ctx, groupID, "Ошибка добавления админа.")
-		return
-	}
-
-	b.sendMessage(ctx, groupID, fmt.Sprintf("Пользователь %d добавлен в список админов.", newAdminID))
-}
-
-func (b *Bot) handleRemoveAdmin(ctx context.Context, update telego.Update, parts []string) {
-	msg := update.Message
-	groupID := msg.Chat.ID
-	userID := msg.From.ID
-
-	isAdmin, err := b.db.IsAdmin(ctx, groupID, userID)
-	if err != nil || !isAdmin {
-		b.sendMessage(ctx, groupID, "У вас нет прав для выполнения этой команды.")
-		return
-	}
-
-	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: remove_admin <user_id>")
-		return
-	}
-
-	removeID, err := strconv.ParseInt(parts[1], 10, 64)
-	if err != nil {
-		b.sendMessage(ctx, groupID, "Неверный формат user_id.")
-		return
-	}
-
-	if err := b.db.RemoveAdmin(ctx, groupID, removeID); err != nil {
-		logger.Error().Err(err).Msg("failed to remove admin")
-		b.sendMessage(ctx, groupID, "Ошибка удаления админа.")
-		return
-	}
-
-	b.sendMessage(ctx, groupID, fmt.Sprintf("Пользователь %d удален из списка админов.", removeID))
-}
-
-func (b *Bot) handleListAdmins(ctx context.Context, update telego.Update) {
-	msg := update.Message
-	groupID := msg.Chat.ID
-	userID := msg.From.ID
-
-	isAdmin, err := b.db.IsAdmin(ctx, groupID, userID)
-	if err != nil || !isAdmin {
-		b.sendMessage(ctx, groupID, "У вас нет прав для выполнения этой команды.")
-		return
-	}
-
-	admins, err := b.db.GetAdmins(ctx, groupID)
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to get admins")
-		b.sendMessage(ctx, groupID, "Ошибка получения списка админов.")
-		return
-	}
-
-	if len(admins) == 0 {
-		b.sendMessage(ctx, groupID, "Список админов пуст.")
-		return
-	}
-
-	var sb strings.Builder
-	sb.WriteString("📋 *Список админов:*\n\n")
-	for i, adminID := range admins {
-		sb.WriteString(fmt.Sprintf("%d. %d\n", i+1, adminID))
-	}
-
-	b.sendMessage(ctx, groupID, sb.String())
 }
 
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {

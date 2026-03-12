@@ -64,17 +64,15 @@ go fmt ./...
 2. Turn off "Group Privacy" for the bot (via @BotFather, /BotSettings)
 3. Make bot an admin (or give it "Read Messages" permission)
 4. Start the bot
-5. From your personal chat, send `/addadmin <your_user_id>` to add yourself as admin
-6. Now you can use `/summarize` in the group
+5. Add the group ID to `ALLOWED_GROUPS` in your `.env`
+6. Now any group member can use `@bot summarize`
 
 ## Available Commands
 
 | Command | Description |
 |---------|-------------|
 | `@bot summarize` | Summarize messages from last 24h (any group member) |
-| `@bot add_admin <user_id>` | Add user to admin list (admins only) |
-| `@bot remove_admin <user_id>` | Remove user from admin list (admins only) |
-| `@bot list_admins` | List all admins in current group |
+| `@bot help` | Show available commands |
 
 ## Configuration
 
@@ -90,10 +88,11 @@ go fmt ./...
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
 | `ALLOWED_GROUPS` | (required) | Comma-separated group IDs the bot operates in; empty = deny all |
 
+
 ## Features
 
 - Time-based summarization (last 24 hours)
-- Whitelist-based admin system (per-group and global)
+- Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute)
 - Automatic message cleanup (older than 7 days)
 - Graceful shutdown
@@ -109,14 +108,10 @@ Telegram group chat summarizer bot written in Go. All bot UI text is in Russian.
 ### Key packages
 
 - **`bot/`** — Telegram update handling (polling, not webhooks) and in-memory rate limiter. `Bot` struct owns the telego client, DB, summarizer, and rate limiter. Background goroutines handle message cleanup and rate limit entry cleanup.
-- **`db/`** — SQLite via `github.com/glebarez/sqlite` (pure Go, no CGO). Two tables: `messages` (group_id, user_id, username, text, timestamp) and `admins` (group_id, user_id). Schema auto-migrates on startup.
+- **`db/`** — SQLite via `github.com/glebarez/sqlite` (pure Go, no CGO). Two tables: `messages` (group_id, user_id, username, text, timestamp) and `last_summarize` (group_id, timestamp). Schema auto-migrates on startup.
 - **`summarizer/`** — Uses `go-openai` client configured with OpenRouter base URL. Prompt is hardcoded in Russian.
 - **`config/`** — Loads `.env` via godotenv. Required: `BOT_TOKEN`, `OPENROUTER_API_KEY`. All other settings have defaults.
 - **`logger/`** — Thin wrapper around zerolog exposing package-level `Debug()`, `Info()`, `Warn()`, `Error()`, `Fatal()` functions.
-
-### Admin system
-
-Global admins (from `INITIAL_ADMINS` env var) are stored with `group_id=0` in the admins table and have access in all groups. Per-group admins are added via `/addadmin` and scoped to that group. `IsAdmin` checks both `group_id=0` and the specific group.
 
 ### Rate limiting
 

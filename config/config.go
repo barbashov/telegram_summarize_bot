@@ -19,7 +19,6 @@ type Config struct {
 	OpenRouterURL string
 	Model         string
 	DBPath        string
-	InitialAdmins []int64
 	AllowedGroups []int64
 }
 
@@ -77,8 +76,7 @@ func Load() (*Config, error) {
 		dbPath = "./data/bot.db"
 	}
 
-	initialAdmins := parseInitialAdmins(os.Getenv("INITIAL_ADMINS"))
-	allowedGroups := parseInitialAdmins(os.Getenv("ALLOWED_GROUPS"))
+	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
 
 	return &Config{
 		BotToken:      botToken,
@@ -90,7 +88,6 @@ func Load() (*Config, error) {
 		OpenRouterURL: openRouterURL,
 		Model:         model,
 		DBPath:        dbPath,
-		InitialAdmins: initialAdmins,
 		AllowedGroups: allowedGroups,
 	}, nil
 }
@@ -120,7 +117,7 @@ func (c *Config) IsGroupAllowed(groupID int64) bool {
 	return false
 }
 
-func parseInitialAdmins(value string) []int64 {
+func parseIDList(value string) []int64 {
 	if value == "" {
 		return nil
 	}

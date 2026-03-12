@@ -27,11 +27,6 @@ type Message struct {
 	Timestamp time.Time
 }
 
-type Admin struct {
-	GroupID int64
-	UserID  int64
-}
-
 type RateLimitEntry struct {
 	UserID    int64
 	GroupID   int64
@@ -74,11 +69,7 @@ func (db *DB) migrate() error {
 			timestamp DATETIME NOT NULL,
 			UNIQUE(group_id, id)
 		)`,
-		`CREATE TABLE IF NOT EXISTS admins (
-			group_id INTEGER NOT NULL,
-			user_id INTEGER NOT NULL,
-			PRIMARY KEY (group_id, user_id)
-		)`,
+		`DROP TABLE IF EXISTS admins`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_group_timestamp ON messages(group_id, timestamp)`,
 		`CREATE TABLE IF NOT EXISTS last_summarize (
 			group_id INTEGER PRIMARY KEY,
@@ -141,57 +132,6 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	return messages, rows.Err()
 }
 
-func (db *DB) AddAdmin(ctx context.Context, groupID, userID int64) error {
-	_, err := db.conn.ExecContext(ctx,
-		`INSERT OR REPLACE INTO admins (group_id, user_id) VALUES (?, ?)`,
-		groupID, userID,
-	)
-	return err
-}
-
-func (db *DB) RemoveAdmin(ctx context.Context, groupID, userID int64) error {
-	_, err := db.conn.ExecContext(ctx,
-		`DELETE FROM admins WHERE group_id = ? AND user_id = ?`,
-		groupID, userID,
-	)
-	return err
-}
-
-func (db *DB) GetAdmins(ctx context.Context, groupID int64) ([]int64, error) {
-	rows, err := db.conn.QueryContext(ctx,
-		`SELECT user_id FROM admins WHERE group_id = ?`,
-		groupID,
-	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var admins []int64
-	for rows.Next() {
-		var userID int64
-		if err := rows.Scan(&userID); err != nil {
-			logger.Error().Err(err).Msg("failed to scan admin")
-			continue
-		}
-		admins = append(admins, userID)
-	}
-
-	return admins, rows.Err()
-}
-
-func (db *DB) IsAdmin(ctx context.Context, groupID, userID int64) (bool, error) {
-	var count int
-	err := db.conn.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM admins WHERE (group_id = ? OR group_id = 0) AND user_id = ?`,
-		groupID, userID,
-	).Scan(&count)
-	if err != nil {
-		return false, err
-	}
-	return count > 0, nil
-}
-
 func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	result, err := db.conn.ExecContext(ctx,
@@ -222,23 +162,6 @@ func (db *DB) FormatMessagesForSummary(messages []Message) string {
 		}
 	}
 	return sb.String()
-}
-
-func (db *DB) EnsureGlobalAdmins(ctx context.Context, userIDs []int64) error {
-	if len(userIDs) == 0 {
-		return nil
-	}
-
-	for _, userID := range userIDs {
-		_, err := db.conn.ExecContext(ctx,
-			`INSERT OR IGNORE INTO admins (group_id, user_id) VALUES (0, ?)`,
-			userID,
-		)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func (db *DB) GetLastSummarizeTime(ctx context.Context, groupID int64) (*time.Time, error) {

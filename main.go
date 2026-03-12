@@ -5,7 +5,6 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"telegram_summarize_bot/bot"
 	"telegram_summarize_bot/config"
@@ -27,16 +26,6 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
 	defer database.Close()
-
-	if len(cfg.InitialAdmins) > 0 {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := database.EnsureGlobalAdmins(ctx, cfg.InitialAdmins); err != nil {
-			logger.Warn().Err(err).Msg("Failed to ensure initial admins")
-		} else {
-			logger.Info().Int("count", len(cfg.InitialAdmins)).Msg("Initial global admins added")
-		}
-	}
 
 	logger.Info().
 		Str("db_path", cfg.DBPath).
