@@ -172,7 +172,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	cmd := parts[0]
 
 	switch cmd {
-	case "summarize":
+	case "summarize", "sub", "s":
 		b.handleSummarize(ctx, update)
 	case "add_admin":
 		b.handleAddAdmin(ctx, update, parts)
@@ -193,17 +193,14 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	helpText := `📖 *Доступные команды:*
-
-• ` + "`summarize`" + ` — суммировать сообщения за последние 24 часа
-• ` + "`help`" + ` — показать это сообщение
-
-*Администрирование:*
-• ` + "`add_admin <user_id>`" + ` — добавить админа в группу
-• ` + "`remove_admin <user_id>`" + ` — удалить админа из группы
-• ` + "`list_admins`" + ` — список админов группы
-
-_Пример: @bot summarize_`
+	helpText := "📖 *Доступные команды:*\n\n" +
+		"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
+		"• `help` — показать это сообщение\n\n" +
+		"*Администрирование:*\n" +
+		"• `add_admin <user_id>` — добавить админа в группу\n" +
+		"• `remove_admin <user_id>` — удалить админа из группы\n" +
+		"• `list_admins` — список админов группы\n\n" +
+		"_Пример: @bot summarize_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
