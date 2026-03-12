@@ -54,6 +54,21 @@ func (r *RateLimiter) ClearOldEntries() {
 	}
 }
 
+func (r *RateLimiter) RemainingTime(userID int64, groupID int64) time.Duration {
+	key := r.key(userID, groupID)
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	now := time.Now()
+	if lastTime, exists := r.entries[key]; exists {
+		remaining := r.limit - now.Sub(lastTime)
+		if remaining > 0 {
+			return remaining
+		}
+	}
+	return 0
+}
+
 func (r *RateLimiter) key(userID int64, groupID int64) string {
 	return string(rune(userID)) + "_" + string(rune(groupID))
 }

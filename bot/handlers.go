@@ -15,6 +15,15 @@ import (
 	"telegram_summarize_bot/summarizer"
 )
 
+func formatDuration(d time.Duration) string {
+	seconds := int(d.Seconds())
+	if seconds < 60 {
+		return fmt.Sprintf("%d секунд", seconds)
+	}
+	minutes := seconds / 60
+	return fmt.Sprintf("%d минут", minutes)
+}
+
 type Bot struct {
 	telegram    *telego.Bot
 	db          *db.DB
@@ -187,10 +196,12 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	helpText := `📖 *Доступные команды:*
 
 • ` + "`summarize`" + ` — суммировать сообщения за последние 24 часа
+• ` + "`help`" + ` — показать это сообщение
+
+*Администрирование:*
 • ` + "`add_admin <user_id>`" + ` — добавить админа в группу
 • ` + "`remove_admin <user_id>`" + ` — удалить админа из группы
 • ` + "`list_admins`" + ` — список админов группы
-• ` + "`help`" + ` — показать это сообщение
 
 _Пример: @bot summarize_`
 
@@ -239,7 +250,8 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	}
 
 	if !b.rateLimiter.Allow(userID, groupID) {
-		b.sendMessage(ctx, groupID, "Подождите минуту перед следующим запросом суммаризации.")
+		remaining := b.rateLimiter.RemainingTime(userID, groupID)
+		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 
