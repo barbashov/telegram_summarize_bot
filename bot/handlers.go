@@ -165,11 +165,11 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	switch cmd {
 	case "summarize":
 		b.handleSummarize(ctx, update)
-	case "addadmin":
+	case "add_admin":
 		b.handleAddAdmin(ctx, update, parts)
-	case "removeadmin":
+	case "remove_admin":
 		b.handleRemoveAdmin(ctx, update, parts)
-	case "listadmins":
+	case "list_admins":
 		b.handleListAdmins(ctx, update)
 	case "help":
 		b.handleHelp(ctx, update)
@@ -187,9 +187,9 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	helpText := `📖 *Доступные команды:*
 
 • ` + "`summarize`" + ` — суммировать сообщения за последние 24 часа
-• ` + "`addadmin <user_id>`" + ` — добавить админа в группу
-• ` + "`removeadmin <user_id>`" + ` — удалить админа из группы
-• ` + "`listadmins`" + ` — список админов группы
+• ` + "`add_admin <user_id>`" + ` — добавить админа в группу
+• ` + "`remove_admin <user_id>`" + ` — удалить админа из группы
+• ` + "`list_admins`" + ` — список админов группы
 • ` + "`help`" + ` — показать это сообщение
 
 _Пример: @bot summarize_`
@@ -284,7 +284,7 @@ func (b *Bot) handleAddAdmin(ctx context.Context, update telego.Update, parts []
 	}
 
 	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: addadmin <user_id>")
+		b.sendMessage(ctx, groupID, "Использование: add_admin <user_id>")
 		return
 	}
 
@@ -315,7 +315,7 @@ func (b *Bot) handleRemoveAdmin(ctx context.Context, update telego.Update, parts
 	}
 
 	if len(parts) < 2 {
-		b.sendMessage(ctx, groupID, "Использование: removeadmin <user_id>")
+		b.sendMessage(ctx, groupID, "Использование: remove_admin <user_id>")
 		return
 	}
 
