@@ -31,3 +31,5 @@ vendor/
 # Local databases
 *.db
 summary_bot.db
+
+.env
