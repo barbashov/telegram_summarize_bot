@@ -80,6 +80,10 @@ func (db *DB) migrate() error {
 			PRIMARY KEY (group_id, user_id)
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_messages_group_timestamp ON messages(group_id, timestamp)`,
+		`CREATE TABLE IF NOT EXISTS last_summarize (
+			group_id INTEGER PRIMARY KEY,
+			timestamp DATETIME NOT NULL
+		)`,
 	}
 
 	for _, q := range queries {
@@ -235,4 +239,27 @@ func (db *DB) EnsureGlobalAdmins(ctx context.Context, userIDs []int64) error {
 		}
 	}
 	return nil
+}
+
+func (db *DB) GetLastSummarizeTime(ctx context.Context, groupID int64) (*time.Time, error) {
+	var t time.Time
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT timestamp FROM last_summarize WHERE group_id = ?`,
+		groupID,
+	).Scan(&t)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
+}
+
+func (db *DB) SetLastSummarizeTime(ctx context.Context, groupID int64, t time.Time) error {
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT OR REPLACE INTO last_summarize (group_id, timestamp) VALUES (?, ?)`,
+		groupID, t,
+	)
+	return err
 }

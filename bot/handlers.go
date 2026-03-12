@@ -252,9 +252,16 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	b.sendMessage(ctx, groupID, "Собираю сообщения за последние 24 часа...")
+	lastSummarize, err := b.db.GetLastSummarizeTime(ctx, groupID)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get last summarize time")
+	}
 
 	since := time.Now().Add(-b.cfg.SummaryDuration())
+	if lastSummarize != nil && since.Before(*lastSummarize) {
+		since = *lastSummarize
+	}
+
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get messages")
@@ -263,7 +270,11 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	}
 
 	if len(messages) == 0 {
-		b.sendMessage(ctx, groupID, "Нет сообщений за последние 24 часа.")
+		if lastSummarize != nil {
+			b.sendMessage(ctx, groupID, "Нет новых сообщений с последней суммаризации.")
+		} else {
+			b.sendMessage(ctx, groupID, "Нет сообщений за последние 24 часа.")
+		}
 		return
 	}
 
@@ -271,12 +282,16 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 
 	messagesText := b.db.FormatMessagesForSummary(messages)
 
+	b.sendMessage(ctx, groupID, "Собираю сообщения за последние 24 часа...")
+
 	summary, err := b.summarizer.Summarize(ctx, messagesText)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
 		b.sendMessage(ctx, groupID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
+
+	b.db.SetLastSummarizeTime(ctx, groupID, time.Now())
 
 	b.sendMessage(ctx, groupID, "📝 *Суммаризация:*\n\n"+summary)
 }
