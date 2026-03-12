@@ -142,8 +142,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	command := b.extractCommandFromMention(text, msg.Entities)
-	if command != "" {
+	command, err := b.extractCommandFromMention(text, msg.Entities)
+	if err == nil {
 		b.handleCommand(ctx, update, command)
 		return
 	}
@@ -205,13 +205,13 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
 
-func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) string {
+func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {
 	mention := "@" + b.username
 
 	if strings.HasPrefix(text, mention) {
 		cmd := strings.TrimPrefix(text, mention)
 		cmd = strings.TrimSpace(cmd)
-		return cmd
+		return cmd, nil
 	}
 
 	for _, entity := range entities {
@@ -221,12 +221,12 @@ func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEn
 			if strings.ToLower(entityText) == mention {
 				cmd := text[entity.Offset+entity.Length:]
 				cmd = strings.TrimSpace(cmd)
-				return cmd
+				return cmd, nil
 			}
 		}
 	}
 
-	return ""
+	return "", fmt.Errorf("no bot mention found")
 }
 
 func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
