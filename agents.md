@@ -71,10 +71,10 @@ go fmt ./...
 
 | Command | Description |
 |---------|-------------|
-| `/summarize` | Summarize messages from last 24h (admins only) |
-| `/addadmin <user_id>` | Add user to admin list (admins only) |
-| `/removeadmin <user_id>` | Remove user from admin list (admins only) |
-| `/listadmins` | List all admins in current group |
+| `@bot summarize` | Summarize messages from last 24h (any group member) |
+| `@bot add_admin <user_id>` | Add user to admin list (admins only) |
+| `@bot remove_admin <user_id>` | Remove user from admin list (admins only) |
+| `@bot list_admins` | List all admins in current group |
 
 ## Configuration
 
@@ -88,6 +88,7 @@ go fmt ./...
 | `MAX_MESSAGES` | `100` | Max messages to summarize |
 | `RATE_LIMIT_SEC` | `60` | Rate limit between /summarize |
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
+| `ALLOWED_GROUPS` | (required) | Comma-separated group IDs the bot operates in; empty = deny all |
 
 ## Features
 

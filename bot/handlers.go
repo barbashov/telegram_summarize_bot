@@ -138,6 +138,15 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	if msg.Chat.Type != "private" && !b.cfg.IsGroupAllowed(groupID) {
+		logger.Warn().
+			Int64("group_id", groupID).
+			Int64("user_id", userID).
+			Str("chat_type", msg.Chat.Type).
+			Msg("ignoring message from non-allowed group")
+		return
+	}
+
 	if msg.Chat.Type == "private" {
 		b.handleCommand(ctx, update, text)
 		return
@@ -240,24 +249,6 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	groupID := msg.Chat.ID
 	userID := msg.From.ID
 
-	isAdmin, err := b.db.IsAdmin(ctx, groupID, userID)
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to check admin")
-		b.sendMessage(ctx, groupID, "Ошибка проверки прав доступа.")
-		return
-	}
-
-	if !isAdmin {
-		b.sendMessage(ctx, groupID, "У вас нет прав для выполнения этой команды.")
-		return
-	}
-
-	if !b.rateLimiter.Allow(userID, groupID) {
-		remaining := b.rateLimiter.RemainingTime(userID, groupID)
-		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
-		return
-	}
-
 	lastSummarize, err := b.db.GetLastSummarizeTime(ctx, groupID)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get last summarize time")
@@ -284,6 +275,19 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	if !b.rateLimiter.Allow(userID, groupID) {
+		remaining := b.rateLimiter.RemainingTime(userID, groupID)
+		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		return
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			b.rateLimiter.Release(userID, groupID)
+		}
+	}()
+
 	logger.Info().Int("count", len(messages)).Msg("Summarizing messages")
 
 	messagesText := b.db.FormatMessagesForSummary(messages)
@@ -296,6 +300,8 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 		b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
+
+	committed = true
 
 	b.db.SetLastSummarizeTime(ctx, groupID, time.Now())
 

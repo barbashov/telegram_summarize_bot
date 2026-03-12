@@ -20,6 +20,7 @@ type Config struct {
 	Model         string
 	DBPath        string
 	InitialAdmins []int64
+	AllowedGroups []int64
 }
 
 func Load() (*Config, error) {
@@ -77,6 +78,7 @@ func Load() (*Config, error) {
 	}
 
 	initialAdmins := parseInitialAdmins(os.Getenv("INITIAL_ADMINS"))
+	allowedGroups := parseInitialAdmins(os.Getenv("ALLOWED_GROUPS"))
 
 	return &Config{
 		BotToken:      botToken,
@@ -89,6 +91,7 @@ func Load() (*Config, error) {
 		Model:         model,
 		DBPath:        dbPath,
 		InitialAdmins: initialAdmins,
+		AllowedGroups: allowedGroups,
 	}, nil
 }
 
@@ -106,6 +109,15 @@ func (c *Config) SummaryDuration() time.Duration {
 
 func (c *Config) RetentionDuration() time.Duration {
 	return time.Duration(c.RetentionDays) * 24 * time.Hour
+}
+
+func (c *Config) IsGroupAllowed(groupID int64) bool {
+	for _, id := range c.AllowedGroups {
+		if id == groupID {
+			return true
+		}
+	}
+	return false
 }
 
 func parseInitialAdmins(value string) []int64 {

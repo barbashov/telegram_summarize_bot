@@ -42,6 +42,13 @@ func (r *RateLimiter) Allow(userID int64, groupID int64) bool {
 	return true
 }
 
+func (r *RateLimiter) Release(userID int64, groupID int64) {
+	key := r.key(userID, groupID)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	delete(r.entries, key)
+}
+
 func (r *RateLimiter) ClearOldEntries() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
