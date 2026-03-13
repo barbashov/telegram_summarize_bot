@@ -18,7 +18,6 @@ RUN apk add --no-cache ca-certificates tzdata
 WORKDIR /app
 
 COPY --from=builder /app/telegram_summarize_bot .
-COPY --from=builder /app/.env.example .
 
 RUN mkdir -p /app/data
 
