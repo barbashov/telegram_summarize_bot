@@ -1,6 +1,7 @@
 package bot
 
 import (
+	"fmt"
 	"sync"
 	"time"
 
@@ -21,7 +22,7 @@ func NewRateLimiter(limitSeconds int) *RateLimiter {
 }
 
 func (r *RateLimiter) Allow(userID int64, groupID int64) bool {
-	key := r.key(userID, groupID)
+	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -42,8 +43,8 @@ func (r *RateLimiter) Allow(userID int64, groupID int64) bool {
 	return true
 }
 
-func (r *RateLimiter) Release(userID int64, groupID int64) {
-	key := r.key(userID, groupID)
+func (r *RateLimiter) Release(groupID int64) {
+	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	delete(r.entries, key)
@@ -61,8 +62,8 @@ func (r *RateLimiter) ClearOldEntries() {
 	}
 }
 
-func (r *RateLimiter) RemainingTime(userID int64, groupID int64) time.Duration {
-	key := r.key(userID, groupID)
+func (r *RateLimiter) RemainingTime(groupID int64) time.Duration {
+	key := r.key(groupID)
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
@@ -76,6 +77,6 @@ func (r *RateLimiter) RemainingTime(userID int64, groupID int64) time.Duration {
 	return 0
 }
 
-func (r *RateLimiter) key(userID int64, groupID int64) string {
-	return string(rune(userID)) + "_" + string(rune(groupID))
+func (r *RateLimiter) key(groupID int64) string {
+	return fmt.Sprintf("%d", groupID)
 }

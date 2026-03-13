@@ -24,6 +24,4 @@ RUN mkdir -p /app/data
 
 ENV TZ=UTC
 
-EXPOSE 8080
-
 ENTRYPOINT ["./telegram_summarize_bot"]

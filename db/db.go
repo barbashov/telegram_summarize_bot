@@ -27,12 +27,6 @@ type Message struct {
 	Timestamp time.Time
 }
 
-type RateLimitEntry struct {
-	UserID    int64
-	GroupID   int64
-	Timestamp time.Time
-}
-
 func New(dbPath string) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
@@ -91,11 +85,8 @@ func (db *DB) Close() error {
 }
 
 func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
-	if msg.Text == "" || len(msg.Text) > 4096 {
+	if msg.Text == "" {
 		return nil
-	}
-	if len(msg.Text) > 4096 {
-		msg.Text = msg.Text[:4096]
 	}
 
 	_, err := db.conn.ExecContext(ctx,

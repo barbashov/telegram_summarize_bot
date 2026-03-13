@@ -133,6 +133,10 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		Str("text", text).
 		Msg("Received message")
 
+	if msg.From == nil {
+		return
+	}
+
 	if text == "" {
 		return
 	}
@@ -157,13 +161,15 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	b.db.AddMessage(ctx, &db.Message{
+	if err := b.db.AddMessage(ctx, &db.Message{
 		GroupID:   groupID,
 		UserID:    userID,
 		Username:  msg.From.Username,
 		Text:      text,
 		Timestamp: time.Now(),
-	})
+	}); err != nil {
+		logger.Error().Err(err).Msg("failed to add message")
+	}
 }
 
 func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command string) {
@@ -207,19 +213,24 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {
 	mention := "@" + b.username
 
-	if strings.HasPrefix(text, mention) {
-		cmd := strings.TrimPrefix(text, mention)
+	if strings.HasPrefix(strings.ToLower(text), mention) {
+		cmd := text[len(mention):]
 		cmd = strings.TrimSpace(cmd)
 		return cmd, nil
 	}
 
+	runes := []rune(text)
 	for _, entity := range entities {
 		entityType := string(entity.Type)
 		if entityType == "mention" || entityType == "text_mention" {
-			entityText := text[entity.Offset : entity.Offset+entity.Length]
+			start := int(entity.Offset)
+			end := start + int(entity.Length)
+			if end > len(runes) {
+				continue
+			}
+			entityText := string(runes[start:end])
 			if strings.ToLower(entityText) == mention {
-				cmd := text[entity.Offset+entity.Length:]
-				cmd = strings.TrimSpace(cmd)
+				cmd := strings.TrimSpace(string(runes[end:]))
 				return cmd, nil
 			}
 		}
@@ -260,7 +271,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	}
 
 	if !b.rateLimiter.Allow(userID, groupID) {
-		remaining := b.rateLimiter.RemainingTime(userID, groupID)
+		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
@@ -268,7 +279,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 	committed := false
 	defer func() {
 		if !committed {
-			b.rateLimiter.Release(userID, groupID)
+			b.rateLimiter.Release(groupID)
 		}
 	}()
 
@@ -276,7 +287,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 
 	messagesText := b.db.FormatMessagesForSummary(messages)
 
-	statusMsgID := b.sendMessage(ctx, groupID, "Собираю сообщения за последние 24 часа...")
+	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", b.cfg.SummaryHours))
 
 	summary, err := b.summarizer.Summarize(ctx, messagesText)
 	if err != nil {
@@ -287,7 +298,9 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 
 	committed = true
 
-	b.db.SetLastSummarizeTime(ctx, groupID, time.Now())
+	if err := b.db.SetLastSummarizeTime(ctx, groupID, time.Now()); err != nil {
+		logger.Error().Err(err).Msg("failed to set last summarize time")
+	}
 
 	b.editMessage(groupID, statusMsgID, "📝 *Суммаризация:*\n\n"+summary)
 }
