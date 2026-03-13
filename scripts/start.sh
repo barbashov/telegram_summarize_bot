@@ -1,3 +1,3 @@
 #!/bin/sh
 
-docker-compose up -d --build --force-recreate
+docker-compose pull && docker-compose up -d --force-recreate

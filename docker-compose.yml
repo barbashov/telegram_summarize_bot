@@ -2,9 +2,8 @@ version: '3.8'
 
 services:
   bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/barbashov/telegram_summarize_bot:main
+    pull_policy: always
     container_name: telegram_summarize_bot
     restart: unless-stopped
     volumes:
