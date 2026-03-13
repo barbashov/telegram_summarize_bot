@@ -20,6 +20,7 @@ type Config struct {
 	Model         string
 	DBPath        string
 	AllowedGroups []int64
+	AlertUserIDs  []int64
 }
 
 func Load() (*Config, error) {
@@ -77,6 +78,7 @@ func Load() (*Config, error) {
 	}
 
 	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
+	alertUserIDs := parseIDList(os.Getenv("ALERT_USER_IDS"))
 
 	return &Config{
 		BotToken:      botToken,
@@ -89,6 +91,7 @@ func Load() (*Config, error) {
 		Model:         model,
 		DBPath:        dbPath,
 		AllowedGroups: allowedGroups,
+		AlertUserIDs:  alertUserIDs,
 	}, nil
 }
 

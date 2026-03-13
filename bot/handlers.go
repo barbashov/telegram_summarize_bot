@@ -397,3 +397,28 @@ func (b *Bot) editMessage(chatID int64, messageID int64, text string) {
 		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
 	}
 }
+
+func (b *Bot) NotifyUsers(ctx context.Context, text string) (int, int) {
+	attempted := len(b.cfg.AlertUserIDs)
+	if attempted == 0 {
+		return 0, 0
+	}
+
+	sent := 0
+	failed := 0
+	for _, userID := range b.cfg.AlertUserIDs {
+		if b.sendMessage(ctx, userID, text) == 0 {
+			failed++
+			continue
+		}
+		sent++
+	}
+
+	logger.Info().
+		Int("attempted", attempted).
+		Int("sent", sent).
+		Int("failed", failed).
+		Msg("alert notifications sent")
+
+	return sent, failed
+}

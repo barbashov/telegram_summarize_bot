@@ -9,6 +9,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Rate limiting (1 request per minute per user per group)
 - Forwarded messages attributed to original author, never treated as commands
 - Automatic message cleanup (configurable retention period)
+- Optional startup/shutdown alerts to selected Telegram users
 - SQLite persistence
 - Graceful shutdown
 
@@ -69,6 +70,7 @@ All configuration is via environment variables (`.env` file):
 | `BOT_TOKEN` | *(required)* | Telegram Bot Token |
 | `OPENROUTER_API_KEY` | *(required)* | OpenRouter API Key |
 | `ALLOWED_GROUPS` | *(required)* | Comma-separated group IDs the bot operates in |
+| `ALERT_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for startup/shutdown alerts |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |
@@ -76,3 +78,5 @@ All configuration is via environment variables (`.env` file):
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per user per group (seconds) |
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model via OpenRouter |
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
+
+Note: Telegram bots can send private messages only to users who already started a chat with the bot.

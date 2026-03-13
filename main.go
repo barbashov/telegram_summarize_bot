@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"telegram_summarize_bot/bot"
 	"telegram_summarize_bot/config"
@@ -46,6 +47,10 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to initialize bot")
 	}
 
+	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	tgBot.NotifyUsers(startupCtx, "Бот запущен и в сети ✅")
+	startupCancel()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -55,6 +60,11 @@ func main() {
 	go func() {
 		<-sigChan
 		logger.Info().Msg("Received shutdown signal")
+
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		tgBot.NotifyUsers(shutdownCtx, "Бот остановлен ⛔")
+		shutdownCancel()
+
 		cancel()
 	}()
 
