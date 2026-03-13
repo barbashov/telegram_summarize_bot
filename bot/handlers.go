@@ -3,6 +3,7 @@ package bot
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -188,7 +189,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 
 	switch cmd {
 	case "summarize", "sub", "s":
-		b.handleSummarize(ctx, update)
+		b.handleSummarize(ctx, update, parts[1:])
 	case "help":
 		b.handleHelp(ctx, update)
 	default:
@@ -203,9 +204,9 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	}
 
 	helpText := "📖 *Доступные команды:*\n\n" +
-		"• `summarize` (или `s`, `sub`) — суммировать сообщения за последние 24 часа\n" +
+		"• `summarize [часы]` (или `s`, `sub`) — суммировать сообщения за последние N часов (по умолчанию 24)\n" +
 		"• `help` — показать это сообщение\n\n" +
-		"_Пример: @bot summarize_"
+		"_Примеры: @bot summarize, @bot summarize 12_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
@@ -239,17 +240,27 @@ func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEn
 	return "", fmt.Errorf("no bot mention found")
 }
 
-func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
+func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []string) {
 	msg := update.Message
 	groupID := msg.Chat.ID
 	userID := msg.From.ID
+
+	hours := b.cfg.SummaryHours
+	if len(args) > 0 {
+		parsed, err := strconv.Atoi(args[0])
+		if err != nil || parsed <= 0 {
+			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
+			return
+		}
+		hours = parsed
+	}
 
 	lastSummarize, err := b.db.GetLastSummarizeTime(ctx, groupID)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get last summarize time")
 	}
 
-	since := time.Now().Add(-b.cfg.SummaryDuration())
+	since := time.Now().Add(-time.Duration(hours) * time.Hour)
 	if lastSummarize != nil && since.Before(*lastSummarize) {
 		since = *lastSummarize
 	}
@@ -287,7 +298,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update) {
 
 	messagesText := b.db.FormatMessagesForSummary(messages)
 
-	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", b.cfg.SummaryHours))
+	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
 
 	summary, err := b.summarizer.Summarize(ctx, messagesText)
 	if err != nil {
