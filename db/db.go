@@ -124,10 +124,12 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &msg.ForwardedFrom); err != nil {
+		var forwardedFrom sql.NullString
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &forwardedFrom); err != nil {
 			logger.Error().Err(err).Msg("failed to scan message")
 			continue
 		}
+		msg.ForwardedFrom = forwardedFrom.String
 		messages = append(messages, msg)
 	}
 
