@@ -198,7 +198,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	if msg.Chat.Type == "private" {
-		b.handleCommand(ctx, update, text)
+		b.handlePrivateChatInfo(ctx, update)
 		return
 	}
 
@@ -255,6 +255,18 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 		"_Примеры: @bot summarize, @bot summarize 12_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
+}
+
+func (b *Bot) handlePrivateChatInfo(ctx context.Context, update telego.Update) {
+	msg := update.Message
+	if msg == nil {
+		return
+	}
+
+	privateInfoText := "Я работаю только в группах и полезен для суммаризации групповых обсуждений.\n\n" +
+		"Добавьте меня в группу и используйте `@" + b.username + " summarize`."
+
+	b.sendMessage(ctx, msg.Chat.ID, privateInfoText)
 }
 
 func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {
