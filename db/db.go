@@ -19,12 +19,13 @@ type DB struct {
 }
 
 type Message struct {
-	ID        int64
-	GroupID   int64
-	UserID    int64
-	Username  string
-	Text      string
-	Timestamp time.Time
+	ID            int64
+	GroupID       int64
+	UserID        int64
+	Username      string
+	Text          string
+	Timestamp     time.Time
+	ForwardedFrom string // original author name when message was forwarded; empty otherwise
 }
 
 func New(dbPath string) (*DB, error) {
@@ -61,6 +62,7 @@ func (db *DB) migrate() error {
 			username TEXT,
 			text TEXT NOT NULL,
 			timestamp DATETIME NOT NULL,
+			forwarded_from TEXT,
 			UNIQUE(group_id, id)
 		)`,
 		`DROP TABLE IF EXISTS admins`,
@@ -77,6 +79,15 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	// Additive migration: add forwarded_from column to existing databases that predate it.
+	_, err := db.conn.Exec(`ALTER TABLE messages ADD COLUMN forwarded_from TEXT`)
+	if err != nil {
+		// SQLite returns an error when the column already exists; ignore it.
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("failed to migrate forwarded_from column: %w", err)
+		}
+	}
+
 	return nil
 }
 
@@ -90,15 +101,15 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 	}
 
 	_, err := db.conn.ExecContext(ctx,
-		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp) VALUES (?, ?, ?, ?, ?)`,
-		msg.GroupID, msg.UserID, msg.Username, msg.Text, msg.Timestamp,
+		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp, forwarded_from) VALUES (?, ?, ?, ?, ?, ?)`,
+		msg.GroupID, msg.UserID, msg.Username, msg.Text, msg.Timestamp, msg.ForwardedFrom,
 	)
 	return err
 }
 
 func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT id, group_id, user_id, username, text, timestamp 
+		`SELECT id, group_id, user_id, username, text, timestamp, forwarded_from
 		 FROM messages 
 		 WHERE group_id = ? AND timestamp > ? 
 		 ORDER BY timestamp ASC 
@@ -113,7 +124,7 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	var messages []Message
 	for rows.Next() {
 		var msg Message
-		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &msg.ForwardedFrom); err != nil {
 			logger.Error().Err(err).Msg("failed to scan message")
 			continue
 		}
@@ -147,7 +158,11 @@ func (db *DB) FormatMessagesForSummary(messages []Message) string {
 			username = fmt.Sprintf("User%d", msg.UserID)
 		}
 		timeStr := msg.Timestamp.Format("15:04")
-		sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", timeStr, username, msg.Text))
+		if msg.ForwardedFrom != "" {
+			sb.WriteString(fmt.Sprintf("[%s] %s (fwd: %s): %s\n", timeStr, username, msg.ForwardedFrom, msg.Text))
+		} else {
+			sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", timeStr, username, msg.Text))
+		}
 		if i > 0 && i%50 == 0 {
 			sb.WriteString("---\n")
 		}

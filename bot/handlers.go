@@ -118,6 +118,35 @@ func (b *Bot) rateLimitCleanupLoop(ctx context.Context) {
 	}
 }
 
+// originUsername returns a display name for the original author of a forwarded message.
+func originUsername(origin telego.MessageOrigin) string {
+	switch o := origin.(type) {
+	case *telego.MessageOriginUser:
+		if o.SenderUser.Username != "" {
+			return o.SenderUser.Username
+		}
+		name := strings.TrimSpace(o.SenderUser.FirstName + " " + o.SenderUser.LastName)
+		if name != "" {
+			return name
+		}
+		return fmt.Sprintf("User%d", o.SenderUser.ID)
+	case *telego.MessageOriginHiddenUser:
+		return o.SenderUserName
+	case *telego.MessageOriginChat:
+		if o.AuthorSignature != "" {
+			return o.AuthorSignature
+		}
+		return o.SenderChat.Title
+	case *telego.MessageOriginChannel:
+		if o.AuthorSignature != "" {
+			return o.AuthorSignature
+		}
+		return o.Chat.Title
+	default:
+		return "unknown"
+	}
+}
+
 func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	if update.Message == nil {
 		return
@@ -148,6 +177,23 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			Int64("user_id", userID).
 			Str("chat_type", msg.Chat.Type).
 			Msg("ignoring message from non-allowed group")
+		return
+	}
+
+	// Forwarded messages are stored with original author attribution but never
+	// treated as commands — the forwarder didn't intend to issue one.
+	if msg.ForwardOrigin != nil {
+		forwardedFrom := originUsername(msg.ForwardOrigin)
+		if err := b.db.AddMessage(ctx, &db.Message{
+			GroupID:       groupID,
+			UserID:        userID,
+			Username:      msg.From.Username,
+			Text:          text,
+			Timestamp:     time.Now(),
+			ForwardedFrom: forwardedFrom,
+		}); err != nil {
+			logger.Error().Err(err).Msg("failed to add forwarded message")
+		}
 		return
 	}
 
