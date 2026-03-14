@@ -8,7 +8,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
 - Group allowlist (bot ignores non-configured groups)
-- Rate limiting (1 request per minute per user per group)
+- Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to selected Telegram users
@@ -84,7 +84,7 @@ All configuration is via environment variables (`.env` file):
 | `RETENTION_DAYS` | `7` | Message retention period (days) |
 | `MAX_MESSAGES` | `250` | Max messages to include in summary |
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
-| `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per user per group (seconds) |
+| `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model via OpenRouter |
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 

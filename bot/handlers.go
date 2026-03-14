@@ -58,6 +58,9 @@ func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer) (*B
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bot info: %w", err)
 	}
+	if me.Username == "" {
+		return nil, fmt.Errorf("bot has no username")
+	}
 
 	return &Bot{
 		telegram:    bot,
@@ -324,6 +327,10 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
 			return
 		}
+		if parsed > b.cfg.SummaryHours {
+			b.sendMessage(ctx, groupID, fmt.Sprintf("Максимальный период суммаризации — %d часов.", b.cfg.SummaryHours))
+			return
+		}
 		hours = parsed
 	}
 
@@ -373,7 +380,9 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
-		b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		if editErr := b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже."); editErr != nil {
+			b.sendMessage(ctx, groupID, "Ошибка суммаризации. Попробуйте позже.")
+		}
 		return
 	}
 
@@ -398,7 +407,7 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 
 	return int64(msg.MessageID)
 }
 
-func (b *Bot) editMessage(chatID int64, messageID int64, text string) {
+func (b *Bot) editMessage(chatID int64, messageID int64, text string) error {
 	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
 		ChatID:    tu.ID(chatID),
 		MessageID: int(messageID),
@@ -408,6 +417,7 @@ func (b *Bot) editMessage(chatID int64, messageID int64, text string) {
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
 	}
+	return err
 }
 
 func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
@@ -416,7 +426,9 @@ func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summar
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации."}
 	}
 
-	b.editMessage(chatID, statusMsgID, chunks[0])
+	if err := b.editMessage(chatID, statusMsgID, chunks[0]); err != nil {
+		b.sendMessage(ctx, chatID, chunks[0])
+	}
 	for _, chunk := range chunks[1:] {
 		b.sendMessage(ctx, chatID, chunk)
 	}
