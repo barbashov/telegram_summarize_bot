@@ -120,3 +120,9 @@ In-memory (not persisted to DB). Keyed by `userID_groupID`. Cleanup runs every 5
 ## Context
 
 See [specs/initial.md](specs/initial.md) for project context and setup details.
+
+## Agent Workflow Rule
+
+After any successful `git push` to this repository, include the exact GitHub Actions run URL triggered by that push in the final response.
+Do not print the generic workflow file link.
+If the exact run URL cannot be determined, say that explicitly instead of printing a fallback workflow link.
