@@ -126,3 +126,6 @@ See [specs/initial.md](specs/initial.md) for project context and setup details.
 After any successful `git push` to this repository, include the exact GitHub Actions run URL triggered by that push in the final response.
 Do not print the generic workflow file link.
 If the exact run URL cannot be determined, say that explicitly instead of printing a fallback workflow link.
+
+After code changes, update `README.md` if the changes affect user-visible behavior, commands, configuration, setup, architecture notes, or documented defaults.
+Do not leave `README.md` stale when implementation changes make existing documentation inaccurate.
