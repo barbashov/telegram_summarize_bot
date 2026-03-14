@@ -2,16 +2,50 @@ package summarizer
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/sashabaranov/go-openai"
+	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
 )
 
+const (
+	clusterMaxTokens = 400
+	finalMaxTokens   = 1000
+)
+
+type chatCompletionClient interface {
+	CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error)
+}
+
 type Summarizer struct {
-	client *openai.Client
+	client chatCompletionClient
 	model  string
+}
+
+type TopicCluster struct {
+	Title          string `json:"title"`
+	MessageIndexes []int  `json:"message_indexes"`
+	MessageCount   int    `json:"message_count"`
+}
+
+type TopicSummary struct {
+	Title        string `json:"title"`
+	Summary      string `json:"summary"`
+	MessageCount int    `json:"message_count"`
+}
+
+type StructuredSummary struct {
+	TLDR   string         `json:"tldr"`
+	Topics []TopicSummary `json:"topics"`
+}
+
+type topicClusterResponse struct {
+	Topics []TopicCluster `json:"topics"`
 }
 
 func New(apiKey, baseURL, model string) (*Summarizer, error) {
@@ -19,59 +53,319 @@ func New(apiKey, baseURL, model string) (*Summarizer, error) {
 	config.BaseURL = baseURL
 	config.HTTPClient.Timeout = 120 * time.Second
 
-	client := openai.NewClientWithConfig(config)
+	return NewWithClient(openai.NewClientWithConfig(config), model), nil
+}
 
+func NewWithClient(client chatCompletionClient, model string) *Summarizer {
 	return &Summarizer{
 		client: client,
 		model:  model,
-	}, nil
+	}
 }
 
-func (s *Summarizer) Summarize(ctx context.Context, messagesText string) (string, error) {
-	if messagesText == "" {
-		return "Нет сообщений для суммаризации за последние 24 часа.", nil
+func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*StructuredSummary, error) {
+	if len(messages) == 0 {
+		return &StructuredSummary{}, nil
+	}
+	if topicMax <= 0 {
+		topicMax = 5
 	}
 
-	prompt := fmt.Sprintf(`Ты - ассистент, который суммаризует групповые чаты в Telegram. 
-Твоя задача - кратко и информативно суммаризовать сообщения из группового чата на русском языке.
-Суммаризация должна быть:
-- Краткой (2-5 предложений)
-- Информативной (основные темы и важные моменты)
-- На русском языке
+	clusters, err := s.ClusterTopics(ctx, messages, topicMax)
+	if err != nil {
+		return nil, err
+	}
 
-Формат сообщений: [время] автор: текст
-Сообщения вида "[время] автор (fwd: источник): текст" являются пересланными — их автором является исходный отправитель (источник), а не тот, кто переслал.
+	return s.SummarizeTopics(ctx, messages, clusters)
+}
 
-Вот сообщения из чата:
----
-%s
----
-
-Напиши краткую суммаризацию на русском языке:`, messagesText)
+func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, topicMax int) ([]TopicCluster, error) {
+	prompt := buildClusteringPrompt(messages, topicMax)
 
 	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
 			{
-				Role:    openai.ChatMessageRoleSystem,
-				Content: "Ты - ассистент для суммаризации групповых чатов. Пиши кратко и только на русском языке.",
+				Role: openai.ChatMessageRoleSystem,
+				Content: "Ты выделяешь темы в обсуждении Telegram. Отвечай строго JSON без пояснений. " +
+					"Каждое сообщение может принадлежать только одной теме.",
 			},
 			{
 				Role:    openai.ChatMessageRoleUser,
 				Content: prompt,
 			},
 		},
-		MaxTokens:   500,
+		MaxTokens:   clusterMaxTokens,
+		Temperature: 0.1,
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to create topic clustering completion")
+		return nil, fmt.Errorf("failed to cluster topics: %w", err)
+	}
+
+	content, err := firstChoiceContent(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var parsed topicClusterResponse
+	if err := unmarshalJSONObject(content, &parsed); err != nil {
+		return nil, fmt.Errorf("failed to parse topic clusters: %w", err)
+	}
+
+	clusters, err := sanitizeClusters(parsed.Topics, len(messages), topicMax)
+	if err != nil {
+		return nil, err
+	}
+
+	return clusters, nil
+}
+
+func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster) (*StructuredSummary, error) {
+	prompt := buildTopicSummaryPrompt(messages, clusters)
+
+	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+		Model: s.model,
+		Messages: []openai.ChatCompletionMessage{
+			{
+				Role: openai.ChatMessageRoleSystem,
+				Content: "Ты суммаризуешь темы из группового чата Telegram. " +
+					"Отвечай строго JSON без пояснений, только на русском языке.",
+			},
+			{
+				Role:    openai.ChatMessageRoleUser,
+				Content: prompt,
+			},
+		},
+		MaxTokens:   finalMaxTokens,
 		Temperature: 0.3,
 	})
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to create chat completion")
-		return "", fmt.Errorf("failed to create summary: %w", err)
+		logger.Error().Err(err).Msg("failed to create topic summary completion")
+		return nil, fmt.Errorf("failed to summarize topics: %w", err)
 	}
 
+	content, err := firstChoiceContent(resp)
+	if err != nil {
+		return nil, err
+	}
+
+	var summary StructuredSummary
+	if err := unmarshalJSONObject(content, &summary); err != nil {
+		return nil, fmt.Errorf("failed to parse topic summary: %w", err)
+	}
+
+	return normalizeStructuredSummary(summary, clusters), nil
+}
+
+func FormatTelegramSummary(summary *StructuredSummary) string {
+	if summary == nil {
+		return "📝 *Суммаризация:*\n\nНет данных для суммаризации."
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📝 *Суммаризация:*")
+
+	if strings.TrimSpace(summary.TLDR) != "" {
+		sb.WriteString("\n\n*TL;DR:* ")
+		sb.WriteString(escapeMarkdown(summary.TLDR))
+	}
+
+	for i, topic := range summary.Topics {
+		sb.WriteString("\n\n*")
+		sb.WriteString(fmt.Sprintf("%d. %s", i+1, escapeMarkdown(topic.Title)))
+		sb.WriteString("*\n")
+		sb.WriteString(escapeMarkdown(topic.Summary))
+	}
+
+	if len(summary.Topics) == 0 && strings.TrimSpace(summary.TLDR) == "" {
+		sb.WriteString("\n\nНет данных для суммаризации.")
+	}
+
+	return sb.String()
+}
+
+func buildClusteringPrompt(messages []db.Message, topicMax int) string {
+	return fmt.Sprintf(`Разбей сообщения чата на смысловые темы.
+
+Требования:
+- Определи от 1 до %d тем.
+- Не создавай отдельную тему для незначительного оффтопа, лучше присоедини его к ближайшей теме.
+- Названия тем должны быть короткими и конкретными.
+- Каждое сообщение может быть только в одной теме.
+- Ответь строго JSON в формате:
+{"topics":[{"title":"...", "message_indexes":[0,1], "message_count":2}]}
+
+Сообщения:
+---
+%s
+---`, topicMax, formatIndexedMessages(messages))
+}
+
+func buildTopicSummaryPrompt(messages []db.Message, clusters []TopicCluster) string {
+	return fmt.Sprintf(`У тебя есть темы обсуждения из группового чата Telegram.
+
+Сделай итог в JSON формате:
+{"tldr":"1-2 предложения", "topics":[{"title":"...", "summary":"2-4 предложения", "message_count":3}]}
+
+Требования:
+- Пиши только на русском языке.
+- TL;DR должен быть коротким, 1-2 предложения.
+- Для каждой темы дай 2-4 предложения по сути: решения, выводы, спорные моменты, открытые вопросы.
+- Сохрани темы в том же порядке.
+- Не добавляй темы, которых нет во входных данных.
+
+Темы и сообщения:
+---
+%s
+---`, formatClustersForPrompt(messages, clusters))
+}
+
+func formatIndexedMessages(messages []db.Message) string {
+	var sb strings.Builder
+	for i, msg := range messages {
+		sb.WriteString(fmt.Sprintf("%d. %s\n", i, formatMessage(msg)))
+	}
+	return sb.String()
+}
+
+func formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) string {
+	var sb strings.Builder
+	for i, cluster := range clusters {
+		sb.WriteString(fmt.Sprintf("Тема %d: %s\n", i+1, cluster.Title))
+		for _, index := range cluster.MessageIndexes {
+			if index < 0 || index >= len(messages) {
+				continue
+			}
+			sb.WriteString(fmt.Sprintf("- %s\n", formatMessage(messages[index])))
+		}
+		sb.WriteString("\n")
+	}
+	return strings.TrimSpace(sb.String())
+}
+
+func formatMessage(msg db.Message) string {
+	username := msg.Username
+	if username == "" {
+		username = fmt.Sprintf("User%d", msg.UserID)
+	}
+	timeStr := msg.Timestamp.Format("15:04")
+	if msg.ForwardedFrom != "" {
+		return fmt.Sprintf("[%s] %s (fwd: %s): %s", timeStr, username, msg.ForwardedFrom, msg.Text)
+	}
+	return fmt.Sprintf("[%s] %s: %s", timeStr, username, msg.Text)
+}
+
+func sanitizeClusters(clusters []TopicCluster, messageCount, topicMax int) ([]TopicCluster, error) {
+	if len(clusters) == 0 {
+		return nil, fmt.Errorf("no topics returned from model")
+	}
+
+	if topicMax > 0 && len(clusters) > topicMax {
+		clusters = clusters[:topicMax]
+	}
+
+	assigned := make(map[int]bool, messageCount)
+	sanitized := make([]TopicCluster, 0, len(clusters))
+	for i, cluster := range clusters {
+		title := strings.TrimSpace(cluster.Title)
+		if title == "" {
+			title = fmt.Sprintf("Тема %d", i+1)
+		}
+
+		indexes := make([]int, 0, len(cluster.MessageIndexes))
+		for _, idx := range cluster.MessageIndexes {
+			if idx < 0 || idx >= messageCount {
+				return nil, fmt.Errorf("topic %q has out-of-range message index %d", title, idx)
+			}
+			if assigned[idx] {
+				continue
+			}
+			assigned[idx] = true
+			indexes = append(indexes, idx)
+		}
+		if len(indexes) == 0 {
+			continue
+		}
+		sort.Ints(indexes)
+		sanitized = append(sanitized, TopicCluster{
+			Title:          title,
+			MessageIndexes: indexes,
+			MessageCount:   len(indexes),
+		})
+	}
+
+	if len(sanitized) == 0 {
+		return nil, fmt.Errorf("no valid topics returned from model")
+	}
+
+	var leftovers []int
+	for idx := 0; idx < messageCount; idx++ {
+		if !assigned[idx] {
+			leftovers = append(leftovers, idx)
+		}
+	}
+	if len(leftovers) > 0 {
+		last := &sanitized[len(sanitized)-1]
+		last.MessageIndexes = append(last.MessageIndexes, leftovers...)
+		sort.Ints(last.MessageIndexes)
+		last.MessageCount = len(last.MessageIndexes)
+	}
+
+	return sanitized, nil
+}
+
+func normalizeStructuredSummary(summary StructuredSummary, clusters []TopicCluster) *StructuredSummary {
+	result := &StructuredSummary{
+		TLDR: strings.TrimSpace(summary.TLDR),
+	}
+
+	for i, cluster := range clusters {
+		topic := TopicSummary{
+			Title:        cluster.Title,
+			MessageCount: cluster.MessageCount,
+		}
+		if i < len(summary.Topics) {
+			if title := strings.TrimSpace(summary.Topics[i].Title); title != "" {
+				topic.Title = title
+			}
+			topic.Summary = strings.TrimSpace(summary.Topics[i].Summary)
+			if summary.Topics[i].MessageCount > 0 {
+				topic.MessageCount = summary.Topics[i].MessageCount
+			}
+		}
+		result.Topics = append(result.Topics, topic)
+	}
+
+	return result
+}
+
+func unmarshalJSONObject(content string, target interface{}) error {
+	start := strings.Index(content, "{")
+	end := strings.LastIndex(content, "}")
+	if start == -1 || end == -1 || end < start {
+		return fmt.Errorf("model response does not contain a JSON object")
+	}
+
+	if err := json.Unmarshal([]byte(content[start:end+1]), target); err != nil {
+		return err
+	}
+	return nil
+}
+
+func firstChoiceContent(resp openai.ChatCompletionResponse) (string, error) {
 	if len(resp.Choices) == 0 {
 		return "", fmt.Errorf("no choices returned from OpenRouter")
 	}
+	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
+}
 
-	return resp.Choices[0].Message.Content, nil
+func escapeMarkdown(text string) string {
+	replacer := strings.NewReplacer(
+		"_", "\\_",
+		"*", "\\*",
+		"`", "\\`",
+		"[", "\\[",
+	)
+	return replacer.Replace(strings.TrimSpace(text))
 }

@@ -33,6 +33,7 @@ func main() {
 		Int("summary_hours", cfg.SummaryHours).
 		Int("retention_days", cfg.RetentionDays).
 		Int("max_messages", cfg.MaxMessages).
+		Int("topic_max", cfg.TopicMax).
 		Int("rate_limit_sec", cfg.RateLimitSec).
 		Str("model", cfg.Model).
 		Msg("Configuration loaded")

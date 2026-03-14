@@ -16,6 +16,20 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
+const telegramMessageLimit = 4096
+
+type telegramClient interface {
+	GetMe() (*telego.User, error)
+	UpdatesViaLongPolling(params *telego.GetUpdatesParams, options ...telego.LongPollingOption) (<-chan telego.Update, error)
+	StopLongPolling()
+	SendMessage(params *telego.SendMessageParams) (*telego.Message, error)
+	EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error)
+}
+
+type summaryService interface {
+	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*summarizer.StructuredSummary, error)
+}
+
 func formatDuration(d time.Duration) string {
 	seconds := int(d.Seconds())
 	if seconds < 60 {
@@ -26,9 +40,9 @@ func formatDuration(d time.Duration) string {
 }
 
 type Bot struct {
-	telegram    *telego.Bot
+	telegram    telegramClient
 	db          *db.DB
-	summarizer  *summarizer.Summarizer
+	summarizer  summaryService
 	rateLimiter *RateLimiter
 	cfg         *config.Config
 	username    string
@@ -354,11 +368,9 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	logger.Info().Int("count", len(messages)).Msg("Summarizing messages")
 
-	messagesText := b.db.FormatMessagesForSummary(messages)
-
 	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
 
-	summary, err := b.summarizer.Summarize(ctx, messagesText)
+	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
 		b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
@@ -371,7 +383,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		logger.Error().Err(err).Msg("failed to set last summarize time")
 	}
 
-	b.editMessage(groupID, statusMsgID, "📝 *Суммаризация:*\n\n"+summary)
+	b.sendSummary(ctx, groupID, statusMsgID, summary)
 }
 
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {
@@ -396,6 +408,71 @@ func (b *Bot) editMessage(chatID int64, messageID int64, text string) {
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
 	}
+}
+
+func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
+	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary), telegramMessageLimit)
+	if len(chunks) == 0 {
+		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации."}
+	}
+
+	b.editMessage(chatID, statusMsgID, chunks[0])
+	for _, chunk := range chunks[1:] {
+		b.sendMessage(ctx, chatID, chunk)
+	}
+}
+
+func splitTelegramMessage(text string, limit int) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	if limit <= 0 || len(text) <= limit {
+		return []string{text}
+	}
+
+	lines := strings.Split(text, "\n")
+	var chunks []string
+	var current strings.Builder
+
+	appendChunk := func() {
+		chunk := strings.TrimSpace(current.String())
+		if chunk != "" {
+			chunks = append(chunks, chunk)
+		}
+		current.Reset()
+	}
+
+	for _, line := range lines {
+		line = strings.TrimRight(line, " ")
+		candidate := line
+		if current.Len() > 0 {
+			candidate = current.String() + "\n" + line
+		}
+
+		if len(candidate) <= limit {
+			if current.Len() > 0 {
+				current.WriteString("\n")
+			}
+			current.WriteString(line)
+			continue
+		}
+
+		if current.Len() > 0 {
+			appendChunk()
+		}
+
+		for len(line) > limit {
+			chunks = append(chunks, strings.TrimSpace(line[:limit]))
+			line = line[limit:]
+		}
+		if strings.TrimSpace(line) != "" {
+			current.WriteString(line)
+		}
+	}
+
+	appendChunk()
+	return chunks
 }
 
 func (b *Bot) NotifyUsers(ctx context.Context, text string) (int, int) {

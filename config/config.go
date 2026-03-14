@@ -15,6 +15,7 @@ type Config struct {
 	SummaryHours  int
 	RetentionDays int
 	MaxMessages   int
+	TopicMax      int
 	RateLimitSec  int
 	OpenRouterURL string
 	Model         string
@@ -40,10 +41,17 @@ func Load() (*Config, error) {
 		}
 	}
 
-	maxMessages := 100
+	maxMessages := 250
 	if v := os.Getenv("MAX_MESSAGES"); v != "" {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			maxMessages = parsed
+		}
+	}
+
+	topicMax := 5
+	if v := os.Getenv("TOPIC_MAX"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			topicMax = parsed
 		}
 	}
 
@@ -86,6 +94,7 @@ func Load() (*Config, error) {
 		SummaryHours:  summaryHours,
 		RetentionDays: retentionDays,
 		MaxMessages:   maxMessages,
+		TopicMax:      topicMax,
 		RateLimitSec:  rateLimitSec,
 		OpenRouterURL: openRouterURL,
 		Model:         model,
