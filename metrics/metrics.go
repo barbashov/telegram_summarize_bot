@@ -12,13 +12,13 @@ const (
 	windowSize = 100
 	ringSize   = 10
 
-	thresholdTelegramSend  = 3 * time.Second
-	thresholdTelegramEdit  = 3 * time.Second
-	thresholdLLMCluster    = 10 * time.Second
-	thresholdLLMSummarize  = 30 * time.Second
-	thresholdDB            = 500 * time.Millisecond
-	thresholdFailRatio     = 0.20
-	thresholdRecentErrors  = 5
+	thresholdTelegramSend = 3 * time.Second
+	thresholdTelegramEdit = 3 * time.Second
+	thresholdLLMCluster   = 10 * time.Second
+	thresholdLLMSummarize = 30 * time.Second
+	thresholdDB           = 500 * time.Millisecond
+	thresholdFailRatio    = 0.20
+	thresholdRecentErrors = 5
 )
 
 // LatencyStat is a rolling window of the last windowSize duration samples.
@@ -165,19 +165,19 @@ func (m *Metrics) RecordError(key, errMsg string) {
 
 // MetricsSnapshot is a point-in-time copy of all metrics, safe to read without holding locks.
 type MetricsSnapshot struct {
-	Uptime        time.Duration
-	TelegramSend  LatencySnapshot
-	TelegramEdit  LatencySnapshot
-	LLMCluster    LatencySnapshot
-	LLMSummarize  LatencySnapshot
-	DBAdd         LatencySnapshot
-	DBGet         LatencySnapshot
+	Uptime         time.Duration
+	TelegramSend   LatencySnapshot
+	TelegramEdit   LatencySnapshot
+	LLMCluster     LatencySnapshot
+	LLMSummarize   LatencySnapshot
+	DBAdd          LatencySnapshot
+	DBGet          LatencySnapshot
 	MessagesStored int64
-	SummarizeOK   int64
-	SummarizeFail int64
-	RateLimitHits int64
-	ErrorCounts   map[string]int64
-	RecentErrors  []errorEntry
+	SummarizeOK    int64
+	SummarizeFail  int64
+	RateLimitHits  int64
+	ErrorCounts    map[string]int64
+	RecentErrors   []errorEntry
 }
 
 // Snapshot returns a consistent point-in-time copy of all metrics.
@@ -262,7 +262,7 @@ func formatSnapshot(snap MetricsSnapshot) string {
 
 	h := int(snap.Uptime.Hours())
 	m := int(snap.Uptime.Minutes()) % 60
-	sb.WriteString(fmt.Sprintf("⏱ Аптайм: %dч %dм\n\n", h, m))
+	fmt.Fprintf(&sb, "⏱ Аптайм: %dч %dм\n\n", h, m)
 
 	// Issue detection.
 	var issues []string
@@ -319,18 +319,18 @@ func formatSnapshot(snap MetricsSnapshot) string {
 
 	// Counters.
 	sb.WriteString("\n📊 Счётчики:\n")
-	sb.WriteString(fmt.Sprintf("Сообщений сохранено:      %d\n", snap.MessagesStored))
+	fmt.Fprintf(&sb, "Сообщений сохранено:      %d\n", snap.MessagesStored)
 	if snap.SummarizeFail == 0 {
-		sb.WriteString(fmt.Sprintf("Суммаризаций ОК:          %d ✅\n", snap.SummarizeOK))
+		fmt.Fprintf(&sb, "Суммаризаций ОК:          %d ✅\n", snap.SummarizeOK)
 	} else {
-		sb.WriteString(fmt.Sprintf("Суммаризаций ОК:          %d\n", snap.SummarizeOK))
+		fmt.Fprintf(&sb, "Суммаризаций ОК:          %d\n", snap.SummarizeOK)
 	}
 	if snap.SummarizeFail > 0 {
-		sb.WriteString(fmt.Sprintf("Суммаризаций ошибок:      %d ❌\n", snap.SummarizeFail))
+		fmt.Fprintf(&sb, "Суммаризаций ошибок:      %d ❌\n", snap.SummarizeFail)
 	} else {
-		sb.WriteString(fmt.Sprintf("Суммаризаций ошибок:      %d\n", snap.SummarizeFail))
+		fmt.Fprintf(&sb, "Суммаризаций ошибок:      %d\n", snap.SummarizeFail)
 	}
-	sb.WriteString(fmt.Sprintf("Срабатываний рейт-лимита: %d\n", snap.RateLimitHits))
+	fmt.Fprintf(&sb, "Срабатываний рейт-лимита: %d\n", snap.RateLimitHits)
 
 	if len(snap.ErrorCounts) > 0 {
 		sb.WriteString("\nОшибки по типу:\n")
@@ -340,14 +340,14 @@ func formatSnapshot(snap MetricsSnapshot) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			sb.WriteString(fmt.Sprintf("  %-15s %d\n", k+":", snap.ErrorCounts[k]))
+			fmt.Fprintf(&sb, "  %-15s %d\n", k+":", snap.ErrorCounts[k])
 		}
 	}
 
 	if len(snap.RecentErrors) > 0 {
 		sb.WriteString("\n🚨 Последние ошибки:\n")
 		for _, e := range snap.RecentErrors {
-			sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", e.ts.Format("15:04:05"), e.key, e.msg))
+			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.ts.Format("15:04:05"), e.key, e.msg)
 		}
 	}
 

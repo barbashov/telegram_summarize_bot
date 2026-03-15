@@ -99,7 +99,7 @@ func summarizeUpdate() telego.Update {
 
 func TestHandleSummarizeNoMessages(t *testing.T) {
 	b, database, tg := newTestBot(t, &fakeSummarizer{})
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	b.handleSummarize(context.Background(), summarizeUpdate(), nil)
 
@@ -121,7 +121,7 @@ func TestHandleSummarizeUpdatesLastSummarizeOnSuccess(t *testing.T) {
 		},
 	}
 	b, database, tg := newTestBot(t, sum)
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err := database.AddMessage(context.Background(), &db.Message{
 		GroupID:   42,
@@ -161,7 +161,7 @@ func TestHandleSummarizeUpdatesLastSummarizeOnSuccess(t *testing.T) {
 func TestHandleSummarizeDoesNotUpdateLastSummarizeOnFailure(t *testing.T) {
 	sum := &fakeSummarizer{err: context.DeadlineExceeded}
 	b, database, tg := newTestBot(t, sum)
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	err := database.AddMessage(context.Background(), &db.Message{
 		GroupID:   42,
@@ -190,7 +190,7 @@ func TestHandleSummarizeDoesNotUpdateLastSummarizeOnFailure(t *testing.T) {
 
 func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 	b, database, tg := newTestBot(t, &fakeSummarizer{})
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	alertUserID := int64(999)
 	b.cfg.AlertUserIDs = []int64{alertUserID}
@@ -203,7 +203,7 @@ func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 		},
 	}
 
-	b.handlePrivateCommand(context.Background(), update)
+	b.handlePrivateCommand(update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))
@@ -218,7 +218,7 @@ func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 
 func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
 	b, database, tg := newTestBot(t, &fakeSummarizer{})
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	b.cfg.AlertUserIDs = []int64{999}
 
@@ -230,7 +230,7 @@ func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
 		},
 	}
 
-	b.handlePrivateCommand(context.Background(), update)
+	b.handlePrivateCommand(update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))

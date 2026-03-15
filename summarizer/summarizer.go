@@ -180,7 +180,7 @@ func FormatTelegramSummary(summary *StructuredSummary) string {
 
 	for i, topic := range summary.Topics {
 		sb.WriteString("\n\n*")
-		sb.WriteString(fmt.Sprintf("%d. %s", i+1, escapeMarkdown(topic.Title)))
+		fmt.Fprintf(&sb, "%d. %s", i+1, escapeMarkdown(topic.Title))
 		sb.WriteString("*\n")
 		sb.WriteString(escapeMarkdown(topic.Summary))
 	}
@@ -231,7 +231,7 @@ func buildTopicSummaryPrompt(messages []db.Message, clusters []TopicCluster) str
 func formatIndexedMessages(messages []db.Message) string {
 	var sb strings.Builder
 	for i, msg := range messages {
-		sb.WriteString(fmt.Sprintf("%d. %s\n", i, formatMessage(msg)))
+		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg))
 	}
 	return sb.String()
 }
@@ -239,12 +239,12 @@ func formatIndexedMessages(messages []db.Message) string {
 func formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) string {
 	var sb strings.Builder
 	for i, cluster := range clusters {
-		sb.WriteString(fmt.Sprintf("Тема %d: %s\n", i+1, cluster.Title))
+		fmt.Fprintf(&sb, "Тема %d: %s\n", i+1, cluster.Title)
 		for _, index := range cluster.MessageIndexes {
 			if index < 0 || index >= len(messages) {
 				continue
 			}
-			sb.WriteString(fmt.Sprintf("- %s\n", formatMessage(messages[index])))
+			fmt.Fprintf(&sb, "- %s\n", formatMessage(messages[index]))
 		}
 		sb.WriteString("\n")
 	}

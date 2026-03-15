@@ -222,7 +222,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	if msg.Chat.Type == "private" {
-		b.handlePrivateCommand(ctx, update)
+		b.handlePrivateCommand(update)
 		return
 	}
 
@@ -253,7 +253,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
-		b.handleHelp(ctx, update)
+		b.handleHelp(update)
 		return
 	}
 
@@ -265,13 +265,13 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	case "schedule":
 		b.handleSchedule(ctx, update, parts[1:])
 	case "help":
-		b.handleHelp(ctx, update)
+		b.handleHelp(update)
 	default:
-		b.handleHelp(ctx, update)
+		b.handleHelp(update)
 	}
 }
 
-func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
+func (b *Bot) handleHelp(update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -286,10 +286,10 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 		"• `help` — показать это сообщение\n\n" +
 		"_Примеры: @bot summarize, @bot summarize 12, @bot schedule 08:00_"
 
-	b.sendMessage(ctx, msg.Chat.ID, helpText)
+	b.sendMessage(msg.Chat.ID, helpText)
 }
 
-func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
+func (b *Bot) handlePrivateCommand(update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -297,7 +297,7 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 
 	fields := strings.Fields(msg.Text)
 	if len(fields) == 0 {
-		b.handlePrivateChatInfo(ctx, update)
+		b.handlePrivateChatInfo(update)
 		return
 	}
 
@@ -309,17 +309,17 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 
 	if cmd == "/status" {
 		if !b.cfg.IsAlertUser(msg.From.ID) {
-			b.sendMessage(ctx, msg.Chat.ID, "Нет доступа.")
+			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
-		b.sendMessage(ctx, msg.Chat.ID, b.metrics.FormatStatusReport())
+		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport())
 		return
 	}
 
-	b.handlePrivateChatInfo(ctx, update)
+	b.handlePrivateChatInfo(update)
 }
 
-func (b *Bot) handlePrivateChatInfo(ctx context.Context, update telego.Update) {
+func (b *Bot) handlePrivateChatInfo(update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -328,7 +328,7 @@ func (b *Bot) handlePrivateChatInfo(ctx context.Context, update telego.Update) {
 	privateInfoText := "Я работаю только в группах и полезен для суммаризации групповых обсуждений.\n\n" +
 		"Добавьте меня в группу и используйте `@" + b.username + " summarize`."
 
-	b.sendMessage(ctx, msg.Chat.ID, privateInfoText)
+	b.sendMessage(msg.Chat.ID, privateInfoText)
 }
 
 func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {
@@ -342,10 +342,10 @@ func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEn
 
 	runes := []rune(text)
 	for _, entity := range entities {
-		entityType := string(entity.Type)
+		entityType := entity.Type
 		if entityType == "mention" || entityType == "text_mention" {
-			start := int(entity.Offset)
-			end := start + int(entity.Length)
+			start := entity.Offset
+			end := start + entity.Length
 			if end > len(runes) {
 				continue
 			}
@@ -369,11 +369,11 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if len(args) > 0 {
 		parsed, err := strconv.Atoi(args[0])
 		if err != nil || parsed <= 0 {
-			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
+			b.sendMessage(groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
 			return
 		}
 		if parsed > b.cfg.SummaryHours {
-			b.sendMessage(ctx, groupID, fmt.Sprintf("Максимальный период суммаризации — %d часов.", b.cfg.SummaryHours))
+			b.sendMessage(groupID, fmt.Sprintf("Максимальный период суммаризации — %d часов.", b.cfg.SummaryHours))
 			return
 		}
 		hours = parsed
@@ -392,15 +392,15 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get messages")
-		b.sendMessage(ctx, groupID, "Ошибка получения сообщений.")
+		b.sendMessage(groupID, "Ошибка получения сообщений.")
 		return
 	}
 
 	if len(messages) == 0 {
 		if lastSummarize != nil {
-			b.sendMessage(ctx, groupID, "Нет новых сообщений с последней суммаризации.")
+			b.sendMessage(groupID, "Нет новых сообщений с последней суммаризации.")
 		} else {
-			b.sendMessage(ctx, groupID, "Нет сообщений за последние 24 часа.")
+			b.sendMessage(groupID, "Нет сообщений за последние 24 часа.")
 		}
 		return
 	}
@@ -408,7 +408,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if !b.rateLimiter.Allow(userID, groupID) {
 		b.metrics.IncRateLimitHit()
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessage(groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 
@@ -421,14 +421,14 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	logger.Info().Int("count", len(messages)).Msg("Summarizing messages")
 
-	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
+	statusMsgID := b.sendMessage(groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
 
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
 		b.metrics.IncSummarizeFail()
 		logger.Error().Err(err).Msg("failed to summarize")
 		if editErr := b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже."); editErr != nil {
-			b.sendMessage(ctx, groupID, "Ошибка суммаризации. Попробуйте позже.")
+			b.sendMessage(groupID, "Ошибка суммаризации. Попробуйте позже.")
 		}
 		return
 	}
@@ -440,10 +440,10 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		logger.Error().Err(err).Msg("failed to set last summarize time")
 	}
 
-	b.sendSummary(ctx, groupID, statusMsgID, summary)
+	b.sendSummary(groupID, statusMsgID, summary)
 }
 
-func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {
+func (b *Bot) sendMessage(chatID int64, text string) int64 {
 	defer b.metrics.TelegramSend.Start()()
 	msg, err := b.telegram.SendMessage(tu.Message(
 		tu.ID(chatID),
@@ -472,17 +472,17 @@ func (b *Bot) editMessage(chatID int64, messageID int64, text string) error {
 	return err
 }
 
-func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
+func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary), telegramMessageLimit)
 	if len(chunks) == 0 {
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации."}
 	}
 
 	if err := b.editMessage(chatID, statusMsgID, chunks[0]); err != nil {
-		b.sendMessage(ctx, chatID, chunks[0])
+		b.sendMessage(chatID, chunks[0])
 	}
 	for _, chunk := range chunks[1:] {
-		b.sendMessage(ctx, chatID, chunk)
+		b.sendMessage(chatID, chunk)
 	}
 }
 
@@ -539,7 +539,7 @@ func splitTelegramMessage(text string, limit int) []string {
 	return chunks
 }
 
-func (b *Bot) isGroupAdmin(ctx context.Context, groupID, userID int64) bool {
+func (b *Bot) isGroupAdmin(groupID, userID int64) bool {
 	member, err := b.telegram.GetChatMember(&telego.GetChatMemberParams{
 		ChatID: tu.ID(groupID),
 		UserID: userID,
@@ -561,20 +561,20 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s, err := b.db.GetGroupSchedule(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			b.sendMessage(groupID, "Ошибка получения расписания.")
 			return
 		}
 		if s == nil || !s.Enabled {
-			b.sendMessage(ctx, groupID, "⏰ Ежедневная сводка *отключена*.")
+			b.sendMessage(groupID, "⏰ Ежедневная сводка *отключена*.")
 		} else {
-			b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+			b.sendMessage(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
 		}
 		return
 	}
 
 	// Mutating operations require admin privileges.
-	if !b.isGroupAdmin(ctx, groupID, msg.From.ID) {
-		b.sendMessage(ctx, groupID, "Только администраторы группы могут изменять расписание.")
+	if !b.isGroupAdmin(groupID, msg.From.ID) {
+		b.sendMessage(groupID, "Только администраторы группы могут изменять расписание.")
 		return
 	}
 
@@ -585,7 +585,7 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s, err := b.db.GetGroupSchedule(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			b.sendMessage(groupID, "Ошибка получения расписания.")
 			return
 		}
 		if s == nil {
@@ -594,16 +594,16 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s.Enabled = false
 		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
 			logger.Error().Err(err).Msg("failed to set group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			b.sendMessage(groupID, "Ошибка сохранения расписания.")
 			return
 		}
-		b.sendMessage(ctx, groupID, "⏰ Ежедневная сводка *отключена*.")
+		b.sendMessage(groupID, "⏰ Ежедневная сводка *отключена*.")
 
 	case "on":
 		s, err := b.db.GetGroupSchedule(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			b.sendMessage(groupID, "Ошибка получения расписания.")
 			return
 		}
 		if s == nil {
@@ -612,28 +612,28 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s.Enabled = true
 		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
 			logger.Error().Err(err).Msg("failed to set group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			b.sendMessage(groupID, "Ошибка сохранения расписания.")
 			return
 		}
-		b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+		b.sendMessage(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
 
 	default:
 		// Expect HH:MM format.
 		parts := strings.SplitN(arg, ":", 2)
 		if len(parts) != 2 {
-			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`.")
+			b.sendMessage(groupID, "Неверный формат. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`.")
 			return
 		}
 		hour, err1 := strconv.Atoi(parts[0])
 		minute, err2 := strconv.Atoi(parts[1])
 		if err1 != nil || err2 != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
-			b.sendMessage(ctx, groupID, "Неверное время. Используйте формат ЧЧ:ММ, например `07:00`.")
+			b.sendMessage(groupID, "Неверное время. Используйте формат ЧЧ:ММ, например `07:00`.")
 			return
 		}
 		s, err := b.db.GetGroupSchedule(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			b.sendMessage(groupID, "Ошибка получения расписания.")
 			return
 		}
 		if s == nil {
@@ -644,10 +644,10 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s.Minute = minute
 		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
 			logger.Error().Err(err).Msg("failed to set group schedule")
-			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			b.sendMessage(groupID, "Ошибка сохранения расписания.")
 			return
 		}
-		b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+		b.sendMessage(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
 	}
 }
 
@@ -711,9 +711,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
 	if len(chunks) == 0 {
 		return
 	}
-	b.sendMessage(ctx, groupID, preamble+"\n\n"+chunks[0])
+	b.sendMessage(groupID, preamble+"\n\n"+chunks[0])
 	for _, chunk := range chunks[1:] {
-		b.sendMessage(ctx, groupID, chunk)
+		b.sendMessage(groupID, chunk)
 	}
 }
 
@@ -726,7 +726,7 @@ func (b *Bot) NotifyUsers(ctx context.Context, text string) (int, int) {
 	sent := 0
 	failed := 0
 	for _, userID := range b.cfg.AlertUserIDs {
-		if b.sendMessage(ctx, userID, text) == 0 {
+		if b.sendMessage(userID, text) == 0 {
 			failed++
 			continue
 		}

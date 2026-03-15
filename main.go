@@ -29,7 +29,7 @@ func main() {
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
-	defer database.Close()
+	defer func() { _ = database.Close() }()
 
 	logger.Info().
 		Str("db_path", cfg.DBPath).

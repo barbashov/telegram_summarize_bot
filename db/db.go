@@ -138,7 +138,7 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var messages []Message
 	for rows.Next() {
@@ -180,9 +180,9 @@ func (db *DB) FormatMessagesForSummary(messages []Message) string {
 		}
 		timeStr := msg.Timestamp.Format("15:04")
 		if msg.ForwardedFrom != "" {
-			sb.WriteString(fmt.Sprintf("[%s] %s (fwd: %s): %s\n", timeStr, username, msg.ForwardedFrom, msg.Text))
+			fmt.Fprintf(&sb, "[%s] %s (fwd: %s): %s\n", timeStr, username, msg.ForwardedFrom, msg.Text)
 		} else {
-			sb.WriteString(fmt.Sprintf("[%s] %s: %s\n", timeStr, username, msg.Text))
+			fmt.Fprintf(&sb, "[%s] %s: %s\n", timeStr, username, msg.Text)
 		}
 		if i > 0 && i%50 == 0 {
 			sb.WriteString("---\n")
@@ -252,7 +252,7 @@ func (db *DB) GetEnabledSchedules(ctx context.Context) ([]GroupSchedule, error) 
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var schedules []GroupSchedule
 	for rows.Next() {
