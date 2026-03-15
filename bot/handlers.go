@@ -129,6 +129,8 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 		}
 		if err := b.db.UpsertKnownGroup(ctx, id, title, username); err != nil {
 			logger.Error().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to upsert known group")
+		} else {
+			logger.Info().Int64("group_id", id).Str("title", title).Str("username", username).Msg("scanKnownGroups: upserted known group")
 		}
 	}
 }
@@ -229,6 +231,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		// Track group title even for non-allowed groups.
 		if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title, msg.Chat.Username); err != nil {
 			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group")
+		} else {
+			logger.Info().Int64("group_id", groupID).Str("title", msg.Chat.Title).Str("username", msg.Chat.Username).Msg("upserted known group")
 		}
 		allowed, err := b.db.IsGroupAllowed(ctx, groupID)
 		if err != nil {
@@ -299,6 +303,8 @@ func (b *Bot) handleMyChatMember(ctx context.Context, cmu *telego.ChatMemberUpda
 
 	if err := b.db.UpsertKnownGroup(ctx, groupID, title, cmu.Chat.Username); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group on bot join")
+	} else {
+		logger.Info().Int64("group_id", groupID).Str("title", title).Str("username", cmu.Chat.Username).Msg("upserted known group on bot join")
 	}
 
 	msg := fmt.Sprintf("Бот добавлен в группу «%s» (%d).\nДля разрешения: /groups add %d", title, groupID, groupID)
