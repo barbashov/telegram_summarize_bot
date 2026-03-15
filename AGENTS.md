@@ -118,10 +118,6 @@ Telegram group chat summarizer bot written in Go. All bot UI text is in Russian.
 
 In-memory (not persisted to DB). Keyed by `userID_groupID`. Cleanup runs every 5 minutes. Configurable via `RATE_LIMIT_SEC` (default 60s).
 
-## Context
-
-See [specs/initial.md](specs/initial.md) for project context and setup details.
-
 ## Agent Workflow Rule
 
 After any successful `git push` to this repository, include the exact GitHub Actions run URL triggered by that push in the final response.
