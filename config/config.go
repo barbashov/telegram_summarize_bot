@@ -129,6 +129,15 @@ func (c *Config) IsGroupAllowed(groupID int64) bool {
 	return false
 }
 
+func (c *Config) IsAlertUser(userID int64) bool {
+	for _, id := range c.AlertUserIDs {
+		if id == userID {
+			return true
+		}
+	}
+	return false
+}
+
 func parseIDList(value string) []int64 {
 	if value == "" {
 		return nil

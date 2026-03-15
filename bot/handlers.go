@@ -10,6 +10,7 @@ import (
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
@@ -46,9 +47,10 @@ type Bot struct {
 	rateLimiter *RateLimiter
 	cfg         *config.Config
 	username    string
+	metrics     *metrics.Metrics
 }
 
-func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer) (*Bot, error) {
+func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
 	bot, err := telego.NewBot(cfg.BotToken)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
@@ -69,6 +71,7 @@ func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer) (*B
 		rateLimiter: NewRateLimiter(cfg.RateLimitSec),
 		cfg:         cfg,
 		username:    strings.ToLower(me.Username),
+		metrics:     m,
 	}, nil
 }
 
@@ -210,12 +213,14 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			ForwardedFrom: forwardedFrom,
 		}); err != nil {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
+		} else {
+			b.metrics.IncMessagesStored()
 		}
 		return
 	}
 
 	if msg.Chat.Type == "private" {
-		b.handlePrivateChatInfo(ctx, update)
+		b.handlePrivateCommand(ctx, update)
 		return
 	}
 
@@ -233,6 +238,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		Timestamp: time.Now(),
 	}); err != nil {
 		logger.Error().Err(err).Msg("failed to add message")
+	} else {
+		b.metrics.IncMessagesStored()
 	}
 }
 
@@ -272,6 +279,36 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 		"_Примеры: @bot summarize, @bot summarize 12_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
+}
+
+func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
+	msg := update.Message
+	if msg == nil {
+		return
+	}
+
+	fields := strings.Fields(msg.Text)
+	if len(fields) == 0 {
+		b.handlePrivateChatInfo(ctx, update)
+		return
+	}
+
+	cmd := strings.ToLower(fields[0])
+	// Strip optional @botname suffix (e.g. /status@mybot).
+	if atIdx := strings.Index(cmd, "@"); atIdx != -1 {
+		cmd = cmd[:atIdx]
+	}
+
+	if cmd == "/status" {
+		if !b.cfg.IsAlertUser(msg.From.ID) {
+			b.sendMessage(ctx, msg.Chat.ID, "Нет доступа.")
+			return
+		}
+		b.sendMessage(ctx, msg.Chat.ID, b.metrics.FormatStatusReport())
+		return
+	}
+
+	b.handlePrivateChatInfo(ctx, update)
 }
 
 func (b *Bot) handlePrivateChatInfo(ctx context.Context, update telego.Update) {
@@ -361,6 +398,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	}
 
 	if !b.rateLimiter.Allow(userID, groupID) {
+		b.metrics.IncRateLimitHit()
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
@@ -379,6 +417,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
+		b.metrics.IncSummarizeFail()
 		logger.Error().Err(err).Msg("failed to summarize")
 		if editErr := b.editMessage(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже."); editErr != nil {
 			b.sendMessage(ctx, groupID, "Ошибка суммаризации. Попробуйте позже.")
@@ -387,6 +426,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	}
 
 	committed = true
+	b.metrics.IncSummarizeOK()
 
 	if err := b.db.SetLastSummarizeTime(ctx, groupID, time.Now()); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
@@ -396,18 +436,21 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 }
 
 func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {
+	defer b.metrics.TelegramSend.Start()()
 	msg, err := b.telegram.SendMessage(tu.Message(
 		tu.ID(chatID),
 		text,
 	).WithParseMode("Markdown"))
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send message")
+		b.metrics.RecordError("telegram_send", err.Error())
 		return 0
 	}
 	return int64(msg.MessageID)
 }
 
 func (b *Bot) editMessage(chatID int64, messageID int64, text string) error {
+	defer b.metrics.TelegramEdit.Start()()
 	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
 		ChatID:    tu.ID(chatID),
 		MessageID: int(messageID),
@@ -416,6 +459,7 @@ func (b *Bot) editMessage(chatID int64, messageID int64, text string) error {
 	})
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
+		b.metrics.RecordError("telegram_edit", err.Error())
 	}
 	return err
 }

@@ -11,6 +11,7 @@ import (
 	"github.com/sashabaranov/go-openai"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/metrics"
 )
 
 const (
@@ -23,8 +24,9 @@ type chatCompletionClient interface {
 }
 
 type Summarizer struct {
-	client chatCompletionClient
-	model  string
+	client  chatCompletionClient
+	model   string
+	metrics *metrics.Metrics
 }
 
 type TopicCluster struct {
@@ -48,18 +50,19 @@ type topicClusterResponse struct {
 	Topics []TopicCluster `json:"topics"`
 }
 
-func New(apiKey, baseURL, model string) (*Summarizer, error) {
+func New(apiKey, baseURL, model string, m *metrics.Metrics) (*Summarizer, error) {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
 	config.HTTPClient.Timeout = 120 * time.Second
 
-	return NewWithClient(openai.NewClientWithConfig(config), model), nil
+	return NewWithClient(openai.NewClientWithConfig(config), model, m), nil
 }
 
-func NewWithClient(client chatCompletionClient, model string) *Summarizer {
+func NewWithClient(client chatCompletionClient, model string, m *metrics.Metrics) *Summarizer {
 	return &Summarizer{
-		client: client,
-		model:  model,
+		client:  client,
+		model:   model,
+		metrics: m,
 	}
 }
 
@@ -80,6 +83,7 @@ func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Messag
 }
 
 func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, topicMax int) ([]TopicCluster, error) {
+	defer s.metrics.LLMCluster.Start()()
 	prompt := buildClusteringPrompt(messages, topicMax)
 
 	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
@@ -100,6 +104,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 	})
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to create topic clustering completion")
+		s.metrics.RecordError("llm_cluster", err.Error())
 		return nil, fmt.Errorf("failed to cluster topics: %w", err)
 	}
 
@@ -122,6 +127,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 }
 
 func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster) (*StructuredSummary, error) {
+	defer s.metrics.LLMSummarize.Start()()
 	prompt := buildTopicSummaryPrompt(messages, clusters)
 
 	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
@@ -142,6 +148,7 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 	})
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to create topic summary completion")
+		s.metrics.RecordError("llm_summarize", err.Error())
 		return nil, fmt.Errorf("failed to summarize topics: %w", err)
 	}
 

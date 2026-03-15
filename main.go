@@ -11,6 +11,7 @@ import (
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
 )
 
@@ -22,7 +23,9 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to load config")
 	}
 
-	database, err := db.New(cfg.DBPath)
+	m := metrics.New()
+
+	database, err := db.New(cfg.DBPath, m)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
@@ -38,12 +41,12 @@ func main() {
 		Str("model", cfg.Model).
 		Msg("Configuration loaded")
 
-	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model)
+	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model, m)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize summarizer")
 	}
 
-	tgBot, err := bot.NewBot(cfg, database, sum)
+	tgBot, err := bot.NewBot(cfg, database, sum, m)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize bot")
 	}

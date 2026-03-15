@@ -10,6 +10,7 @@ import (
 	"github.com/mymmrac/telego"
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
 )
 
@@ -59,7 +60,7 @@ func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, to
 func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) {
 	t.Helper()
 
-	database, err := db.New(filepath.Join(t.TempDir(), "bot.db"))
+	database, err := db.New(filepath.Join(t.TempDir(), "bot.db"), metrics.New())
 	if err != nil {
 		t.Fatalf("db.New error: %v", err)
 	}
@@ -76,6 +77,7 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 			TopicMax:     5,
 		},
 		username: "testbot",
+		metrics:  metrics.New(),
 	}
 
 	return b, database, tg
@@ -179,6 +181,58 @@ func TestHandleSummarizeDoesNotUpdateLastSummarizeOnFailure(t *testing.T) {
 	}
 	if len(tg.editTexts) != 1 || tg.editTexts[0] != "Ошибка суммаризации. Попробуйте позже." {
 		t.Fatalf("unexpected failure message: %#v", tg.editTexts)
+	}
+}
+
+func TestPrivateCommandStatus_AlertUser(t *testing.T) {
+	b, database, tg := newTestBot(t, &fakeSummarizer{})
+	defer database.Close()
+
+	alertUserID := int64(999)
+	b.cfg.AlertUserIDs = []int64{alertUserID}
+
+	update := telego.Update{
+		Message: &telego.Message{
+			Text: "/status",
+			Chat: telego.Chat{ID: alertUserID, Type: "private"},
+			From: &telego.User{ID: alertUserID, Username: "admin"},
+		},
+	}
+
+	b.handlePrivateCommand(context.Background(), update)
+
+	if len(tg.sentTexts) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))
+	}
+	if tg.sentTexts[0] == "" {
+		t.Fatal("expected non-empty status report")
+	}
+	if tg.sentTexts[0] == "Нет доступа." {
+		t.Fatal("alert user should receive status report, not access denied")
+	}
+}
+
+func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
+	b, database, tg := newTestBot(t, &fakeSummarizer{})
+	defer database.Close()
+
+	b.cfg.AlertUserIDs = []int64{999}
+
+	update := telego.Update{
+		Message: &telego.Message{
+			Text: "/status",
+			Chat: telego.Chat{ID: 123, Type: "private"},
+			From: &telego.User{ID: 123, Username: "stranger"},
+		},
+	}
+
+	b.handlePrivateCommand(context.Background(), update)
+
+	if len(tg.sentTexts) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))
+	}
+	if tg.sentTexts[0] != "Нет доступа." {
+		t.Fatalf("expected access denied message, got: %q", tg.sentTexts[0])
 	}
 }
 

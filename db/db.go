@@ -11,11 +11,13 @@ import (
 
 	_ "github.com/glebarez/sqlite"
 	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/metrics"
 )
 
 type DB struct {
-	conn   *sql.DB
-	dbPath string
+	conn    *sql.DB
+	dbPath  string
+	metrics *metrics.Metrics
 }
 
 type Message struct {
@@ -28,7 +30,7 @@ type Message struct {
 	ForwardedFrom string // original author name when message was forwarded; empty otherwise
 }
 
-func New(dbPath string) (*DB, error) {
+func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -45,7 +47,7 @@ func New(dbPath string) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping db: %w", err)
 	}
 
-	db := &DB{conn: conn, dbPath: dbPath}
+	db := &DB{conn: conn, dbPath: dbPath, metrics: m}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
 	}
@@ -100,6 +102,7 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 		return nil
 	}
 
+	defer db.metrics.DBAdd.Start()()
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp, forwarded_from) VALUES (?, ?, ?, ?, ?, ?)`,
 		msg.GroupID, msg.UserID, msg.Username, msg.Text, msg.Timestamp, msg.ForwardedFrom,
@@ -108,6 +111,7 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 }
 
 func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
+	defer db.metrics.DBGet.Start()()
 	rows, err := db.conn.QueryContext(ctx,
 		`SELECT id, group_id, user_id, username, text, timestamp, forwarded_from
 		 FROM messages 

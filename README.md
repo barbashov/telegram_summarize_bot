@@ -12,6 +12,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to selected Telegram users
+- `/status` command in private chat for alert users: runtime metrics, latency percentiles, error ring buffer
 - SQLite persistence
 - Graceful shutdown
 
@@ -57,6 +58,19 @@ docker pull ghcr.io/barbashov/telegram_summarize_bot:main
 5. Mention the bot in group messages, for example `@your_bot summarize`.
 
 If someone opens a private chat with the bot, it replies with setup guidance instead of handling commands there.
+
+### Private Commands (alert users only)
+
+Users listed in `ALERT_USER_IDS` can send `/status` in a private chat with the bot to get a runtime health report:
+
+- Uptime
+- Telegram API, LLM, and DB latency (min / mean / p95 / max) with traffic-light indicators
+- Message and summarization counters
+- Rate-limit hit count
+- Error counts by type
+- Recent error ring buffer (last 10 entries)
+
+Any user not in `ALERT_USER_IDS` receives "Нет доступа."
 
 ## Bot Commands
 
