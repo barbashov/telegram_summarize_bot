@@ -40,11 +40,17 @@ go run main.go
 ### Docker Compose
 
 ```bash
-docker-compose build
 docker-compose up -d
 ```
 
-### From GHCR
+The compose file references the pre-built image from GHCR (`ghcr.io/barbashov/telegram_summarize_bot:main`) and includes a **Watchtower** sidecar that polls for new image digests every 60 seconds. Once Watchtower is running, every push to `main` automatically triggers a rolling restart on the server — no manual steps needed.
+
+To check Watchtower activity:
+```bash
+docker logs watchtower
+```
+
+### From GHCR (manual pull)
 
 ```bash
 docker pull ghcr.io/barbashov/telegram_summarize_bot:main
