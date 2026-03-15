@@ -31,6 +31,15 @@ func main() {
 	}
 	defer func() { _ = database.Close() }()
 
+	{
+		seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		seedErr := database.SeedAllowedGroupsIfEmpty(seedCtx, cfg.AllowedGroups)
+		seedCancel()
+		if seedErr != nil {
+			logger.Fatal().Err(seedErr).Msg("Failed to seed allowed groups")
+		}
+	}
+
 	logger.Info().
 		Str("db_path", cfg.DBPath).
 		Int("summary_hours", cfg.SummaryHours).

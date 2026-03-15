@@ -30,6 +30,13 @@ type Message struct {
 	ForwardedFrom string // original author name when message was forwarded; empty otherwise
 }
 
+type KnownGroup struct {
+	GroupID  int64
+	Title    string
+	LastSeen time.Time
+	Allowed  bool // true when group_id exists in allowed_groups
+}
+
 type GroupSchedule struct {
 	GroupID          int64
 	Enabled          bool
@@ -87,6 +94,16 @@ func (db *DB) migrate() error {
 			hour INTEGER NOT NULL DEFAULT 7,
 			minute INTEGER NOT NULL DEFAULT 0,
 			last_daily_summary DATETIME
+		)`,
+		`CREATE TABLE IF NOT EXISTS known_groups (
+			group_id INTEGER PRIMARY KEY,
+			title TEXT NOT NULL DEFAULT '',
+			last_seen DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS allowed_groups (
+			group_id INTEGER PRIMARY KEY,
+			added_at DATETIME NOT NULL,
+			added_by INTEGER
 		)`,
 	}
 
@@ -276,4 +293,91 @@ func (db *DB) UpdateLastDailySummary(ctx context.Context, groupID int64, t time.
 		t, groupID,
 	)
 	return err
+}
+
+func (db *DB) UpsertKnownGroup(ctx context.Context, groupID int64, title string) error {
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO known_groups (group_id, title, last_seen) VALUES (?, ?, ?)
+		 ON CONFLICT(group_id) DO UPDATE SET title = excluded.title, last_seen = excluded.last_seen`,
+		groupID, title, time.Now(),
+	)
+	return err
+}
+
+func (db *DB) GetKnownGroups(ctx context.Context) ([]KnownGroup, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT kg.group_id, kg.title, kg.last_seen, ag.group_id IS NOT NULL AS allowed
+		 FROM known_groups kg
+		 LEFT JOIN allowed_groups ag ON kg.group_id = ag.group_id
+		 ORDER BY kg.title`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var groups []KnownGroup
+	for rows.Next() {
+		var g KnownGroup
+		var allowedInt int
+		if err := rows.Scan(&g.GroupID, &g.Title, &g.LastSeen, &allowedInt); err != nil {
+			logger.Error().Err(err).Msg("failed to scan known group")
+			continue
+		}
+		g.Allowed = allowedInt != 0
+		groups = append(groups, g)
+	}
+	return groups, rows.Err()
+}
+
+func (db *DB) IsGroupAllowed(ctx context.Context, groupID int64) (bool, error) {
+	var count int
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM allowed_groups WHERE group_id = ?`,
+		groupID,
+	).Scan(&count)
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (db *DB) AddAllowedGroup(ctx context.Context, groupID, addedBy int64) error {
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT OR IGNORE INTO allowed_groups (group_id, added_at, added_by) VALUES (?, ?, ?)`,
+		groupID, time.Now(), addedBy,
+	)
+	return err
+}
+
+func (db *DB) RemoveAllowedGroup(ctx context.Context, groupID int64) error {
+	_, err := db.conn.ExecContext(ctx,
+		`DELETE FROM allowed_groups WHERE group_id = ?`,
+		groupID,
+	)
+	return err
+}
+
+func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {
+	if len(groupIDs) == 0 {
+		return nil
+	}
+
+	var count int
+	if err := db.conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM allowed_groups`).Scan(&count); err != nil {
+		return fmt.Errorf("failed to count allowed groups: %w", err)
+	}
+	if count > 0 {
+		return nil
+	}
+
+	for _, id := range groupIDs {
+		if _, err := db.conn.ExecContext(ctx,
+			`INSERT OR IGNORE INTO allowed_groups (group_id, added_at, added_by) VALUES (?, ?, 0)`,
+			id, time.Now(),
+		); err != nil {
+			return fmt.Errorf("failed to seed allowed group %d: %w", id, err)
+		}
+	}
+	return nil
 }

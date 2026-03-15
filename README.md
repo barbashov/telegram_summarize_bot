@@ -12,8 +12,8 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Automatic message cleanup (configurable retention period)
-- Optional startup/shutdown alerts to selected Telegram users
-- `/status` command in private chat for alert users: runtime metrics, latency percentiles, error ring buffer
+- Optional startup/shutdown alerts to admin users
+- Admin private commands (`/status`, `/groups`): runtime metrics and dynamic group management
 - SQLite persistence
 - Graceful shutdown
 
@@ -25,8 +25,8 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
    ```
 2. Get your **Telegram Bot Token** from [@BotFather](https://t.me/BotFather).
 3. Get your **OpenRouter API key** from [openrouter.ai](https://openrouter.ai).
-4. Set `ALLOWED_GROUPS` to a comma-separated list of Telegram group IDs the bot should operate in.
-5. If you want lifecycle alerts, set `ALERT_USER_IDS` to Telegram user IDs that already started a private chat with the bot.
+4. Set `ALLOWED_GROUPS` to seed the initial group allowlist (stored in DB; can be managed at runtime via `/groups`).
+5. If you want admin users (lifecycle alerts + group management), set `ADMIN_USER_IDS` to Telegram user IDs that already started a private chat with the bot.
 
 ## Running
 
@@ -55,14 +55,18 @@ docker pull ghcr.io/barbashov/telegram_summarize_bot:main
 1. Add the bot to your group.
 2. Disable **Group Privacy** for the bot via [@BotFather](https://t.me/BotFather) -> Bot Settings.
 3. Give the bot admin permissions, or at least permission to read messages.
-4. Add the group ID to `ALLOWED_GROUPS` in your `.env`.
+4. Either set `ALLOWED_GROUPS` in your `.env` (seeds the DB on first run), or use `/groups add <group_id>` in a private chat as an admin user.
 5. Mention the bot in group messages, for example `@your_bot summarize`.
 
 If someone opens a private chat with the bot, it replies with setup guidance instead of handling commands there.
 
-### Private Commands (alert users only)
+### Private Commands (admin users only)
 
-Users listed in `ALERT_USER_IDS` can send `/status` in a private chat with the bot to get a runtime health report:
+Users listed in `ADMIN_USER_IDS` can send the following commands in a private chat with the bot:
+
+#### `/status`
+
+Runtime health report:
 
 - Uptime
 - Telegram API, LLM, and DB latency (min / mean / p95 / max) with traffic-light indicators
@@ -71,7 +75,19 @@ Users listed in `ALERT_USER_IDS` can send `/status` in a private chat with the b
 - Error counts by type
 - Recent error ring buffer (last 10 entries)
 
-Any user not in `ALERT_USER_IDS` receives "Нет доступа."
+#### `/groups` — dynamic group management
+
+| Command | Description |
+|---------|-------------|
+| `/groups` | List all known groups with ✅ (allowed) / ❌ (not allowed) status |
+| `/groups add <group_id>` | Add group to the allowed list |
+| `/groups remove <group_id>` | Remove group from the allowed list |
+
+Groups become "known" when the bot is added to them or when a message is received from them. When the bot is added to a new group, all admin users are notified in private with the group name and the `/groups add` command to use.
+
+The allowed-group list is stored in the database and is authoritative at runtime. `ALLOWED_GROUPS` in `.env` is used only to seed the database on first run (or after an upgrade from a version without this table).
+
+Any user not in `ADMIN_USER_IDS` receives "Нет доступа."
 
 ## Bot Commands
 
@@ -96,8 +112,8 @@ All configuration is via environment variables (`.env` file):
 |----------|---------|-------------|
 | `BOT_TOKEN` | *(required)* | Telegram Bot Token |
 | `OPENROUTER_API_KEY` | *(required)* | OpenRouter API Key |
-| `ALLOWED_GROUPS` | *(optional but effectively required)* | Comma-separated group IDs the bot operates in. Empty means all non-private chats are denied. |
-| `ALERT_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for startup/shutdown alerts |
+| `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
+| `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts + `/groups` management). Falls back to `ALERT_USER_IDS` for backward compatibility. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |

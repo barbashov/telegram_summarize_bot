@@ -170,11 +170,21 @@ func originUsername(origin telego.MessageOrigin) string {
 }
 
 func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
+	// Handle bot membership changes (bot added to / removed from a group).
+	if update.MyChatMember != nil {
+		b.handleMyChatMember(ctx, update.MyChatMember)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
 
 	msg := update.Message
+	if msg.From == nil {
+		return
+	}
+
 	groupID := msg.Chat.ID
 	userID := msg.From.ID
 	text := msg.Text
@@ -185,21 +195,28 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		Str("text", text).
 		Msg("Received message")
 
-	if msg.From == nil {
-		return
-	}
-
 	if text == "" {
 		return
 	}
 
-	if msg.Chat.Type != "private" && !b.cfg.IsGroupAllowed(groupID) {
-		logger.Warn().
-			Int64("group_id", groupID).
-			Int64("user_id", userID).
-			Str("chat_type", msg.Chat.Type).
-			Msg("ignoring message from non-allowed group")
-		return
+	if msg.Chat.Type != "private" {
+		// Track group title even for non-allowed groups.
+		if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title); err != nil {
+			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group")
+		}
+		allowed, err := b.db.IsGroupAllowed(ctx, groupID)
+		if err != nil {
+			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to check group allowlist")
+			return
+		}
+		if !allowed {
+			logger.Warn().
+				Int64("group_id", groupID).
+				Int64("user_id", userID).
+				Str("chat_type", msg.Chat.Type).
+				Msg("ignoring message from non-allowed group")
+			return
+		}
 	}
 
 	// Forwarded messages are stored with original author attribution but never
@@ -222,7 +239,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	if msg.Chat.Type == "private" {
-		b.handlePrivateCommand(update)
+		b.handlePrivateCommand(ctx, update)
 		return
 	}
 
@@ -243,6 +260,23 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	} else {
 		b.metrics.IncMessagesStored()
 	}
+}
+
+func (b *Bot) handleMyChatMember(ctx context.Context, cmu *telego.ChatMemberUpdated) {
+	newStatus := cmu.NewChatMember.MemberStatus()
+	if newStatus != "member" && newStatus != "administrator" {
+		return
+	}
+
+	groupID := cmu.Chat.ID
+	title := cmu.Chat.Title
+
+	if err := b.db.UpsertKnownGroup(ctx, groupID, title); err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group on bot join")
+	}
+
+	msg := fmt.Sprintf("Бот добавлен в группу «%s» (%d).\nДля разрешения: /groups add %d", title, groupID, groupID)
+	b.NotifyUsers(ctx, msg)
 }
 
 func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command string) {
@@ -289,7 +323,7 @@ func (b *Bot) handleHelp(update telego.Update) {
 	b.sendMessage(msg.Chat.ID, helpText)
 }
 
-func (b *Bot) handlePrivateCommand(update telego.Update) {
+func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -307,16 +341,107 @@ func (b *Bot) handlePrivateCommand(update telego.Update) {
 		cmd = cmd[:atIdx]
 	}
 
-	if cmd == "/status" {
-		if !b.cfg.IsAlertUser(msg.From.ID) {
+	switch cmd {
+	case "/status":
+		if !b.cfg.IsAdminUser(msg.From.ID) {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
 		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport())
+	case "/groups":
+		if !b.cfg.IsAdminUser(msg.From.ID) {
+			b.sendMessage(msg.Chat.ID, "Нет доступа.")
+			return
+		}
+		b.handlePrivateGroups(ctx, update, fields[1:])
+	default:
+		b.handlePrivateChatInfo(update)
+	}
+}
+
+func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, args []string) {
+	msg := update.Message
+	chatID := msg.Chat.ID
+
+	if len(args) == 0 {
+		b.sendPrivateGroupsList(ctx, chatID)
 		return
 	}
 
-	b.handlePrivateChatInfo(update)
+	subCmd := strings.ToLower(args[0])
+
+	switch subCmd {
+	case "add", "remove":
+		if len(args) < 2 {
+			b.sendMessage(chatID, "Использование: `/groups add <group_id>` или `/groups remove <group_id>`")
+			return
+		}
+		groupID, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			b.sendMessage(chatID, "Неверный ID группы.")
+			return
+		}
+		groups, err := b.db.GetKnownGroups(ctx)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get known groups")
+			b.sendMessage(chatID, "Ошибка получения списка групп.")
+			return
+		}
+		var found *db.KnownGroup
+		for i := range groups {
+			if groups[i].GroupID == groupID {
+				found = &groups[i]
+				break
+			}
+		}
+		if found == nil {
+			b.sendMessage(chatID, fmt.Sprintf("Группа %d не найдена в списке известных групп.", groupID))
+			b.sendPrivateGroupsList(ctx, chatID)
+			return
+		}
+		if subCmd == "add" {
+			if err := b.db.AddAllowedGroup(ctx, groupID, msg.From.ID); err != nil {
+				logger.Error().Err(err).Msg("failed to add allowed group")
+				b.sendMessage(chatID, "Ошибка добавления группы.")
+				return
+			}
+			b.sendMessage(chatID, fmt.Sprintf("✅ %s добавлена.", found.Title))
+		} else {
+			if err := b.db.RemoveAllowedGroup(ctx, groupID); err != nil {
+				logger.Error().Err(err).Msg("failed to remove allowed group")
+				b.sendMessage(chatID, "Ошибка удаления группы.")
+				return
+			}
+			b.sendMessage(chatID, fmt.Sprintf("❌ %s удалена.", found.Title))
+		}
+	default:
+		b.sendMessage(chatID, "Неизвестная подкоманда. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
+	}
+}
+
+func (b *Bot) sendPrivateGroupsList(ctx context.Context, chatID int64) {
+	groups, err := b.db.GetKnownGroups(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get known groups")
+		b.sendMessage(chatID, "Ошибка получения списка групп.")
+		return
+	}
+	if len(groups) == 0 {
+		b.sendMessage(chatID, "Нет известных групп.")
+		return
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📋 *Известные группы:*\n\n")
+	for _, g := range groups {
+		status := "❌"
+		if g.Allowed {
+			status = "✅"
+		}
+		fmt.Fprintf(&sb, "%s %s (%d)\n", status, g.Title, g.GroupID)
+	}
+	sb.WriteString("\nДля управления:\n• `/groups add <group_id>`\n• `/groups remove <group_id>`")
+	b.sendMessage(chatID, sb.String())
 }
 
 func (b *Bot) handlePrivateChatInfo(update telego.Update) {
@@ -718,12 +843,12 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
 }
 
 func (b *Bot) NotifyUsers(ctx context.Context, text string) (sent, failed int) {
-	attempted := len(b.cfg.AlertUserIDs)
+	attempted := len(b.cfg.AdminUserIDs)
 	if attempted == 0 {
 		return 0, 0
 	}
 
-	for _, userID := range b.cfg.AlertUserIDs {
+	for _, userID := range b.cfg.AdminUserIDs {
 		if b.sendMessage(userID, text) == 0 {
 			failed++
 			continue

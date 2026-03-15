@@ -21,7 +21,7 @@ type Config struct {
 	Model            string
 	DBPath           string
 	AllowedGroups    []int64
-	AlertUserIDs     []int64
+	AdminUserIDs     []int64
 	DailySummaryHour int
 }
 
@@ -87,7 +87,11 @@ func Load() (*Config, error) {
 	}
 
 	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
-	alertUserIDs := parseIDList(os.Getenv("ALERT_USER_IDS"))
+	adminUserIDsRaw := os.Getenv("ADMIN_USER_IDS")
+	if adminUserIDsRaw == "" {
+		adminUserIDsRaw = os.Getenv("ALERT_USER_IDS")
+	}
+	adminUserIDs := parseIDList(adminUserIDsRaw)
 
 	dailySummaryHour := 7
 	if v := os.Getenv("DAILY_SUMMARY_HOUR"); v != "" {
@@ -108,7 +112,7 @@ func Load() (*Config, error) {
 		Model:            model,
 		DBPath:           dbPath,
 		AllowedGroups:    allowedGroups,
-		AlertUserIDs:     alertUserIDs,
+		AdminUserIDs:     adminUserIDs,
 		DailySummaryHour: dailySummaryHour,
 	}, nil
 }
@@ -129,17 +133,8 @@ func (c *Config) RetentionDuration() time.Duration {
 	return time.Duration(c.RetentionDays) * 24 * time.Hour
 }
 
-func (c *Config) IsGroupAllowed(groupID int64) bool {
-	for _, id := range c.AllowedGroups {
-		if id == groupID {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *Config) IsAlertUser(userID int64) bool {
-	for _, id := range c.AlertUserIDs {
+func (c *Config) IsAdminUser(userID int64) bool {
+	for _, id := range c.AdminUserIDs {
 		if id == userID {
 			return true
 		}

@@ -193,7 +193,7 @@ func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 	defer func() { _ = database.Close() }()
 
 	alertUserID := int64(999)
-	b.cfg.AlertUserIDs = []int64{alertUserID}
+	b.cfg.AdminUserIDs = []int64{alertUserID}
 
 	update := telego.Update{
 		Message: &telego.Message{
@@ -203,7 +203,7 @@ func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 		},
 	}
 
-	b.handlePrivateCommand(update)
+	b.handlePrivateCommand(context.Background(), update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))
@@ -220,7 +220,7 @@ func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
 	b, database, tg := newTestBot(t, &fakeSummarizer{})
 	defer func() { _ = database.Close() }()
 
-	b.cfg.AlertUserIDs = []int64{999}
+	b.cfg.AdminUserIDs = []int64{999}
 
 	update := telego.Update{
 		Message: &telego.Message{
@@ -230,7 +230,7 @@ func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
 		},
 	}
 
-	b.handlePrivateCommand(update)
+	b.handlePrivateCommand(context.Background(), update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))
