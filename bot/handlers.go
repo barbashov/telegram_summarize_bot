@@ -25,6 +25,7 @@ type telegramClient interface {
 	StopLongPolling()
 	SendMessage(params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error)
+	GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error)
 }
 
 type summaryService interface {
@@ -90,6 +91,7 @@ func (b *Bot) Start(ctx context.Context) error {
 
 	go b.cleanupLoop(ctx)
 	go b.rateLimitCleanupLoop(ctx)
+	go b.schedulerLoop(ctx)
 
 	logger.Info().Msg("Bot started successfully, listening for updates...")
 
@@ -260,6 +262,8 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	switch cmd {
 	case "summarize", "sub", "s":
 		b.handleSummarize(ctx, update, parts[1:])
+	case "schedule":
+		b.handleSchedule(ctx, update, parts[1:])
 	case "help":
 		b.handleHelp(ctx, update)
 	default:
@@ -275,8 +279,12 @@ func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 
 	helpText := "📖 *Доступные команды:*\n\n" +
 		"• `summarize [часы]` (или `s`, `sub`) — суммировать сообщения за последние N часов (по умолчанию 24)\n" +
+		"• `schedule` — показать расписание ежедневной сводки\n" +
+		"• `schedule on` — включить ежедневную сводку (только администраторы)\n" +
+		"• `schedule off` — выключить ежедневную сводку (только администраторы)\n" +
+		"• `schedule ЧЧ:ММ` — установить время ежедневной сводки в UTC (только администраторы)\n" +
 		"• `help` — показать это сообщение\n\n" +
-		"_Примеры: @bot summarize, @bot summarize 12_"
+		"_Примеры: @bot summarize, @bot summarize 12, @bot schedule 08:00_"
 
 	b.sendMessage(ctx, msg.Chat.ID, helpText)
 }
@@ -529,6 +537,184 @@ func splitTelegramMessage(text string, limit int) []string {
 
 	appendChunk()
 	return chunks
+}
+
+func (b *Bot) isGroupAdmin(ctx context.Context, groupID, userID int64) bool {
+	member, err := b.telegram.GetChatMember(&telego.GetChatMemberParams{
+		ChatID: tu.ID(groupID),
+		UserID: userID,
+	})
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get chat member")
+		return false
+	}
+	status := member.MemberStatus()
+	return status == "creator" || status == "administrator"
+}
+
+func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []string) {
+	msg := update.Message
+	groupID := msg.Chat.ID
+
+	if len(args) == 0 {
+		// Show current schedule to anyone.
+		s, err := b.db.GetGroupSchedule(ctx, groupID)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			return
+		}
+		if s == nil || !s.Enabled {
+			b.sendMessage(ctx, groupID, "⏰ Ежедневная сводка *отключена*.")
+		} else {
+			b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+		}
+		return
+	}
+
+	// Mutating operations require admin privileges.
+	if !b.isGroupAdmin(ctx, groupID, msg.From.ID) {
+		b.sendMessage(ctx, groupID, "Только администраторы группы могут изменять расписание.")
+		return
+	}
+
+	arg := strings.ToLower(args[0])
+
+	switch arg {
+	case "off":
+		s, err := b.db.GetGroupSchedule(ctx, groupID)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			return
+		}
+		if s == nil {
+			s = &db.GroupSchedule{GroupID: groupID, Hour: b.cfg.DailySummaryHour}
+		}
+		s.Enabled = false
+		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
+			logger.Error().Err(err).Msg("failed to set group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			return
+		}
+		b.sendMessage(ctx, groupID, "⏰ Ежедневная сводка *отключена*.")
+
+	case "on":
+		s, err := b.db.GetGroupSchedule(ctx, groupID)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			return
+		}
+		if s == nil {
+			s = &db.GroupSchedule{GroupID: groupID, Hour: b.cfg.DailySummaryHour, Minute: 0}
+		}
+		s.Enabled = true
+		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
+			logger.Error().Err(err).Msg("failed to set group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			return
+		}
+		b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+
+	default:
+		// Expect HH:MM format.
+		parts := strings.SplitN(arg, ":", 2)
+		if len(parts) != 2 {
+			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`.")
+			return
+		}
+		hour, err1 := strconv.Atoi(parts[0])
+		minute, err2 := strconv.Atoi(parts[1])
+		if err1 != nil || err2 != nil || hour < 0 || hour > 23 || minute < 0 || minute > 59 {
+			b.sendMessage(ctx, groupID, "Неверное время. Используйте формат ЧЧ:ММ, например `07:00`.")
+			return
+		}
+		s, err := b.db.GetGroupSchedule(ctx, groupID)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
+			return
+		}
+		if s == nil {
+			s = &db.GroupSchedule{GroupID: groupID}
+		}
+		s.Enabled = true
+		s.Hour = hour
+		s.Minute = minute
+		if err := b.db.SetGroupSchedule(ctx, s); err != nil {
+			logger.Error().Err(err).Msg("failed to set group schedule")
+			b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
+			return
+		}
+		b.sendMessage(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+	}
+}
+
+func (b *Bot) schedulerLoop(ctx context.Context) {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case now := <-ticker.C:
+			now = now.UTC()
+			schedules, err := b.db.GetEnabledSchedules(ctx)
+			if err != nil {
+				logger.Error().Err(err).Msg("failed to get enabled schedules")
+				continue
+			}
+			for _, s := range schedules {
+				if s.Hour != now.Hour() || s.Minute != now.Minute() {
+					continue
+				}
+				today := now.Truncate(24 * time.Hour)
+				if s.LastDailySummary != nil && !s.LastDailySummary.UTC().Truncate(24*time.Hour).Before(today) {
+					continue
+				}
+				groupID := s.GroupID
+				if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {
+					logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to update last daily summary")
+				}
+				go b.runScheduledSummary(ctx, groupID)
+			}
+		}
+	}
+}
+
+func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
+	since := time.Now().UTC().Add(-24 * time.Hour)
+	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
+	if err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to get messages")
+		return
+	}
+	if len(messages) == 0 {
+		logger.Info().Int64("group_id", groupID).Msg("scheduled summary: no messages, skipping")
+		return
+	}
+
+	logger.Info().Int64("group_id", groupID).Int("count", len(messages)).Msg("running scheduled summary")
+
+	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
+	if err != nil {
+		b.metrics.IncSummarizeFail()
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to summarize")
+		return
+	}
+	b.metrics.IncSummarizeOK()
+
+	preamble := "🌅 *Утренняя сводка за последние 24 часа:*"
+	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary), telegramMessageLimit)
+	if len(chunks) == 0 {
+		return
+	}
+	b.sendMessage(ctx, groupID, preamble+"\n\n"+chunks[0])
+	for _, chunk := range chunks[1:] {
+		b.sendMessage(ctx, groupID, chunk)
+	}
 }
 
 func (b *Bot) NotifyUsers(ctx context.Context, text string) (int, int) {

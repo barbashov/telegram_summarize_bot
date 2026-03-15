@@ -41,6 +41,10 @@ func (f *fakeTelegram) EditMessageText(params *telego.EditMessageTextParams) (*t
 	return &telego.Message{MessageID: params.MessageID}, nil
 }
 
+func (f *fakeTelegram) GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error) {
+	return &telego.ChatMemberAdministrator{Status: "administrator"}, nil
+}
+
 type fakeSummarizer struct {
 	summary  *summarizer.StructuredSummary
 	err      error

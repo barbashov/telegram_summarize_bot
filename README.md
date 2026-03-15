@@ -7,6 +7,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Topic-based summaries with a short TL;DR plus per-topic breakdown
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
+- **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins-only configuration
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
@@ -81,6 +82,10 @@ Commands are triggered by mentioning the bot in a group message:
 | `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
 | `@bot s [hours]` | Shorthand for `summarize` |
 | `@bot sub [hours]` | Additional shorthand for `summarize` |
+| `@bot schedule` | Show current daily summary schedule |
+| `@bot schedule on` | Enable daily summary at the default time (admins only) |
+| `@bot schedule off` | Disable daily summary (admins only) |
+| `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only) |
 | `@bot help` | Show available commands |
 
 ## Configuration
@@ -101,5 +106,6 @@ All configuration is via environment variables (`.env` file):
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model via OpenRouter |
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
+| `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.

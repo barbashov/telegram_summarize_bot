@@ -30,6 +30,14 @@ type Message struct {
 	ForwardedFrom string // original author name when message was forwarded; empty otherwise
 }
 
+type GroupSchedule struct {
+	GroupID          int64
+	Enabled          bool
+	Hour             int // UTC hour 0-23
+	Minute           int // UTC minute 0-59
+	LastDailySummary *time.Time
+}
+
 func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
@@ -72,6 +80,13 @@ func (db *DB) migrate() error {
 		`CREATE TABLE IF NOT EXISTS last_summarize (
 			group_id INTEGER PRIMARY KEY,
 			timestamp DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS group_schedules (
+			group_id INTEGER PRIMARY KEY,
+			enabled INTEGER NOT NULL DEFAULT 0,
+			hour INTEGER NOT NULL DEFAULT 7,
+			minute INTEGER NOT NULL DEFAULT 0,
+			last_daily_summary DATETIME
 		)`,
 	}
 
@@ -195,6 +210,70 @@ func (db *DB) SetLastSummarizeTime(ctx context.Context, groupID int64, t time.Ti
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT OR REPLACE INTO last_summarize (group_id, timestamp) VALUES (?, ?)`,
 		groupID, t,
+	)
+	return err
+}
+
+func (db *DB) GetGroupSchedule(ctx context.Context, groupID int64) (*GroupSchedule, error) {
+	var s GroupSchedule
+	var lastDailySummary sql.NullTime
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT group_id, enabled, hour, minute, last_daily_summary FROM group_schedules WHERE group_id = ?`,
+		groupID,
+	).Scan(&s.GroupID, &s.Enabled, &s.Hour, &s.Minute, &lastDailySummary)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if lastDailySummary.Valid {
+		s.LastDailySummary = &lastDailySummary.Time
+	}
+	return &s, nil
+}
+
+func (db *DB) SetGroupSchedule(ctx context.Context, s *GroupSchedule) error {
+	enabledInt := 0
+	if s.Enabled {
+		enabledInt = 1
+	}
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT OR REPLACE INTO group_schedules (group_id, enabled, hour, minute, last_daily_summary) VALUES (?, ?, ?, ?, ?)`,
+		s.GroupID, enabledInt, s.Hour, s.Minute, s.LastDailySummary,
+	)
+	return err
+}
+
+func (db *DB) GetEnabledSchedules(ctx context.Context) ([]GroupSchedule, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT group_id, enabled, hour, minute, last_daily_summary FROM group_schedules WHERE enabled = 1`,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var schedules []GroupSchedule
+	for rows.Next() {
+		var s GroupSchedule
+		var lastDailySummary sql.NullTime
+		if err := rows.Scan(&s.GroupID, &s.Enabled, &s.Hour, &s.Minute, &lastDailySummary); err != nil {
+			logger.Error().Err(err).Msg("failed to scan group schedule")
+			continue
+		}
+		if lastDailySummary.Valid {
+			s.LastDailySummary = &lastDailySummary.Time
+		}
+		schedules = append(schedules, s)
+	}
+	return schedules, rows.Err()
+}
+
+func (db *DB) UpdateLastDailySummary(ctx context.Context, groupID int64, t time.Time) error {
+	_, err := db.conn.ExecContext(ctx,
+		`UPDATE group_schedules SET last_daily_summary = ? WHERE group_id = ?`,
+		t, groupID,
 	)
 	return err
 }

@@ -10,18 +10,19 @@ import (
 )
 
 type Config struct {
-	BotToken      string
-	OpenRouterKey string
-	SummaryHours  int
-	RetentionDays int
-	MaxMessages   int
-	TopicMax      int
-	RateLimitSec  int
-	OpenRouterURL string
-	Model         string
-	DBPath        string
-	AllowedGroups []int64
-	AlertUserIDs  []int64
+	BotToken         string
+	OpenRouterKey    string
+	SummaryHours     int
+	RetentionDays    int
+	MaxMessages      int
+	TopicMax         int
+	RateLimitSec     int
+	OpenRouterURL    string
+	Model            string
+	DBPath           string
+	AllowedGroups    []int64
+	AlertUserIDs     []int64
+	DailySummaryHour int
 }
 
 func Load() (*Config, error) {
@@ -88,19 +89,27 @@ func Load() (*Config, error) {
 	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
 	alertUserIDs := parseIDList(os.Getenv("ALERT_USER_IDS"))
 
+	dailySummaryHour := 7
+	if v := os.Getenv("DAILY_SUMMARY_HOUR"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed >= 0 && parsed <= 23 {
+			dailySummaryHour = parsed
+		}
+	}
+
 	return &Config{
-		BotToken:      botToken,
-		OpenRouterKey: openRouterKey,
-		SummaryHours:  summaryHours,
-		RetentionDays: retentionDays,
-		MaxMessages:   maxMessages,
-		TopicMax:      topicMax,
-		RateLimitSec:  rateLimitSec,
-		OpenRouterURL: openRouterURL,
-		Model:         model,
-		DBPath:        dbPath,
-		AllowedGroups: allowedGroups,
-		AlertUserIDs:  alertUserIDs,
+		BotToken:         botToken,
+		OpenRouterKey:    openRouterKey,
+		SummaryHours:     summaryHours,
+		RetentionDays:    retentionDays,
+		MaxMessages:      maxMessages,
+		TopicMax:         topicMax,
+		RateLimitSec:     rateLimitSec,
+		OpenRouterURL:    openRouterURL,
+		Model:            model,
+		DBPath:           dbPath,
+		AllowedGroups:    allowedGroups,
+		AlertUserIDs:     alertUserIDs,
+		DailySummaryHour: dailySummaryHour,
 	}, nil
 }
 
