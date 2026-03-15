@@ -12,16 +12,15 @@ linters:
     - misspell
     - unconvert
     - unparam
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
 
 formatters:
   enable:
     - gofmt
-
-settings:
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
 
 issues:
   max-issues-per-linter: 0

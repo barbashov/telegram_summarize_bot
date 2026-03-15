@@ -41,7 +41,7 @@ type GroupSchedule struct {
 func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return nil, fmt.Errorf("failed to create db directory: %w", err)
 		}
 	}

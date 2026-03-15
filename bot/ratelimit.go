@@ -21,7 +21,7 @@ func NewRateLimiter(limitSeconds int) *RateLimiter {
 	}
 }
 
-func (r *RateLimiter) Allow(userID int64, groupID int64) bool {
+func (r *RateLimiter) Allow(userID, groupID int64) bool {
 	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()

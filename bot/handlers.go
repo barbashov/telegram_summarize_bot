@@ -457,7 +457,7 @@ func (b *Bot) sendMessage(chatID int64, text string) int64 {
 	return int64(msg.MessageID)
 }
 
-func (b *Bot) editMessage(chatID int64, messageID int64, text string) error {
+func (b *Bot) editMessage(chatID, messageID int64, text string) error {
 	defer b.metrics.TelegramEdit.Start()()
 	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
 		ChatID:    tu.ID(chatID),
@@ -717,14 +717,12 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
 	}
 }
 
-func (b *Bot) NotifyUsers(ctx context.Context, text string) (int, int) {
+func (b *Bot) NotifyUsers(ctx context.Context, text string) (sent, failed int) {
 	attempted := len(b.cfg.AlertUserIDs)
 	if attempted == 0 {
 		return 0, 0
 	}
 
-	sent := 0
-	failed := 0
 	for _, userID := range b.cfg.AlertUserIDs {
 		if b.sendMessage(userID, text) == 0 {
 			failed++
