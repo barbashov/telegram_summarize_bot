@@ -358,6 +358,24 @@ func (db *DB) RemoveAllowedGroup(ctx context.Context, groupID int64) error {
 	return err
 }
 
+func (db *DB) GetAllowedGroupIDs(ctx context.Context) ([]int64, error) {
+	rows, err := db.conn.QueryContext(ctx, `SELECT group_id FROM allowed_groups ORDER BY group_id`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var ids []int64
+	for rows.Next() {
+		var id int64
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		ids = append(ids, id)
+	}
+	return ids, rows.Err()
+}
+
 func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {
 	if len(groupIDs) == 0 {
 		return nil

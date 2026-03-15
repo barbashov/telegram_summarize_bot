@@ -26,6 +26,7 @@ type telegramClient interface {
 	SendMessage(params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error)
 	GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error)
+	GetChat(params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 }
 
 type summaryService interface {
@@ -89,6 +90,7 @@ func (b *Bot) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to start polling: %w", err)
 	}
 
+	b.scanKnownGroups(ctx)
 	go b.cleanupLoop(ctx)
 	go b.rateLimitCleanupLoop(ctx)
 	go b.schedulerLoop(ctx)
@@ -103,6 +105,26 @@ func (b *Bot) Start(ctx context.Context) error {
 			return nil
 		case update := <-updates:
 			go b.handleUpdate(ctx, update)
+		}
+	}
+}
+
+func (b *Bot) scanKnownGroups(ctx context.Context) {
+	ids, err := b.db.GetAllowedGroupIDs(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("scanKnownGroups: failed to get allowed group IDs")
+		return
+	}
+	for _, id := range ids {
+		title := ""
+		info, err := b.telegram.GetChat(&telego.GetChatParams{ChatID: tu.ID(id)})
+		if err != nil {
+			logger.Warn().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to get chat info")
+		} else {
+			title = info.Title
+		}
+		if err := b.db.UpsertKnownGroup(ctx, id, title); err != nil {
+			logger.Error().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to upsert known group")
 		}
 	}
 }
@@ -371,9 +393,38 @@ func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, arg
 	subCmd := strings.ToLower(args[0])
 
 	switch subCmd {
-	case "add", "remove":
+	case "add":
 		if len(args) < 2 {
-			b.sendMessage(chatID, "Использование: `/groups add <group_id>` или `/groups remove <group_id>`")
+			b.sendMessage(chatID, "Использование: `/groups add <group_id>`")
+			return
+		}
+		groupID, err := strconv.ParseInt(args[1], 10, 64)
+		if err != nil {
+			b.sendMessage(chatID, "Неверный ID группы.")
+			return
+		}
+		// Best-effort title lookup; don't block add if group is unknown.
+		title := fmt.Sprintf("%d", groupID)
+		groups, err := b.db.GetKnownGroups(ctx)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to get known groups")
+		} else {
+			for i := range groups {
+				if groups[i].GroupID == groupID {
+					title = groups[i].Title
+					break
+				}
+			}
+		}
+		if err := b.db.AddAllowedGroup(ctx, groupID, msg.From.ID); err != nil {
+			logger.Error().Err(err).Msg("failed to add allowed group")
+			b.sendMessage(chatID, "Ошибка добавления группы.")
+			return
+		}
+		b.sendMessage(chatID, fmt.Sprintf("✅ %s добавлена.", title))
+	case "remove":
+		if len(args) < 2 {
+			b.sendMessage(chatID, "Использование: `/groups remove <group_id>`")
 			return
 		}
 		groupID, err := strconv.ParseInt(args[1], 10, 64)
@@ -399,21 +450,12 @@ func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, arg
 			b.sendPrivateGroupsList(ctx, chatID)
 			return
 		}
-		if subCmd == "add" {
-			if err := b.db.AddAllowedGroup(ctx, groupID, msg.From.ID); err != nil {
-				logger.Error().Err(err).Msg("failed to add allowed group")
-				b.sendMessage(chatID, "Ошибка добавления группы.")
-				return
-			}
-			b.sendMessage(chatID, fmt.Sprintf("✅ %s добавлена.", found.Title))
-		} else {
-			if err := b.db.RemoveAllowedGroup(ctx, groupID); err != nil {
-				logger.Error().Err(err).Msg("failed to remove allowed group")
-				b.sendMessage(chatID, "Ошибка удаления группы.")
-				return
-			}
-			b.sendMessage(chatID, fmt.Sprintf("❌ %s удалена.", found.Title))
+		if err := b.db.RemoveAllowedGroup(ctx, groupID); err != nil {
+			logger.Error().Err(err).Msg("failed to remove allowed group")
+			b.sendMessage(chatID, "Ошибка удаления группы.")
+			return
 		}
+		b.sendMessage(chatID, fmt.Sprintf("❌ %s удалена.", found.Title))
 	default:
 		b.sendMessage(chatID, "Неизвестная подкоманда. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
 	}
