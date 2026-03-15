@@ -493,6 +493,12 @@ func (b *Bot) sendPrivateGroupsList(ctx context.Context, chatID int64) {
 		title := g.Title
 		if g.Username != "" {
 			title = fmt.Sprintf("[%s](https://t.me/%s)", g.Title, g.Username)
+		} else if g.GroupID < 0 {
+			// Supergroup/channel: strip the -100 prefix for the t.me/c/ link
+			chatID := (-g.GroupID) - 1_000_000_000_000
+			if chatID > 0 {
+				title = fmt.Sprintf("[%s](https://t.me/c/%d)", g.Title, chatID)
+			}
 		}
 		fmt.Fprintf(&sb, "%s %s (%d)\n", status, title, g.GroupID)
 	}
