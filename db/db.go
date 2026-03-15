@@ -33,6 +33,7 @@ type Message struct {
 type KnownGroup struct {
 	GroupID  int64
 	Title    string
+	Username string
 	LastSeen time.Time
 	Allowed  bool // true when group_id exists in allowed_groups
 }
@@ -119,6 +120,14 @@ func (db *DB) migrate() error {
 		// SQLite returns an error when the column already exists; ignore it.
 		if !strings.Contains(err.Error(), "duplicate column name") {
 			return fmt.Errorf("failed to migrate forwarded_from column: %w", err)
+		}
+	}
+
+	// Additive migration: add username column to known_groups.
+	_, err = db.conn.Exec(`ALTER TABLE known_groups ADD COLUMN username TEXT NOT NULL DEFAULT ''`)
+	if err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("failed to migrate username column: %w", err)
 		}
 	}
 
@@ -295,18 +304,18 @@ func (db *DB) UpdateLastDailySummary(ctx context.Context, groupID int64, t time.
 	return err
 }
 
-func (db *DB) UpsertKnownGroup(ctx context.Context, groupID int64, title string) error {
+func (db *DB) UpsertKnownGroup(ctx context.Context, groupID int64, title, username string) error {
 	_, err := db.conn.ExecContext(ctx,
-		`INSERT INTO known_groups (group_id, title, last_seen) VALUES (?, ?, ?)
-		 ON CONFLICT(group_id) DO UPDATE SET title = excluded.title, last_seen = excluded.last_seen`,
-		groupID, title, time.Now(),
+		`INSERT INTO known_groups (group_id, title, username, last_seen) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(group_id) DO UPDATE SET title = excluded.title, username = excluded.username, last_seen = excluded.last_seen`,
+		groupID, title, username, time.Now(),
 	)
 	return err
 }
 
 func (db *DB) GetKnownGroups(ctx context.Context) ([]KnownGroup, error) {
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT kg.group_id, kg.title, kg.last_seen, ag.group_id IS NOT NULL AS allowed
+		`SELECT kg.group_id, kg.title, kg.username, kg.last_seen, ag.group_id IS NOT NULL AS allowed
 		 FROM known_groups kg
 		 LEFT JOIN allowed_groups ag ON kg.group_id = ag.group_id
 		 ORDER BY kg.title`,
@@ -320,7 +329,7 @@ func (db *DB) GetKnownGroups(ctx context.Context) ([]KnownGroup, error) {
 	for rows.Next() {
 		var g KnownGroup
 		var allowedInt int
-		if err := rows.Scan(&g.GroupID, &g.Title, &g.LastSeen, &allowedInt); err != nil {
+		if err := rows.Scan(&g.GroupID, &g.Title, &g.Username, &g.LastSeen, &allowedInt); err != nil {
 			logger.Error().Err(err).Msg("failed to scan known group")
 			continue
 		}

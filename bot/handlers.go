@@ -123,7 +123,11 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 		} else {
 			title = info.Title
 		}
-		if err := b.db.UpsertKnownGroup(ctx, id, title); err != nil {
+		username := ""
+		if info != nil {
+			username = info.Username
+		}
+		if err := b.db.UpsertKnownGroup(ctx, id, title, username); err != nil {
 			logger.Error().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to upsert known group")
 		}
 	}
@@ -223,7 +227,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 
 	if msg.Chat.Type != "private" {
 		// Track group title even for non-allowed groups.
-		if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title); err != nil {
+		if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title, msg.Chat.Username); err != nil {
 			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group")
 		}
 		allowed, err := b.db.IsGroupAllowed(ctx, groupID)
@@ -293,7 +297,7 @@ func (b *Bot) handleMyChatMember(ctx context.Context, cmu *telego.ChatMemberUpda
 	groupID := cmu.Chat.ID
 	title := cmu.Chat.Title
 
-	if err := b.db.UpsertKnownGroup(ctx, groupID, title); err != nil {
+	if err := b.db.UpsertKnownGroup(ctx, groupID, title, cmu.Chat.Username); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group on bot join")
 	}
 
@@ -480,7 +484,11 @@ func (b *Bot) sendPrivateGroupsList(ctx context.Context, chatID int64) {
 		if g.Allowed {
 			status = "✅"
 		}
-		fmt.Fprintf(&sb, "%s %s (%d)\n", status, g.Title, g.GroupID)
+		title := g.Title
+		if g.Username != "" {
+			title = fmt.Sprintf("[%s](https://t.me/%s)", g.Title, g.Username)
+		}
+		fmt.Fprintf(&sb, "%s %s (%d)\n", status, title, g.GroupID)
 	}
 	sb.WriteString("\nДля управления:\n• `/groups add <group_id>`\n• `/groups remove <group_id>`")
 	b.sendMessage(chatID, sb.String())
