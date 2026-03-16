@@ -50,10 +50,13 @@ func (f *fakeTelegram) GetChat(_ *telego.GetChatParams) (*telego.ChatFullInfo, e
 }
 
 type fakeSummarizer struct {
-	summary  *summarizer.StructuredSummary
-	err      error
-	calls    int
-	topicMax int
+	summary    *summarizer.StructuredSummary
+	err        error
+	calls      int
+	topicMax   int
+	urlSummary string
+	urlErr     error
+	urlCalls   int
 }
 
 func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int) (*summarizer.StructuredSummary, error) {
@@ -63,6 +66,14 @@ func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, to
 		return nil, f.err
 	}
 	return f.summary, nil
+}
+
+func (f *fakeSummarizer) SummarizeURL(_ context.Context, _, _ string) (string, error) {
+	f.urlCalls++
+	if f.urlErr != nil {
+		return "", f.urlErr
+	}
+	return f.urlSummary, nil
 }
 
 func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) {

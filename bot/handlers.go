@@ -9,6 +9,7 @@ import (
 
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
@@ -31,6 +32,7 @@ type telegramClient interface {
 
 type summaryService interface {
 	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*summarizer.StructuredSummary, error)
+	SummarizeURL(ctx context.Context, pageURL string, content string) (string, error)
 }
 
 func formatDuration(d time.Duration) string {
@@ -415,10 +417,79 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 		}
 	default:
 		if isAdmin {
+			// Check if the message contains a URL to summarize.
+			if u := extractURL(msg.Text, msg.Entities); u != "" {
+				b.handleURLSummarize(ctx, msg.Chat.ID, msg.From.ID, u)
+				return
+			}
 			b.handlePrivateAdminHelp(msg.Chat.ID)
 		} else {
 			b.handlePrivateChatInfo(update)
 		}
+	}
+}
+
+func extractURL(text string, entities []telego.MessageEntity) string {
+	for _, e := range entities {
+		if e.Type == "url" {
+			runes := []rune(text)
+			end := e.Offset + e.Length
+			if end > len(runes) {
+				continue
+			}
+			return string(runes[e.Offset:end])
+		}
+		if e.Type == "text_link" && e.URL != "" {
+			return e.URL
+		}
+	}
+	return ""
+}
+
+func (b *Bot) handleURLSummarize(ctx context.Context, chatID, userID int64, rawURL string) {
+	if !b.rateLimiter.Allow(userID, chatID) {
+		b.metrics.IncRateLimitHit()
+		remaining := b.rateLimiter.RemainingTime(chatID)
+		b.sendMessage(chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
+		return
+	}
+
+	statusMsgID := b.sendMessage(chatID, "Загружаю страницу...")
+
+	content, err := fetcher.Fetch(ctx, rawURL, b.cfg.URLMaxChars)
+	if err != nil {
+		logger.Error().Err(err).Str("url", rawURL).Msg("failed to fetch URL")
+		if editErr := b.editMessage(chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error()); editErr != nil {
+			b.sendMessage(chatID, "Не удалось загрузить страницу: "+err.Error())
+		}
+		return
+	}
+
+	if editErr := b.editMessage(chatID, statusMsgID, "Суммаризую содержимое..."); editErr != nil {
+		logger.Warn().Err(editErr).Msg("failed to update status message")
+	}
+
+	summary, err := b.summarizer.SummarizeURL(ctx, rawURL, content)
+	if err != nil {
+		b.metrics.IncSummarizeFail()
+		logger.Error().Err(err).Str("url", rawURL).Msg("failed to summarize URL")
+		if editErr := b.editMessage(chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже."); editErr != nil {
+			b.sendMessage(chatID, "Ошибка суммаризации. Попробуйте позже.")
+		}
+		return
+	}
+
+	b.metrics.IncSummarizeOK()
+	result := fmt.Sprintf("🔗 *Суммаризация URL:*\n\n%s", summary)
+	chunks := splitTelegramMessage(result, telegramMessageLimit)
+	if len(chunks) == 0 {
+		return
+	}
+	if editErr := b.editMessage(chatID, statusMsgID, chunks[0]); editErr != nil {
+		b.sendMessage(chatID, chunks[0])
+	}
+	for _, chunk := range chunks[1:] {
+		b.sendMessage(chatID, chunk)
 	}
 }
 
@@ -543,7 +614,8 @@ func (b *Bot) handlePrivateAdminHelp(chatID int64) {
 		"`/status` — статус бота и метрики\n" +
 		"`/groups` — список разрешённых групп\n" +
 		"`/groups add <group_id>` — добавить группу\n" +
-		"`/groups remove <group_id>` — удалить группу"
+		"`/groups remove <group_id>` — удалить группу\n\n" +
+		"*Суммаризация URL:*\nОтправьте ссылку — бот загрузит страницу и вернёт краткое содержание."
 	b.sendMessage(chatID, helpText)
 }
 

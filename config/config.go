@@ -24,6 +24,7 @@ type Config struct {
 	AdminUserIDs     []int64
 	DailySummaryHour int
 	ReplyThreads     bool
+	URLMaxChars      int
 }
 
 func Load() (*Config, error) {
@@ -106,6 +107,13 @@ func Load() (*Config, error) {
 		replyThreads = false
 	}
 
+	urlMaxChars := 64000
+	if v := os.Getenv("URL_MAX_CHARS"); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			urlMaxChars = parsed
+		}
+	}
+
 	return &Config{
 		BotToken:         botToken,
 		OpenRouterKey:    openRouterKey,
@@ -121,6 +129,7 @@ func Load() (*Config, error) {
 		AdminUserIDs:     adminUserIDs,
 		DailySummaryHour: dailySummaryHour,
 		ReplyThreads:     replyThreads,
+		URLMaxChars:      urlMaxChars,
 	}, nil
 }
 

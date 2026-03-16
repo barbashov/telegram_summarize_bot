@@ -14,6 +14,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ author: "quoted text"` (configurable via `REPLY_THREADS`)
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
+- **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
 - Admin private commands (`/status`, `/groups`): runtime metrics and dynamic group management
 - SQLite persistence
 - Graceful shutdown
@@ -98,6 +99,12 @@ Groups become "known" when the bot is added to them or when a message is receive
 
 The allowed-group list is stored in the database and is authoritative at runtime. `ALLOWED_GROUPS` in `.env` is used only to seed the database on first run (or after an upgrade from a version without this table).
 
+#### URL summarization
+
+Send a URL in a private message — the bot fetches the page, extracts the article text (using readability), and replies with a summary. Only admin users can use this feature; non-admins are ignored.
+
+SSRF protection is built in: only `http`/`https` schemes are allowed, private/reserved IP ranges are blocked (including cloud metadata endpoints like `169.254.169.254`), DNS is pre-resolved and pinned to prevent rebinding, and redirect targets are re-validated.
+
 Any user not in `ADMIN_USER_IDS` receives "Нет доступа."
 
 ## Bot Commands
@@ -135,5 +142,6 @@ All configuration is via environment variables (`.env` file):
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 | `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
+| `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.
