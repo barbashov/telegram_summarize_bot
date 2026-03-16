@@ -123,6 +123,107 @@ func TestSummarizeByTopicsPropagatesClientError(t *testing.T) {
 	}
 }
 
+func TestFormatMessageWithReplyAnnotation(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+
+	t.Run("parent annotation included", func(t *testing.T) {
+		parent := db.Message{Username: "alice", Text: "hello", Timestamp: ts}
+		msg := db.Message{Username: "bob", Text: "world", Timestamp: ts}
+		out := formatMessage(msg, &parent)
+		if !strings.Contains(out, "↩ alice") {
+			t.Fatalf("expected reply annotation, got: %q", out)
+		}
+		if !strings.Contains(out, `"hello"`) {
+			t.Fatalf("expected parent text in annotation, got: %q", out)
+		}
+	})
+
+	t.Run("parent without username falls back to UserID", func(t *testing.T) {
+		parent := db.Message{UserID: 42, Text: "hi", Timestamp: ts}
+		msg := db.Message{Username: "bob", Text: "yo", Timestamp: ts}
+		out := formatMessage(msg, &parent)
+		if !strings.Contains(out, "↩ User42") {
+			t.Fatalf("expected fallback username, got: %q", out)
+		}
+	})
+
+	t.Run("parent text truncated at 60 runes", func(t *testing.T) {
+		longText := strings.Repeat("а", 70)
+		parent := db.Message{Username: "alice", Text: longText, Timestamp: ts}
+		msg := db.Message{Username: "bob", Text: "reply", Timestamp: ts}
+		out := formatMessage(msg, &parent)
+		if !strings.Contains(out, "…") {
+			t.Fatalf("expected truncation ellipsis, got: %q", out)
+		}
+	})
+
+	t.Run("forwarded wins over parent", func(t *testing.T) {
+		parent := db.Message{Username: "alice", Text: "original", Timestamp: ts}
+		msg := db.Message{Username: "bob", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
+		out := formatMessage(msg, &parent)
+		if !strings.Contains(out, "fwd: channel") {
+			t.Fatalf("expected fwd annotation, got: %q", out)
+		}
+		if strings.Contains(out, "↩") {
+			t.Fatalf("unexpected reply annotation when forwarded, got: %q", out)
+		}
+	})
+}
+
+func TestFormatIndexedMessages_ReplyThreadsEnabled(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+	messages := []db.Message{
+		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+	}
+	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
+	out := s.formatIndexedMessages(messages)
+	if !strings.Contains(out, "↩") {
+		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
+	}
+}
+
+func TestFormatIndexedMessages_ReplyThreadsDisabled(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+	messages := []db.Message{
+		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+	}
+	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)
+	out := s.formatIndexedMessages(messages)
+	if strings.Contains(out, "↩") {
+		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
+	}
+}
+
+func TestFormatClustersForPrompt_ReplyThreadsEnabled(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+	messages := []db.Message{
+		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+	}
+	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
+	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
+	out := s.formatClustersForPrompt(messages, clusters)
+	if !strings.Contains(out, "↩") {
+		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
+	}
+}
+
+func TestFormatClustersForPrompt_ReplyThreadsDisabled(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+	messages := []db.Message{
+		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+	}
+	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
+	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)
+	out := s.formatClustersForPrompt(messages, clusters)
+	if strings.Contains(out, "↩") {
+		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
+	}
+}
+
 func TestFormatTelegramSummaryEscapesMarkdown(t *testing.T) {
 	formatted := FormatTelegramSummary(&StructuredSummary{
 		TLDR: "Итог_1",

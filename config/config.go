@@ -102,7 +102,7 @@ func Load() (*Config, error) {
 	}
 
 	replyThreads := true
-	if v := os.Getenv("REPLY_THREADS"); v == "false" || v == "0" {
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("REPLY_THREADS"))); v == "false" || v == "0" {
 		replyThreads = false
 	}
 
