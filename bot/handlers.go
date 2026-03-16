@@ -356,11 +356,16 @@ func (b *Bot) handleHelp(update telego.Update) {
 	helpText := "📖 *Доступные команды:*\n\n" +
 		"• `summarize [часы]` (или `s`, `sub`) — суммировать сообщения за последние N часов (по умолчанию 24)\n" +
 		"• `schedule` — показать расписание ежедневной сводки\n" +
-		"• `schedule on` — включить ежедневную сводку (только администраторы)\n" +
-		"• `schedule off` — выключить ежедневную сводку (только администраторы)\n" +
-		"• `schedule ЧЧ:ММ` — установить время ежедневной сводки в UTC (только администраторы)\n" +
 		"• `help` — показать это сообщение\n\n" +
-		"_Примеры: @bot summarize, @bot summarize 12, @bot schedule 08:00_"
+		"_Примеры: @bot summarize, @bot summarize 12_"
+
+	if b.isGroupAdmin(msg.Chat.ID, msg.From.ID) {
+		helpText += "\n\n*Команды администратора:*\n" +
+			"• `schedule on` — включить ежедневную сводку\n" +
+			"• `schedule off` — выключить ежедневную сводку\n" +
+			"• `schedule ЧЧ:ММ` — установить время ежедневной сводки в UTC\n\n" +
+			"_Пример: @bot schedule 08:00_"
+	}
 
 	b.sendMessage(msg.Chat.ID, helpText)
 }
@@ -371,9 +376,15 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	isAdmin := b.cfg.IsAdminUser(msg.From.ID)
+
 	fields := strings.Fields(msg.Text)
 	if len(fields) == 0 {
-		b.handlePrivateChatInfo(update)
+		if isAdmin {
+			b.handlePrivateAdminHelp(msg.Chat.ID)
+		} else {
+			b.handlePrivateChatInfo(update)
+		}
 		return
 	}
 
@@ -385,19 +396,29 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 
 	switch cmd {
 	case "/status":
-		if !b.cfg.IsAdminUser(msg.From.ID) {
+		if !isAdmin {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
 		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport())
 	case "/groups":
-		if !b.cfg.IsAdminUser(msg.From.ID) {
+		if !isAdmin {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
 		b.handlePrivateGroups(ctx, update, fields[1:])
+	case "/help":
+		if isAdmin {
+			b.handlePrivateAdminHelp(msg.Chat.ID)
+		} else {
+			b.handlePrivateChatInfo(update)
+		}
 	default:
-		b.handlePrivateChatInfo(update)
+		if isAdmin {
+			b.handlePrivateAdminHelp(msg.Chat.ID)
+		} else {
+			b.handlePrivateChatInfo(update)
+		}
 	}
 }
 
@@ -514,6 +535,16 @@ func (b *Bot) sendPrivateGroupsList(ctx context.Context, chatID int64) {
 	}
 	sb.WriteString("\nДля управления:\n• `/groups add <group_id>`\n• `/groups remove <group_id>`")
 	b.sendMessage(chatID, sb.String())
+}
+
+func (b *Bot) handlePrivateAdminHelp(chatID int64) {
+	helpText := "*Команды администратора*\n\n" +
+		"`/help` — показать это сообщение\n" +
+		"`/status` — статус бота и метрики\n" +
+		"`/groups` — список разрешённых групп\n" +
+		"`/groups add <group_id>` — добавить группу\n" +
+		"`/groups remove <group_id>` — удалить группу"
+	b.sendMessage(chatID, helpText)
 }
 
 func (b *Bot) handlePrivateChatInfo(update telego.Update) {
