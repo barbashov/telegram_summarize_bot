@@ -71,6 +71,10 @@ If someone opens a private chat with the bot, it replies with setup guidance ins
 
 Users listed in `ADMIN_USER_IDS` can send the following commands in a private chat with the bot:
 
+#### `/help`
+
+Shows the list of available admin private commands.
+
 #### `/status`
 
 Runtime health report:
