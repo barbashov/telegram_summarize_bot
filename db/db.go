@@ -28,6 +28,8 @@ type Message struct {
 	Text          string
 	Timestamp     time.Time
 	ForwardedFrom string // original author name when message was forwarded; empty otherwise
+	TgMessageID   int64  // Telegram's native message_id; 0 = unknown
+	ReplyToTgID   int64  // Telegram message_id of parent; 0 = not a reply
 }
 
 type KnownGroup struct {
@@ -131,7 +133,29 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	// Additive migration: add tg_message_id and reply_to_tg_id columns for reply thread support.
+	_, err = db.conn.Exec(`ALTER TABLE messages ADD COLUMN tg_message_id INTEGER`)
+	if err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("failed to migrate tg_message_id column: %w", err)
+		}
+	}
+
+	_, err = db.conn.Exec(`ALTER TABLE messages ADD COLUMN reply_to_tg_id INTEGER`)
+	if err != nil {
+		if !strings.Contains(err.Error(), "duplicate column name") {
+			return fmt.Errorf("failed to migrate reply_to_tg_id column: %w", err)
+		}
+	}
+
 	return nil
+}
+
+func nullableInt64(v int64) sql.NullInt64 {
+	if v == 0 {
+		return sql.NullInt64{}
+	}
+	return sql.NullInt64{Valid: true, Int64: v}
 }
 
 func (db *DB) Close() error {
@@ -145,8 +169,9 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 
 	defer db.metrics.DBAdd.Start()()
 	_, err := db.conn.ExecContext(ctx,
-		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp, forwarded_from) VALUES (?, ?, ?, ?, ?, ?)`,
+		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		msg.GroupID, msg.UserID, msg.Username, msg.Text, msg.Timestamp, msg.ForwardedFrom,
+		nullableInt64(msg.TgMessageID), nullableInt64(msg.ReplyToTgID),
 	)
 	return err
 }
@@ -154,10 +179,10 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
 	defer db.metrics.DBGet.Start()()
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT id, group_id, user_id, username, text, timestamp, forwarded_from
-		 FROM messages 
-		 WHERE group_id = ? AND timestamp > ? 
-		 ORDER BY timestamp ASC 
+		`SELECT id, group_id, user_id, username, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
+		 FROM messages
+		 WHERE group_id = ? AND timestamp > ?
+		 ORDER BY timestamp ASC
 		 LIMIT ?`,
 		groupID, since, limit,
 	)
@@ -170,11 +195,14 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	for rows.Next() {
 		var msg Message
 		var forwardedFrom sql.NullString
-		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &forwardedFrom); err != nil {
+		var tgMessageID, replyToTgID sql.NullInt64
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &forwardedFrom, &tgMessageID, &replyToTgID); err != nil {
 			logger.Error().Err(err).Msg("failed to scan message")
 			continue
 		}
 		msg.ForwardedFrom = forwardedFrom.String
+		msg.TgMessageID = tgMessageID.Int64
+		msg.ReplyToTgID = replyToTgID.Int64
 		messages = append(messages, msg)
 	}
 

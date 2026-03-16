@@ -24,9 +24,10 @@ type chatCompletionClient interface {
 }
 
 type Summarizer struct {
-	client  chatCompletionClient
-	model   string
-	metrics *metrics.Metrics
+	client       chatCompletionClient
+	model        string
+	metrics      *metrics.Metrics
+	replyThreads bool
 }
 
 type TopicCluster struct {
@@ -50,19 +51,20 @@ type topicClusterResponse struct {
 	Topics []TopicCluster `json:"topics"`
 }
 
-func New(apiKey, baseURL, model string, m *metrics.Metrics) (*Summarizer, error) {
+func New(apiKey, baseURL, model string, m *metrics.Metrics, replyThreads bool) (*Summarizer, error) {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
 	config.HTTPClient.Timeout = 120 * time.Second
 
-	return NewWithClient(openai.NewClientWithConfig(config), model, m), nil
+	return NewWithClient(openai.NewClientWithConfig(config), model, m, replyThreads), nil
 }
 
-func NewWithClient(client chatCompletionClient, model string, m *metrics.Metrics) *Summarizer {
+func NewWithClient(client chatCompletionClient, model string, m *metrics.Metrics, replyThreads bool) *Summarizer {
 	return &Summarizer{
-		client:  client,
-		model:   model,
-		metrics: m,
+		client:       client,
+		model:        model,
+		metrics:      m,
+		replyThreads: replyThreads,
 	}
 }
 
@@ -84,7 +86,7 @@ func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Messag
 
 func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, topicMax int) ([]TopicCluster, error) {
 	defer s.metrics.LLMCluster.Start()()
-	prompt := buildClusteringPrompt(messages, topicMax)
+	prompt := s.buildClusteringPrompt(messages, topicMax)
 
 	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.model,
@@ -128,7 +130,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 
 func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster) (*StructuredSummary, error) {
 	defer s.metrics.LLMSummarize.Start()()
-	prompt := buildTopicSummaryPrompt(messages, clusters)
+	prompt := s.buildTopicSummaryPrompt(messages, clusters)
 
 	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model: s.model,
@@ -192,7 +194,7 @@ func FormatTelegramSummary(summary *StructuredSummary) string {
 	return sb.String()
 }
 
-func buildClusteringPrompt(messages []db.Message, topicMax int) string {
+func (s *Summarizer) buildClusteringPrompt(messages []db.Message, topicMax int) string {
 	return fmt.Sprintf(`Разбей сообщения чата на смысловые темы.
 
 Требования:
@@ -206,10 +208,10 @@ func buildClusteringPrompt(messages []db.Message, topicMax int) string {
 Сообщения:
 ---
 %s
----`, topicMax, formatIndexedMessages(messages))
+---`, topicMax, s.formatIndexedMessages(messages))
 }
 
-func buildTopicSummaryPrompt(messages []db.Message, clusters []TopicCluster) string {
+func (s *Summarizer) buildTopicSummaryPrompt(messages []db.Message, clusters []TopicCluster) string {
 	return fmt.Sprintf(`У тебя есть темы обсуждения из группового чата Telegram.
 
 Сделай итог в JSON формате:
@@ -225,18 +227,42 @@ func buildTopicSummaryPrompt(messages []db.Message, clusters []TopicCluster) str
 Темы и сообщения:
 ---
 %s
----`, formatClustersForPrompt(messages, clusters))
+---`, s.formatClustersForPrompt(messages, clusters))
 }
 
-func formatIndexedMessages(messages []db.Message) string {
+func buildReplyIndex(messages []db.Message) map[int64]int {
+	m := make(map[int64]int, len(messages))
+	for i, msg := range messages {
+		if msg.TgMessageID != 0 {
+			m[msg.TgMessageID] = i
+		}
+	}
+	return m
+}
+
+func (s *Summarizer) formatIndexedMessages(messages []db.Message) string {
+	var idx map[int64]int
+	if s.replyThreads {
+		idx = buildReplyIndex(messages)
+	}
 	var sb strings.Builder
 	for i, msg := range messages {
-		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg))
+		var parent *db.Message
+		if idx != nil && msg.ReplyToTgID != 0 {
+			if pi, ok := idx[msg.ReplyToTgID]; ok {
+				parent = &messages[pi]
+			}
+		}
+		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg, parent))
 	}
 	return sb.String()
 }
 
-func formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) string {
+func (s *Summarizer) formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) string {
+	var idx map[int64]int
+	if s.replyThreads {
+		idx = buildReplyIndex(messages)
+	}
 	var sb strings.Builder
 	for i, cluster := range clusters {
 		fmt.Fprintf(&sb, "Тема %d: %s\n", i+1, cluster.Title)
@@ -244,23 +270,42 @@ func formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) str
 			if index < 0 || index >= len(messages) {
 				continue
 			}
-			fmt.Fprintf(&sb, "- %s\n", formatMessage(messages[index]))
+			msg := messages[index]
+			var parent *db.Message
+			if idx != nil && msg.ReplyToTgID != 0 {
+				if pi, ok := idx[msg.ReplyToTgID]; ok {
+					parent = &messages[pi]
+				}
+			}
+			fmt.Fprintf(&sb, "- %s\n", formatMessage(msg, parent))
 		}
 		sb.WriteString("\n")
 	}
 	return strings.TrimSpace(sb.String())
 }
 
-func formatMessage(msg db.Message) string {
+func formatMessage(msg db.Message, parent *db.Message) string {
 	username := msg.Username
 	if username == "" {
 		username = fmt.Sprintf("User%d", msg.UserID)
 	}
 	timeStr := msg.Timestamp.Format("15:04")
+
+	var annotation string
 	if msg.ForwardedFrom != "" {
-		return fmt.Sprintf("[%s] %s (fwd: %s): %s", timeStr, username, msg.ForwardedFrom, msg.Text)
+		annotation = fmt.Sprintf(" (fwd: %s)", msg.ForwardedFrom)
+	} else if parent != nil {
+		parentUser := parent.Username
+		if parentUser == "" {
+			parentUser = fmt.Sprintf("User%d", parent.UserID)
+		}
+		parentText := []rune(parent.Text)
+		if len(parentText) > 60 {
+			parentText = append(parentText[:60], '…')
+		}
+		annotation = fmt.Sprintf(" (↩ %s: %q)", parentUser, string(parentText))
 	}
-	return fmt.Sprintf("[%s] %s: %s", timeStr, username, msg.Text)
+	return fmt.Sprintf("[%s] %s%s: %s", timeStr, username, annotation, msg.Text)
 }
 
 func sanitizeClusters(clusters []TopicCluster, messageCount, topicMax int) ([]TopicCluster, error) {

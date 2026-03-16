@@ -23,6 +23,7 @@ type Config struct {
 	AllowedGroups    []int64
 	AdminUserIDs     []int64
 	DailySummaryHour int
+	ReplyThreads     bool
 }
 
 func Load() (*Config, error) {
@@ -100,6 +101,11 @@ func Load() (*Config, error) {
 		}
 	}
 
+	replyThreads := true
+	if v := os.Getenv("REPLY_THREADS"); v == "false" || v == "0" {
+		replyThreads = false
+	}
+
 	return &Config{
 		BotToken:         botToken,
 		OpenRouterKey:    openRouterKey,
@@ -114,6 +120,7 @@ func Load() (*Config, error) {
 		AllowedGroups:    allowedGroups,
 		AdminUserIDs:     adminUserIDs,
 		DailySummaryHour: dailySummaryHour,
+		ReplyThreads:     replyThreads,
 	}, nil
 }
 

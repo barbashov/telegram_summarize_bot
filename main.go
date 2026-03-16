@@ -50,7 +50,7 @@ func main() {
 		Str("model", cfg.Model).
 		Msg("Configuration loaded")
 
-	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model, m)
+	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model, m, cfg.ReplyThreads)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize summarizer")
 	}

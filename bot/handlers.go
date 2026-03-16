@@ -216,6 +216,12 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	groupID := msg.Chat.ID
 	userID := msg.From.ID
 	text := msg.Text
+	tgMessageID := int64(msg.MessageID)
+
+	var replyToTgID int64
+	if msg.ReplyToMessage != nil {
+		replyToTgID = int64(msg.ReplyToMessage.MessageID)
+	}
 
 	logger.Debug().
 		Int64("group_id", groupID).
@@ -260,6 +266,8 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			Text:          text,
 			Timestamp:     time.Now(),
 			ForwardedFrom: forwardedFrom,
+			TgMessageID:   tgMessageID,
+			ReplyToTgID:   replyToTgID,
 		}); err != nil {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
 		} else {
@@ -280,11 +288,13 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	if err := b.db.AddMessage(ctx, &db.Message{
-		GroupID:   groupID,
-		UserID:    userID,
-		Username:  msg.From.Username,
-		Text:      text,
-		Timestamp: time.Now(),
+		GroupID:     groupID,
+		UserID:      userID,
+		Username:    msg.From.Username,
+		Text:        text,
+		Timestamp:   time.Now(),
+		TgMessageID: tgMessageID,
+		ReplyToTgID: replyToTgID,
 	}); err != nil {
 		logger.Error().Err(err).Msg("failed to add message")
 	} else {

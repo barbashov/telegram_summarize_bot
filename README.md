@@ -11,6 +11,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
+- Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ author: "quoted text"` (configurable via `REPLY_THREADS`)
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - Admin private commands (`/status`, `/groups`): runtime metrics and dynamic group management
@@ -129,5 +130,6 @@ All configuration is via environment variables (`.env` file):
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model via OpenRouter |
 | `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
+| `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.

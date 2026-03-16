@@ -46,7 +46,7 @@ func TestClusterTopicsSanitizesAssignments(t *testing.T) {
 			`{"topics":[{"title":"Релиз","message_indexes":[0,1,1],"message_count":3},{"title":"Оффтоп","message_indexes":[3],"message_count":1}]}`,
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New())
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
 
 	messages := []db.Message{
 		{Text: "Первое", Timestamp: time.Unix(0, 0)},
@@ -75,7 +75,7 @@ func TestClusterTopicsSanitizesAssignments(t *testing.T) {
 }
 
 func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
-	sum := NewWithClient(&fakeChatClient{responses: []string{"not-json"}}, "test-model", metrics.New())
+	sum := NewWithClient(&fakeChatClient{responses: []string{"not-json"}}, "test-model", metrics.New(), true)
 
 	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
 	if err == nil {
@@ -93,7 +93,7 @@ func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
 			`{"tldr":"Обсудили релиз.","topics":[{"title":"Релиз","summary":"Договорились выкатить сегодня.","message_count":2}]}`,
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New())
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
 
 	summary, err := sum.SummarizeByTopics(context.Background(), []db.Message{
 		{Text: "катим релиз", Timestamp: time.Unix(0, 0)},
@@ -115,7 +115,7 @@ func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
 }
 
 func TestSummarizeByTopicsPropagatesClientError(t *testing.T) {
-	sum := NewWithClient(&fakeChatClient{err: errors.New("boom")}, "test-model", metrics.New())
+	sum := NewWithClient(&fakeChatClient{err: errors.New("boom")}, "test-model", metrics.New(), true)
 
 	_, err := sum.SummarizeByTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
 	if err == nil {
