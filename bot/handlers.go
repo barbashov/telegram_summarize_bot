@@ -93,6 +93,16 @@ func (b *Bot) Start(ctx context.Context) error {
 	}
 
 	b.scanKnownGroups(ctx)
+
+	retentionCutoff := time.Now().Add(-b.cfg.RetentionDuration())
+	if snap, err := b.db.LoadMetrics(ctx, retentionCutoff); err != nil {
+		logger.Error().Err(err).Msg("failed to load persisted metrics; starting fresh")
+	} else {
+		b.metrics.LoadFromPersistable(snap)
+		logger.Info().Msg("metrics loaded from DB")
+	}
+	go b.metricsFlushLoop(ctx)
+
 	go b.cleanupLoop(ctx)
 	go b.rateLimitCleanupLoop(ctx)
 	go b.schedulerLoop(ctx)
@@ -136,6 +146,30 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 		}
 	}
 }
+
+func (b *Bot) metricsFlushLoop(ctx context.Context) {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			b.flushMetrics()
+		}
+	}
+}
+
+func (b *Bot) flushMetrics() {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := b.db.SaveMetrics(ctx, b.metrics.PersistableSnapshot()); err != nil {
+		logger.Error().Err(err).Msg("failed to flush metrics to DB")
+	}
+}
+
+// FlushMetrics is called once during graceful shutdown.
+func (b *Bot) FlushMetrics() { b.flushMetrics() }
 
 func (b *Bot) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)

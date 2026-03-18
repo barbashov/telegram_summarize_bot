@@ -90,10 +90,58 @@ func (l *LatencyStat) Snapshot() LatencySnapshot {
 	}
 }
 
-type errorEntry struct {
-	ts  time.Time
-	key string
-	msg string
+// rawState returns the internal samples/count/pos for persistence.
+func (l *LatencyStat) rawState() LatencyRawState {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var s LatencyRawState
+	for i, d := range l.samples {
+		s.Samples[i] = int64(d)
+	}
+	s.Count = l.count
+	s.Pos = l.pos
+	return s
+}
+
+// loadRawState restores internal state from a persisted snapshot.
+func (l *LatencyStat) loadRawState(s LatencyRawState) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	for i, ns := range s.Samples {
+		l.samples[i] = time.Duration(ns)
+	}
+	l.count = s.Count
+	l.pos = s.Pos
+}
+
+// ErrorEntry is a single error event stored in the ring buffer.
+type ErrorEntry struct {
+	Ts  time.Time
+	Key string
+	Msg string
+}
+
+// LatencyRawState is the internal state of a LatencyStat, suitable for serialization.
+type LatencyRawState struct {
+	Samples [windowSize]int64 // nanoseconds
+	Count   int
+	Pos     int
+}
+
+// PersistableSnapshot holds all state that is persisted to DB.
+type PersistableSnapshot struct {
+	MessagesStored int64
+	SummarizeOK    int64
+	SummarizeFail  int64
+	RateLimitHits  int64
+	ErrorCounts    map[string]int64
+	RecentErrors   []ErrorEntry
+	TelegramSend   LatencyRawState
+	TelegramEdit   LatencyRawState
+	LLMCluster     LatencyRawState
+	LLMSummarize   LatencyRawState
+	DBAdd          LatencyRawState
+	DBGet          LatencyRawState
 }
 
 // Metrics holds all runtime observability data for the bot.
@@ -114,7 +162,7 @@ type Metrics struct {
 	summarizeFail   int64
 	rateLimitHits   int64
 	errorCounts     map[string]int64
-	errorRing       [ringSize]errorEntry
+	errorRing       [ringSize]ErrorEntry
 	errorRingPos    int
 	errorRingFilled int
 }
@@ -156,7 +204,7 @@ func (m *Metrics) RecordError(key, errMsg string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.errorCounts[key]++
-	m.errorRing[m.errorRingPos] = errorEntry{ts: time.Now(), key: key, msg: errMsg}
+	m.errorRing[m.errorRingPos] = ErrorEntry{Ts: time.Now(), Key: key, Msg: errMsg}
 	m.errorRingPos = (m.errorRingPos + 1) % ringSize
 	if m.errorRingFilled < ringSize {
 		m.errorRingFilled++
@@ -177,7 +225,7 @@ type MetricsSnapshot struct {
 	SummarizeFail  int64
 	RateLimitHits  int64
 	ErrorCounts    map[string]int64
-	RecentErrors   []errorEntry
+	RecentErrors   []ErrorEntry
 }
 
 // Snapshot returns a consistent point-in-time copy of all metrics.
@@ -206,12 +254,74 @@ func (m *Metrics) Snapshot() MetricsSnapshot {
 
 	filled := m.errorRingFilled
 	start := (m.errorRingPos - filled + ringSize) % ringSize
-	s.RecentErrors = make([]errorEntry, filled)
+	s.RecentErrors = make([]ErrorEntry, filled)
 	for i := 0; i < filled; i++ {
 		s.RecentErrors[i] = m.errorRing[(start+i)%ringSize]
 	}
 
 	return s
+}
+
+// PersistableSnapshot returns a consistent copy of all persistable state.
+func (m *Metrics) PersistableSnapshot() PersistableSnapshot {
+	m.mu.Lock()
+	s := PersistableSnapshot{
+		MessagesStored: m.messagesStored,
+		SummarizeOK:    m.summarizeOK,
+		SummarizeFail:  m.summarizeFail,
+		RateLimitHits:  m.rateLimitHits,
+		ErrorCounts:    make(map[string]int64, len(m.errorCounts)),
+	}
+	for k, v := range m.errorCounts {
+		s.ErrorCounts[k] = v
+	}
+	filled := m.errorRingFilled
+	start := (m.errorRingPos - filled + ringSize) % ringSize
+	s.RecentErrors = make([]ErrorEntry, filled)
+	for i := 0; i < filled; i++ {
+		s.RecentErrors[i] = m.errorRing[(start+i)%ringSize]
+	}
+	m.mu.Unlock()
+
+	s.TelegramSend = m.TelegramSend.rawState()
+	s.TelegramEdit = m.TelegramEdit.rawState()
+	s.LLMCluster = m.LLMCluster.rawState()
+	s.LLMSummarize = m.LLMSummarize.rawState()
+	s.DBAdd = m.DBAdd.rawState()
+	s.DBGet = m.DBGet.rawState()
+	return s
+}
+
+// LoadFromPersistable initializes all persistable fields from a stored snapshot.
+// Does not modify StartTime.
+func (m *Metrics) LoadFromPersistable(s PersistableSnapshot) {
+	m.mu.Lock()
+	m.messagesStored = s.MessagesStored
+	m.summarizeOK = s.SummarizeOK
+	m.summarizeFail = s.SummarizeFail
+	m.rateLimitHits = s.RateLimitHits
+	m.errorCounts = make(map[string]int64, len(s.ErrorCounts))
+	for k, v := range s.ErrorCounts {
+		m.errorCounts[k] = v
+	}
+	// Restore error ring in insertion order.
+	n := len(s.RecentErrors)
+	if n > ringSize {
+		n = ringSize
+	}
+	for i := 0; i < n; i++ {
+		m.errorRing[i] = s.RecentErrors[i]
+	}
+	m.errorRingPos = n % ringSize
+	m.errorRingFilled = n
+	m.mu.Unlock()
+
+	m.TelegramSend.loadRawState(s.TelegramSend)
+	m.TelegramEdit.loadRawState(s.TelegramEdit)
+	m.LLMCluster.loadRawState(s.LLMCluster)
+	m.LLMSummarize.loadRawState(s.LLMSummarize)
+	m.DBAdd.loadRawState(s.DBAdd)
+	m.DBGet.loadRawState(s.DBGet)
 }
 
 // FormatStatusReport generates a human-readable status report in Russian.
@@ -347,7 +457,7 @@ func formatSnapshot(snap MetricsSnapshot) string {
 	if len(snap.RecentErrors) > 0 {
 		sb.WriteString("\n🚨 Последние ошибки:\n")
 		for _, e := range snap.RecentErrors {
-			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.ts.Format("15:04:05"), e.key, e.msg)
+			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.Ts.Format("15:04:05"), e.Key, e.Msg)
 		}
 	}
 

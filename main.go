@@ -86,5 +86,7 @@ func main() {
 		logger.Error().Err(err).Msg("Bot stopped with error")
 	}
 
+	tgBot.FlushMetrics()
+
 	logger.Info().Msg("Bot shutdown complete")
 }

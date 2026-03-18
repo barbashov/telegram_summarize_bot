@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -108,6 +109,23 @@ func (db *DB) migrate() error {
 			added_at DATETIME NOT NULL,
 			added_by INTEGER
 		)`,
+		`CREATE TABLE IF NOT EXISTS bot_metrics (
+			id              INTEGER PRIMARY KEY CHECK (id = 1),
+			messages_stored INTEGER NOT NULL DEFAULT 0,
+			summarize_ok    INTEGER NOT NULL DEFAULT 0,
+			summarize_fail  INTEGER NOT NULL DEFAULT 0,
+			rate_limit_hits INTEGER NOT NULL DEFAULT 0,
+			error_counts    TEXT    NOT NULL DEFAULT '{}',
+			latency_json    TEXT    NOT NULL DEFAULT '{}',
+			saved_at        DATETIME NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS bot_error_log (
+			id  INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts  DATETIME NOT NULL,
+			key TEXT     NOT NULL,
+			msg TEXT     NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_bot_error_log_ts ON bot_error_log(ts)`,
 	}
 
 	for _, q := range queries {
@@ -380,6 +398,124 @@ func (db *DB) GetAllowedGroupIDs(ctx context.Context) ([]int64, error) {
 		ids = append(ids, id)
 	}
 	return ids, rows.Err()
+}
+
+func (db *DB) SaveMetrics(ctx context.Context, s metrics.PersistableSnapshot) error {
+	ecJSON, err := json.Marshal(s.ErrorCounts)
+	if err != nil {
+		return fmt.Errorf("failed to marshal error counts: %w", err)
+	}
+
+	latencyMap := map[string]metrics.LatencyRawState{
+		"telegram_send": s.TelegramSend,
+		"telegram_edit": s.TelegramEdit,
+		"llm_cluster":   s.LLMCluster,
+		"llm_summarize": s.LLMSummarize,
+		"db_add":        s.DBAdd,
+		"db_get":        s.DBGet,
+	}
+	latencyJSON, err := json.Marshal(latencyMap)
+	if err != nil {
+		return fmt.Errorf("failed to marshal latency: %w", err)
+	}
+
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("failed to begin transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	_, err = tx.ExecContext(ctx,
+		`INSERT INTO bot_metrics (id, messages_stored, summarize_ok, summarize_fail, rate_limit_hits, error_counts, latency_json, saved_at)
+		 VALUES (1, ?, ?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(id) DO UPDATE SET
+		   messages_stored = excluded.messages_stored,
+		   summarize_ok    = excluded.summarize_ok,
+		   summarize_fail  = excluded.summarize_fail,
+		   rate_limit_hits = excluded.rate_limit_hits,
+		   error_counts    = excluded.error_counts,
+		   latency_json    = excluded.latency_json,
+		   saved_at        = excluded.saved_at`,
+		s.MessagesStored, s.SummarizeOK, s.SummarizeFail, s.RateLimitHits,
+		string(ecJSON), string(latencyJSON), time.Now(),
+	)
+	if err != nil {
+		return fmt.Errorf("failed to upsert bot_metrics: %w", err)
+	}
+
+	if _, err = tx.ExecContext(ctx, `DELETE FROM bot_error_log`); err != nil {
+		return fmt.Errorf("failed to delete bot_error_log: %w", err)
+	}
+
+	for _, e := range s.RecentErrors {
+		if _, err = tx.ExecContext(ctx,
+			`INSERT INTO bot_error_log (ts, key, msg) VALUES (?, ?, ?)`,
+			e.Ts, e.Key, e.Msg,
+		); err != nil {
+			return fmt.Errorf("failed to insert bot_error_log entry: %w", err)
+		}
+	}
+
+	return tx.Commit()
+}
+
+func (db *DB) LoadMetrics(ctx context.Context, retentionCutoff time.Time) (metrics.PersistableSnapshot, error) {
+	var s metrics.PersistableSnapshot
+	var ecJSON, latencyJSON string
+
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT messages_stored, summarize_ok, summarize_fail, rate_limit_hits, error_counts, latency_json
+		 FROM bot_metrics WHERE id = 1`,
+	).Scan(&s.MessagesStored, &s.SummarizeOK, &s.SummarizeFail, &s.RateLimitHits, &ecJSON, &latencyJSON)
+	if err == sql.ErrNoRows {
+		return metrics.PersistableSnapshot{}, nil
+	}
+	if err != nil {
+		return s, fmt.Errorf("failed to query bot_metrics: %w", err)
+	}
+
+	s.ErrorCounts = make(map[string]int64)
+	if err := json.Unmarshal([]byte(ecJSON), &s.ErrorCounts); err != nil {
+		return s, fmt.Errorf("failed to unmarshal error_counts: %w", err)
+	}
+
+	var lj struct {
+		TelegramSend metrics.LatencyRawState `json:"telegram_send"`
+		TelegramEdit metrics.LatencyRawState `json:"telegram_edit"`
+		LLMCluster   metrics.LatencyRawState `json:"llm_cluster"`
+		LLMSummarize metrics.LatencyRawState `json:"llm_summarize"`
+		DBAdd        metrics.LatencyRawState `json:"db_add"`
+		DBGet        metrics.LatencyRawState `json:"db_get"`
+	}
+	if err := json.Unmarshal([]byte(latencyJSON), &lj); err != nil {
+		return s, fmt.Errorf("failed to unmarshal latency_json: %w", err)
+	}
+	s.TelegramSend = lj.TelegramSend
+	s.TelegramEdit = lj.TelegramEdit
+	s.LLMCluster = lj.LLMCluster
+	s.LLMSummarize = lj.LLMSummarize
+	s.DBAdd = lj.DBAdd
+	s.DBGet = lj.DBGet
+
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT ts, key, msg FROM bot_error_log WHERE ts >= ? ORDER BY ts ASC`,
+		retentionCutoff,
+	)
+	if err != nil {
+		return s, fmt.Errorf("failed to query bot_error_log: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var e metrics.ErrorEntry
+		if err := rows.Scan(&e.Ts, &e.Key, &e.Msg); err != nil {
+			logger.Error().Err(err).Msg("failed to scan bot_error_log row")
+			continue
+		}
+		s.RecentErrors = append(s.RecentErrors, e)
+	}
+
+	return s, rows.Err()
 }
 
 func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {
