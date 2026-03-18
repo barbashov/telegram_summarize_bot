@@ -30,41 +30,6 @@ type Config struct {
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
-	summaryHours := 24
-	if v := os.Getenv("SUMMARY_HOURS"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			summaryHours = parsed
-		}
-	}
-
-	retentionDays := 7
-	if v := os.Getenv("RETENTION_DAYS"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			retentionDays = parsed
-		}
-	}
-
-	maxMessages := 250
-	if v := os.Getenv("MAX_MESSAGES"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			maxMessages = parsed
-		}
-	}
-
-	topicMax := 5
-	if v := os.Getenv("TOPIC_MAX"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			topicMax = parsed
-		}
-	}
-
-	rateLimitSec := 60
-	if v := os.Getenv("RATE_LIMIT_SEC"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			rateLimitSec = parsed
-		}
-	}
-
 	botToken := os.Getenv("BOT_TOKEN")
 	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
 	openRouterURL := os.Getenv("OPENROUTER_URL")
@@ -107,21 +72,14 @@ func Load() (*Config, error) {
 		replyThreads = false
 	}
 
-	urlMaxChars := 64000
-	if v := os.Getenv("URL_MAX_CHARS"); v != "" {
-		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
-			urlMaxChars = parsed
-		}
-	}
-
 	return &Config{
 		BotToken:         botToken,
 		OpenRouterKey:    openRouterKey,
-		SummaryHours:     summaryHours,
-		RetentionDays:    retentionDays,
-		MaxMessages:      maxMessages,
-		TopicMax:         topicMax,
-		RateLimitSec:     rateLimitSec,
+		SummaryHours:     envIntOr("SUMMARY_HOURS", 24),
+		RetentionDays:    envIntOr("RETENTION_DAYS", 7),
+		MaxMessages:      envIntOr("MAX_MESSAGES", 250),
+		TopicMax:         envIntOr("TOPIC_MAX", 5),
+		RateLimitSec:     envIntOr("RATE_LIMIT_SEC", 60),
 		OpenRouterURL:    openRouterURL,
 		Model:            model,
 		DBPath:           dbPath,
@@ -129,7 +87,7 @@ func Load() (*Config, error) {
 		AdminUserIDs:     adminUserIDs,
 		DailySummaryHour: dailySummaryHour,
 		ReplyThreads:     replyThreads,
-		URLMaxChars:      urlMaxChars,
+		URLMaxChars:      envIntOr("URL_MAX_CHARS", 64000),
 	}, nil
 }
 
@@ -156,6 +114,15 @@ func (c *Config) IsAdminUser(userID int64) bool {
 		}
 	}
 	return false
+}
+
+func envIntOr(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
+			return parsed
+		}
+	}
+	return def
 }
 
 func parseIDList(value string) []int64 {

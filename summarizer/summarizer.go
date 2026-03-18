@@ -436,10 +436,7 @@ func unmarshalJSONObject(content string, target interface{}) error {
 		return fmt.Errorf("model response does not contain a JSON object")
 	}
 
-	if err := json.Unmarshal([]byte(content[start:end+1]), target); err != nil {
-		return err
-	}
-	return nil
+	return json.Unmarshal([]byte(content[start:end+1]), target)
 }
 
 func firstChoiceContent(resp openai.ChatCompletionResponse) (string, error) {
@@ -449,12 +446,13 @@ func firstChoiceContent(resp openai.ChatCompletionResponse) (string, error) {
 	return strings.TrimSpace(resp.Choices[0].Message.Content), nil
 }
 
+var markdownReplacer = strings.NewReplacer(
+	"_", "\\_",
+	"*", "\\*",
+	"`", "\\`",
+	"[", "\\[",
+)
+
 func escapeMarkdown(text string) string {
-	replacer := strings.NewReplacer(
-		"_", "\\_",
-		"*", "\\*",
-		"`", "\\`",
-		"[", "\\[",
-	)
-	return replacer.Replace(strings.TrimSpace(text))
+	return markdownReplacer.Replace(strings.TrimSpace(text))
 }

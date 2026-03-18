@@ -180,8 +180,8 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 
 	text = strings.TrimSpace(text)
 
-	if len([]rune(text)) > maxChars {
-		text = string([]rune(text)[:maxChars])
+	if runes := []rune(text); len(runes) > maxChars {
+		text = string(runes[:maxChars])
 	}
 
 	if text == "" {

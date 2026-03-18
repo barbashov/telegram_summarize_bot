@@ -116,38 +116,27 @@ func (db *DB) migrate() error {
 		}
 	}
 
-	// Additive migration: add forwarded_from column to existing databases that predate it.
-	_, err := db.conn.Exec(`ALTER TABLE messages ADD COLUMN forwarded_from TEXT`)
-	if err != nil {
-		// SQLite returns an error when the column already exists; ignore it.
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("failed to migrate forwarded_from column: %w", err)
+	// Additive migrations: add columns that may not exist in older databases.
+	additiveMigrations := []struct{ table, column, colDef string }{
+		{"messages", "forwarded_from", "TEXT"},
+		{"known_groups", "username", "TEXT NOT NULL DEFAULT ''"},
+		{"messages", "tg_message_id", "INTEGER"},
+		{"messages", "reply_to_tg_id", "INTEGER"},
+	}
+	for _, m := range additiveMigrations {
+		if err := db.addColumnIfNotExists(m.table, m.column, m.colDef); err != nil {
+			return err
 		}
 	}
 
-	// Additive migration: add username column to known_groups.
-	_, err = db.conn.Exec(`ALTER TABLE known_groups ADD COLUMN username TEXT NOT NULL DEFAULT ''`)
-	if err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("failed to migrate username column: %w", err)
-		}
-	}
+	return nil
+}
 
-	// Additive migration: add tg_message_id and reply_to_tg_id columns for reply thread support.
-	_, err = db.conn.Exec(`ALTER TABLE messages ADD COLUMN tg_message_id INTEGER`)
-	if err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("failed to migrate tg_message_id column: %w", err)
-		}
+func (db *DB) addColumnIfNotExists(table, column, colDef string) error {
+	_, err := db.conn.Exec(fmt.Sprintf(`ALTER TABLE %s ADD COLUMN %s %s`, table, column, colDef))
+	if err != nil && !strings.Contains(err.Error(), "duplicate column name") {
+		return fmt.Errorf("failed to migrate %s.%s: %w", table, column, err)
 	}
-
-	_, err = db.conn.Exec(`ALTER TABLE messages ADD COLUMN reply_to_tg_id INTEGER`)
-	if err != nil {
-		if !strings.Contains(err.Error(), "duplicate column name") {
-			return fmt.Errorf("failed to migrate reply_to_tg_id column: %w", err)
-		}
-	}
-
 	return nil
 }
 
@@ -223,26 +212,6 @@ func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (
 		return 0, err
 	}
 	return rowsAffected, nil
-}
-
-func (db *DB) FormatMessagesForSummary(messages []Message) string {
-	var sb strings.Builder
-	for i, msg := range messages {
-		username := msg.Username
-		if username == "" {
-			username = fmt.Sprintf("User%d", msg.UserID)
-		}
-		timeStr := msg.Timestamp.Format("15:04")
-		if msg.ForwardedFrom != "" {
-			fmt.Fprintf(&sb, "[%s] %s (fwd: %s): %s\n", timeStr, username, msg.ForwardedFrom, msg.Text)
-		} else {
-			fmt.Fprintf(&sb, "[%s] %s: %s\n", timeStr, username, msg.Text)
-		}
-		if i > 0 && i%50 == 0 {
-			sb.WriteString("---\n")
-		}
-	}
-	return sb.String()
 }
 
 func (db *DB) GetLastSummarizeTime(ctx context.Context, groupID int64) (*time.Time, error) {
