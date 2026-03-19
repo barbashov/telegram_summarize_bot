@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -38,9 +39,10 @@ type TopicCluster struct {
 }
 
 type TopicSummary struct {
-	Title        string `json:"title"`
-	Summary      string `json:"summary"`
-	MessageCount int    `json:"message_count"`
+	Title              string `json:"title"`
+	Summary            string `json:"summary"`
+	MessageCount       int    `json:"message_count"`
+	FirstTgMessageID   int64  `json:"first_tg_message_id,omitempty"`
 }
 
 type StructuredSummary struct {
@@ -165,7 +167,7 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 		return nil, fmt.Errorf("failed to parse topic summary: %w", err)
 	}
 
-	return normalizeStructuredSummary(summary, clusters), nil
+	return normalizeStructuredSummary(summary, clusters, messages), nil
 }
 
 // SummarizeURL sends the extracted page text to the LLM for summarization.
@@ -204,7 +206,7 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content string) 
 	return text, nil
 }
 
-func FormatTelegramSummary(summary *StructuredSummary) string {
+func FormatTelegramSummary(summary *StructuredSummary, groupID int64) string {
 	if summary == nil {
 		return "📝 *Суммаризация:*\n\nНет данных для суммаризации."
 	}
@@ -218,9 +220,14 @@ func FormatTelegramSummary(summary *StructuredSummary) string {
 	}
 
 	for i, topic := range summary.Topics {
-		sb.WriteString("\n\n*")
-		fmt.Fprintf(&sb, "%d. %s", i+1, escapeMarkdown(topic.Title))
-		sb.WriteString("*\n")
+		sb.WriteString("\n\n")
+		link := telegramMsgLink(groupID, topic.FirstTgMessageID)
+		if link != "" {
+			fmt.Fprintf(&sb, "[*%d\\. %s*](%s)", i+1, escapeMarkdown(topic.Title), link)
+		} else {
+			fmt.Fprintf(&sb, "*%d. %s*", i+1, escapeMarkdown(topic.Title))
+		}
+		sb.WriteString("\n")
 		sb.WriteString(escapeMarkdown(topic.Summary))
 	}
 
@@ -229,6 +236,17 @@ func FormatTelegramSummary(summary *StructuredSummary) string {
 	}
 
 	return sb.String()
+}
+
+func telegramMsgLink(groupID, msgID int64) string {
+	if msgID == 0 || groupID >= 0 {
+		return ""
+	}
+	s := strconv.FormatInt(-groupID, 10)
+	if len(s) <= 3 || s[:3] != "100" {
+		return ""
+	}
+	return fmt.Sprintf("https://t.me/c/%s/%d", s[3:], msgID)
 }
 
 func (s *Summarizer) buildClusteringPrompt(messages []db.Message, topicMax int) string {
@@ -404,7 +422,7 @@ func sanitizeClusters(clusters []TopicCluster, messageCount, topicMax int) ([]To
 	return sanitized, nil
 }
 
-func normalizeStructuredSummary(summary StructuredSummary, clusters []TopicCluster) *StructuredSummary {
+func normalizeStructuredSummary(summary StructuredSummary, clusters []TopicCluster, messages []db.Message) *StructuredSummary {
 	result := &StructuredSummary{
 		TLDR: strings.TrimSpace(summary.TLDR),
 	}
@@ -421,6 +439,12 @@ func normalizeStructuredSummary(summary StructuredSummary, clusters []TopicClust
 			topic.Summary = strings.TrimSpace(summary.Topics[i].Summary)
 			if summary.Topics[i].MessageCount > 0 {
 				topic.MessageCount = summary.Topics[i].MessageCount
+			}
+		}
+		for _, idx := range cluster.MessageIndexes {
+			if idx >= 0 && idx < len(messages) && messages[idx].TgMessageID != 0 {
+				topic.FirstTgMessageID = messages[idx].TgMessageID
+				break
 			}
 		}
 		result.Topics = append(result.Topics, topic)

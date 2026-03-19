@@ -805,7 +805,7 @@ func (b *Bot) editMessage(chatID, messageID int64, text string) error {
 }
 
 func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
-	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary), telegramMessageLimit)
+	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, chatID), telegramMessageLimit)
 	if len(chunks) == 0 {
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации."}
 	}
@@ -1020,7 +1020,7 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
 	b.metrics.IncSummarizeOK()
 
 	preamble := "🌅 *Утренняя сводка за последние 24 часа:*"
-	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary), telegramMessageLimit)
+	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, groupID), telegramMessageLimit)
 	if len(chunks) == 0 {
 		return
 	}

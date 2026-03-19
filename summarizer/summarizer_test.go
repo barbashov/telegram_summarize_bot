@@ -274,7 +274,7 @@ func TestFormatTelegramSummaryEscapesMarkdown(t *testing.T) {
 				Summary: "Нужен *фикс* сегодня.",
 			},
 		},
-	})
+	}, 0)
 
 	if !strings.Contains(formatted, "*TL;DR:* Итог\\_1") {
 		t.Fatalf("formatted TLDR missing escape: %q", formatted)
@@ -284,5 +284,52 @@ func TestFormatTelegramSummaryEscapesMarkdown(t *testing.T) {
 	}
 	if !strings.Contains(formatted, "Нужен \\*фикс\\* сегодня.") {
 		t.Fatalf("formatted summary missing escape: %q", formatted)
+	}
+}
+
+func TestTelegramMsgLink(t *testing.T) {
+	tests := []struct {
+		groupID int64
+		msgID   int64
+		want    string
+	}{
+		{-1001234567890, 42, "https://t.me/c/1234567890/42"},
+		{0, 42, ""},
+		{123, 42, ""},
+		{-1001234567890, 0, ""},
+		{-999999, 42, ""},
+	}
+	for _, tc := range tests {
+		got := telegramMsgLink(tc.groupID, tc.msgID)
+		if got != tc.want {
+			t.Errorf("telegramMsgLink(%d, %d) = %q, want %q", tc.groupID, tc.msgID, got, tc.want)
+		}
+	}
+}
+
+func TestFormatTelegramSummaryWithLink(t *testing.T) {
+	summary := &StructuredSummary{
+		Topics: []TopicSummary{
+			{Title: "Тема", Summary: "Итог", FirstTgMessageID: 99},
+		},
+	}
+	formatted := FormatTelegramSummary(summary, -1001234567890)
+	if !strings.Contains(formatted, "https://t.me/c/1234567890/99") {
+		t.Fatalf("expected telegram link in formatted output, got: %q", formatted)
+	}
+}
+
+func TestFormatTelegramSummaryNoLinkWhenMsgIDZero(t *testing.T) {
+	summary := &StructuredSummary{
+		Topics: []TopicSummary{
+			{Title: "Тема", Summary: "Итог", FirstTgMessageID: 0},
+		},
+	}
+	formatted := FormatTelegramSummary(summary, -1001234567890)
+	if strings.Contains(formatted, "t.me") {
+		t.Fatalf("unexpected link when FirstTgMessageID=0, got: %q", formatted)
+	}
+	if !strings.Contains(formatted, "*1. Тема*") {
+		t.Fatalf("expected plain bold title, got: %q", formatted)
 	}
 }
