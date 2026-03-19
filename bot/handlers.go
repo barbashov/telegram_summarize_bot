@@ -395,7 +395,7 @@ func (b *Bot) handleHelp(update telego.Update) {
 	}
 
 	helpText := "📖 *Доступные команды:*\n\n" +
-		"• `summarize [часы]` (или `s`, `sub`) — суммировать сообщения за последние N часов (по умолчанию 24)\n" +
+		"• `summarize [часы]` \\(или `s`, `sub`\\) — суммировать сообщения за последние N часов \\(по умолчанию 24\\)\n" +
 		"• `schedule` — показать расписание ежедневной сводки\n" +
 		"• `help` — показать это сообщение\n\n" +
 		"_Примеры: @bot summarize, @bot summarize 12_"
@@ -408,7 +408,7 @@ func (b *Bot) handleHelp(update telego.Update) {
 			"_Пример: @bot schedule 08:00_"
 	}
 
-	b.sendMessage(msg.Chat.ID, helpText)
+	b.sendFormatted(msg.Chat.ID, helpText)
 }
 
 func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
@@ -520,9 +520,9 @@ func (b *Bot) handleURLSummarize(ctx context.Context, chatID int64, rawURL strin
 	if len(chunks) == 0 {
 		return
 	}
-	b.editOrSend(chatID, statusMsgID, chunks[0])
+	b.editOrSendFormatted(chatID, statusMsgID, chunks[0])
 	for _, chunk := range chunks[1:] {
-		b.sendMessage(chatID, chunk)
+		b.sendFormatted(chatID, chunk)
 	}
 }
 
@@ -540,7 +540,7 @@ func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, arg
 	switch subCmd {
 	case "add":
 		if len(args) < 2 {
-			b.sendMessage(chatID, "Использование: `/groups add <group_id>`")
+			b.sendFormatted(chatID, "Использование: `/groups add <group_id>`")
 			return
 		}
 		groupID, err := strconv.ParseInt(args[1], 10, 64)
@@ -569,7 +569,7 @@ func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, arg
 		b.sendMessage(chatID, fmt.Sprintf("✅ %s добавлена.", title))
 	case "remove":
 		if len(args) < 2 {
-			b.sendMessage(chatID, "Использование: `/groups remove <group_id>`")
+			b.sendFormatted(chatID, "Использование: `/groups remove <group_id>`")
 			return
 		}
 		groupID, err := strconv.ParseInt(args[1], 10, 64)
@@ -602,7 +602,7 @@ func (b *Bot) handlePrivateGroups(ctx context.Context, update telego.Update, arg
 		}
 		b.sendMessage(chatID, fmt.Sprintf("❌ %s удалена.", found.Title))
 	default:
-		b.sendMessage(chatID, "Неизвестная подкоманда. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
+		b.sendFormatted(chatID, "Неизвестная подкоманда\\. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
 	}
 }
 
@@ -625,20 +625,21 @@ func (b *Bot) sendPrivateGroupsList(ctx context.Context, chatID int64) {
 		if g.Allowed {
 			status = "✅"
 		}
-		title := g.Title
+		escapedTitle := summarizer.EscapeMarkdown(g.Title)
+		title := escapedTitle
 		if g.Username != "" {
-			title = fmt.Sprintf("[%s](https://t.me/%s)", g.Title, g.Username)
+			title = fmt.Sprintf("[%s](https://t.me/%s)", escapedTitle, g.Username)
 		} else if g.GroupID < 0 {
 			// Supergroup/channel: strip the -100 prefix for the t.me/c/ link
 			chatID := (-g.GroupID) - 1_000_000_000_000
 			if chatID > 0 {
-				title = fmt.Sprintf("[%s](https://t.me/c/%d)", g.Title, chatID)
+				title = fmt.Sprintf("[%s](https://t.me/c/%d)", escapedTitle, chatID)
 			}
 		}
-		fmt.Fprintf(&sb, "%s %s (%d)\n", status, title, g.GroupID)
+		fmt.Fprintf(&sb, "%s %s \\(%s\\)\n", status, title, summarizer.EscapeMarkdown(fmt.Sprintf("%d", g.GroupID)))
 	}
 	sb.WriteString("\nДля управления:\n• `/groups add <group_id>`\n• `/groups remove <group_id>`")
-	b.sendMessage(chatID, sb.String())
+	b.sendFormatted(chatID, sb.String())
 }
 
 func (b *Bot) handlePrivateAdminHelp(chatID int64) {
@@ -648,8 +649,8 @@ func (b *Bot) handlePrivateAdminHelp(chatID int64) {
 		"`/groups` — список разрешённых групп\n" +
 		"`/groups add <group_id>` — добавить группу\n" +
 		"`/groups remove <group_id>` — удалить группу\n\n" +
-		"*Суммаризация URL:*\nОтправьте ссылку — бот загрузит страницу и вернёт краткое содержание."
-	b.sendMessage(chatID, helpText)
+		"*Суммаризация URL:*\nОтправьте ссылку — бот загрузит страницу и вернёт краткое содержание\\."
+	b.sendFormatted(chatID, helpText)
 }
 
 func (b *Bot) handlePrivateChatInfo(update telego.Update) {
@@ -658,10 +659,10 @@ func (b *Bot) handlePrivateChatInfo(update telego.Update) {
 		return
 	}
 
-	privateInfoText := "Я работаю только в группах и полезен для суммаризации групповых обсуждений.\n\n" +
-		"Добавьте меня в группу и используйте `@" + b.username + " summarize`."
+	privateInfoText := "Я работаю только в группах и полезен для суммаризации групповых обсуждений\\.\n\n" +
+		"Добавьте меня в группу и используйте `@" + b.username + " summarize`\\."
 
-	b.sendMessage(msg.Chat.ID, privateInfoText)
+	b.sendFormatted(msg.Chat.ID, privateInfoText)
 }
 
 func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {
@@ -779,7 +780,7 @@ func (b *Bot) sendMessage(chatID int64, text string) int64 {
 	msg, err := b.telegram.SendMessage(tu.Message(
 		tu.ID(chatID),
 		text,
-	).WithParseMode("Markdown"))
+	))
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send message")
 		b.metrics.RecordError("telegram_send", err.Error())
@@ -800,7 +801,6 @@ func (b *Bot) editMessage(chatID, messageID int64, text string) error {
 		ChatID:    tu.ID(chatID),
 		MessageID: int(messageID),
 		Text:      text,
-		ParseMode: "Markdown",
 	})
 	if err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit message")
@@ -809,15 +809,48 @@ func (b *Bot) editMessage(chatID, messageID int64, text string) error {
 	return err
 }
 
+func (b *Bot) sendFormatted(chatID int64, text string) {
+	defer b.metrics.TelegramSend.Start()()
+	_, err := b.telegram.SendMessage(tu.Message(
+		tu.ID(chatID),
+		text,
+	).WithParseMode("MarkdownV2"))
+	if err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send formatted message")
+		b.metrics.RecordError("telegram_send", err.Error())
+	}
+}
+
+func (b *Bot) editFormatted(chatID, messageID int64, text string) error {
+	defer b.metrics.TelegramEdit.Start()()
+	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
+		ChatID:    tu.ID(chatID),
+		MessageID: int(messageID),
+		Text:      text,
+		ParseMode: "MarkdownV2",
+	})
+	if err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Int64("message_id", messageID).Msg("failed to edit formatted message")
+		b.metrics.RecordError("telegram_edit", err.Error())
+	}
+	return err
+}
+
+func (b *Bot) editOrSendFormatted(chatID, msgID int64, text string) {
+	if editErr := b.editFormatted(chatID, msgID, text); editErr != nil {
+		b.sendFormatted(chatID, text)
+	}
+}
+
 func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, chatID), telegramMessageLimit)
 	if len(chunks) == 0 {
-		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации."}
+		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации\\."}
 	}
 
-	b.editOrSend(chatID, statusMsgID, chunks[0])
+	b.editOrSendFormatted(chatID, statusMsgID, chunks[0])
 	for _, chunk := range chunks[1:] {
-		b.sendMessage(chatID, chunk)
+		b.sendFormatted(chatID, chunk)
 	}
 }
 
@@ -900,9 +933,9 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 			return
 		}
 		if s == nil || !s.Enabled {
-			b.sendMessage(groupID, "⏰ Ежедневная сводка *отключена*.")
+			b.sendFormatted(groupID, "⏰ Ежедневная сводка *отключена*\\.")
 		} else {
-			b.sendMessage(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+			b.sendFormatted(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
 		}
 		return
 	}
@@ -921,13 +954,13 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 	if arg != "on" && arg != "off" {
 		parts := strings.SplitN(arg, ":", 2)
 		if len(parts) != 2 {
-			b.sendMessage(groupID, "Неверный формат. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`.")
+			b.sendFormatted(groupID, "Неверный формат\\. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`\\.")
 			return
 		}
 		h, err1 := strconv.Atoi(parts[0])
 		m, err2 := strconv.Atoi(parts[1])
 		if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
-			b.sendMessage(groupID, "Неверное время. Используйте формат ЧЧ:ММ, например `07:00`.")
+			b.sendFormatted(groupID, "Неверное время\\. Используйте формат ЧЧ:ММ, например `07:00`\\.")
 			return
 		}
 		parsedHour, parsedMinute, isTime = h, m, true
@@ -963,9 +996,9 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 	}
 
 	if s.Enabled {
-		b.sendMessage(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*.", s.Hour, s.Minute))
+		b.sendFormatted(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
 	} else {
-		b.sendMessage(groupID, "⏰ Ежедневная сводка *отключена*.")
+		b.sendFormatted(groupID, "⏰ Ежедневная сводка *отключена*\\.")
 	}
 }
 
@@ -1026,9 +1059,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if len(chunks) == 0 {
 		return
 	}
-	b.sendMessage(groupID, preamble+"\n\n"+chunks[0])
+	b.sendFormatted(groupID, preamble+"\n\n"+chunks[0])
 	for _, chunk := range chunks[1:] {
-		b.sendMessage(groupID, chunk)
+		b.sendFormatted(groupID, chunk)
 	}
 
 	if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {

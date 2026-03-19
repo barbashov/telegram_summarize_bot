@@ -47,16 +47,17 @@ docker-compose down
 
 ### Development
 
+> **Note**: Never run the bot locally for testing — the production instance shares the same Telegram bot token and a second process would conflict with it.
+
 ```bash
 # Lint
-docker run --rm -v $(pwd):/app -w /app golangci/golangci-lint:v2.11.3 golangci-lint run
-go vet ./...
+make lint
 
 # Test
-go test ./...
+make test
 
 # Format code
-go fmt ./...
+make fmt
 ```
 
 ## Bot Setup in Telegram

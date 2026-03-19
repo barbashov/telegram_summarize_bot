@@ -160,7 +160,7 @@ func TestHandleSummarizeUpdatesLastSummarizeOnSuccess(t *testing.T) {
 	if len(tg.editTexts) != 1 {
 		t.Fatalf("edit count = %d, want 1", len(tg.editTexts))
 	}
-	if !strings.Contains(tg.editTexts[0], "Обсудили релиз.") {
+	if !strings.Contains(tg.editTexts[0], "Обсудили релиз\\.") {
 		t.Fatalf("unexpected edited summary: %q", tg.editTexts[0])
 	}
 

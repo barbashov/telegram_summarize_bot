@@ -208,7 +208,7 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content string) 
 
 func FormatTelegramSummary(summary *StructuredSummary, groupID int64) string {
 	if summary == nil {
-		return "📝 *Суммаризация:*\n\nНет данных для суммаризации."
+		return "📝 *Суммаризация:*\n\nНет данных для суммаризации\\."
 	}
 
 	var sb strings.Builder
@@ -225,14 +225,14 @@ func FormatTelegramSummary(summary *StructuredSummary, groupID int64) string {
 		if link != "" {
 			fmt.Fprintf(&sb, "[*%d\\. %s*](%s)", i+1, escapeMarkdown(topic.Title), link)
 		} else {
-			fmt.Fprintf(&sb, "*%d. %s*", i+1, escapeMarkdown(topic.Title))
+			fmt.Fprintf(&sb, "*%d\\. %s*", i+1, escapeMarkdown(topic.Title))
 		}
 		sb.WriteString("\n")
 		sb.WriteString(escapeMarkdown(topic.Summary))
 	}
 
 	if len(summary.Topics) == 0 && strings.TrimSpace(summary.TLDR) == "" {
-		sb.WriteString("\n\nНет данных для суммаризации.")
+		sb.WriteString("\n\nНет данных для суммаризации\\.")
 	}
 
 	return sb.String()
@@ -471,10 +471,12 @@ func firstChoiceContent(resp openai.ChatCompletionResponse) (string, error) {
 }
 
 var markdownReplacer = strings.NewReplacer(
-	"_", "\\_",
-	"*", "\\*",
-	"`", "\\`",
-	"[", "\\[",
+	"\\", "\\\\",
+	"_", "\\_", "*", "\\*", "[", "\\[", "]", "\\]",
+	"(", "\\(", ")", "\\)", "~", "\\~", "`", "\\`",
+	">", "\\>", "#", "\\#", "+", "\\+", "-", "\\-",
+	"=", "\\=", "|", "\\|", "{", "\\{", "}", "\\}",
+	".", "\\.", "!", "\\!",
 )
 
 func EscapeMarkdown(text string) string {

@@ -279,10 +279,10 @@ func TestFormatTelegramSummaryEscapesMarkdown(t *testing.T) {
 	if !strings.Contains(formatted, "*TL;DR:* Итог\\_1") {
 		t.Fatalf("formatted TLDR missing escape: %q", formatted)
 	}
-	if !strings.Contains(formatted, "*1. Релиз\\_\\[v1]*") {
+	if !strings.Contains(formatted, "*1\\. Релиз\\_\\[v1\\]*") {
 		t.Fatalf("formatted title missing escape: %q", formatted)
 	}
-	if !strings.Contains(formatted, "Нужен \\*фикс\\* сегодня.") {
+	if !strings.Contains(formatted, "Нужен \\*фикс\\* сегодня\\.") {
 		t.Fatalf("formatted summary missing escape: %q", formatted)
 	}
 }
@@ -329,7 +329,7 @@ func TestFormatTelegramSummaryNoLinkWhenMsgIDZero(t *testing.T) {
 	if strings.Contains(formatted, "t.me") {
 		t.Fatalf("unexpected link when FirstTgMessageID=0, got: %q", formatted)
 	}
-	if !strings.Contains(formatted, "*1. Тема*") {
+	if !strings.Contains(formatted, "*1\\. Тема*") {
 		t.Fatalf("expected plain bold title, got: %q", formatted)
 	}
 }
