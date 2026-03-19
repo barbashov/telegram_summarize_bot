@@ -21,7 +21,7 @@ func NewRateLimiter(limitSeconds int) *RateLimiter {
 	}
 }
 
-func (r *RateLimiter) Allow(userID, groupID int64) bool {
+func (r *RateLimiter) Allow(groupID int64) bool {
 	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -31,7 +31,6 @@ func (r *RateLimiter) Allow(userID, groupID int64) bool {
 		if now.Sub(lastTime) < r.limit {
 			remaining := r.limit - now.Sub(lastTime)
 			logger.Info().
-				Int64("user_id", userID).
 				Int64("group_id", groupID).
 				Dur("remaining", remaining).
 				Msg("rate limited")

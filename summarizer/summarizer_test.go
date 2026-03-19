@@ -127,10 +127,10 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 
 	t.Run("parent annotation included", func(t *testing.T) {
-		parent := db.Message{Username: "alice", Text: "hello", Timestamp: ts}
-		msg := db.Message{Username: "bob", Text: "world", Timestamp: ts}
+		parent := db.Message{UserHash: "a3f2b1c4", Text: "hello", Timestamp: ts}
+		msg := db.Message{UserHash: "deadbeef", Text: "world", Timestamp: ts}
 		out := formatMessage(msg, &parent)
-		if !strings.Contains(out, "↩ alice") {
+		if !strings.Contains(out, "↩ a3f2b1c4") {
 			t.Fatalf("expected reply annotation, got: %q", out)
 		}
 		if !strings.Contains(out, `"hello"`) {
@@ -138,19 +138,19 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		}
 	})
 
-	t.Run("parent without username falls back to UserID", func(t *testing.T) {
-		parent := db.Message{UserID: 42, Text: "hi", Timestamp: ts}
-		msg := db.Message{Username: "bob", Text: "yo", Timestamp: ts}
+	t.Run("empty hash falls back to anon", func(t *testing.T) {
+		parent := db.Message{UserHash: "", Text: "hi", Timestamp: ts}
+		msg := db.Message{UserHash: "deadbeef", Text: "yo", Timestamp: ts}
 		out := formatMessage(msg, &parent)
-		if !strings.Contains(out, "↩ User42") {
-			t.Fatalf("expected fallback username, got: %q", out)
+		if !strings.Contains(out, "↩ anon") {
+			t.Fatalf("expected anon fallback, got: %q", out)
 		}
 	})
 
 	t.Run("parent text truncated at 60 runes", func(t *testing.T) {
 		longText := strings.Repeat("а", 70)
-		parent := db.Message{Username: "alice", Text: longText, Timestamp: ts}
-		msg := db.Message{Username: "bob", Text: "reply", Timestamp: ts}
+		parent := db.Message{UserHash: "a3f2b1c4", Text: longText, Timestamp: ts}
+		msg := db.Message{UserHash: "deadbeef", Text: "reply", Timestamp: ts}
 		out := formatMessage(msg, &parent)
 		if !strings.Contains(out, "…") {
 			t.Fatalf("expected truncation ellipsis, got: %q", out)
@@ -158,8 +158,8 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	})
 
 	t.Run("forwarded wins over parent", func(t *testing.T) {
-		parent := db.Message{Username: "alice", Text: "original", Timestamp: ts}
-		msg := db.Message{Username: "bob", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
+		parent := db.Message{UserHash: "a3f2b1c4", Text: "original", Timestamp: ts}
+		msg := db.Message{UserHash: "deadbeef", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
 		out := formatMessage(msg, &parent)
 		if !strings.Contains(out, "fwd: channel") {
 			t.Fatalf("expected fwd annotation, got: %q", out)
@@ -173,8 +173,8 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 func TestFormatIndexedMessages_ReplyThreadsEnabled(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 	messages := []db.Message{
-		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
-		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
 	out := s.formatIndexedMessages(messages)
@@ -186,8 +186,8 @@ func TestFormatIndexedMessages_ReplyThreadsEnabled(t *testing.T) {
 func TestFormatIndexedMessages_ReplyThreadsDisabled(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 	messages := []db.Message{
-		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
-		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)
 	out := s.formatIndexedMessages(messages)
@@ -199,8 +199,8 @@ func TestFormatIndexedMessages_ReplyThreadsDisabled(t *testing.T) {
 func TestFormatClustersForPrompt_ReplyThreadsEnabled(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 	messages := []db.Message{
-		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
-		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
 	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
@@ -213,8 +213,8 @@ func TestFormatClustersForPrompt_ReplyThreadsEnabled(t *testing.T) {
 func TestFormatClustersForPrompt_ReplyThreadsDisabled(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 	messages := []db.Message{
-		{TgMessageID: 1, Username: "alice", Text: "first", Timestamp: ts},
-		{TgMessageID: 2, ReplyToTgID: 1, Username: "bob", Text: "reply to first", Timestamp: ts},
+		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
+		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
 	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)

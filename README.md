@@ -11,7 +11,8 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
-- Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ author: "quoted text"` (configurable via `REPLY_THREADS`)
+- Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ a3f2b1c4: "quoted text"` (configurable via `REPLY_THREADS`)
+- **Privacy-preserving storage** — no Telegram user IDs or usernames are stored; messages are attributed with an 8-char anonymous hash (HMAC-SHA256, group-scoped, non-reversible)
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)

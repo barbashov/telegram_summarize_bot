@@ -2,7 +2,12 @@ package db
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -24,13 +29,56 @@ type DB struct {
 type Message struct {
 	ID            int64
 	GroupID       int64
-	UserID        int64
-	Username      string
+	UserHash      string // 8-char HMAC-SHA256 hex digest; stable per user+group, non-reversible
 	Text          string
 	Timestamp     time.Time
 	ForwardedFrom string // original author name when message was forwarded; empty otherwise
 	TgMessageID   int64  // Telegram's native message_id; 0 = unknown
 	ReplyToTgID   int64  // Telegram message_id of parent; 0 = not a reply
+}
+
+// UserHash returns an 8-char hex string derived from HMAC-SHA256(userID‖groupID, salt).
+// It is stable across restarts (salt is persisted), non-reversible, and group-scoped.
+func UserHash(userID, groupID int64, salt []byte) string {
+	mac := hmac.New(sha256.New, salt)
+	_ = binary.Write(mac, binary.LittleEndian, userID)
+	_ = binary.Write(mac, binary.LittleEndian, groupID)
+	return hex.EncodeToString(mac.Sum(nil))[:8]
+}
+
+// GetUserHashSalt loads the HMAC salt from bot_config, generating and persisting one on first call.
+func (db *DB) GetUserHashSalt(ctx context.Context) ([]byte, error) {
+	hexSalt, err := db.getOrCreateConfig(ctx, "user_hash_salt", func() string {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			panic("crypto/rand unavailable: " + err.Error())
+		}
+		return hex.EncodeToString(b)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return hex.DecodeString(hexSalt)
+}
+
+func (db *DB) getOrCreateConfig(ctx context.Context, key string, defaultFn func() string) (string, error) {
+	var val string
+	err := db.conn.QueryRowContext(ctx, `SELECT value FROM bot_config WHERE key = ?`, key).Scan(&val)
+	if err == nil {
+		return val, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", fmt.Errorf("failed to query bot_config %q: %w", key, err)
+	}
+	val = defaultFn()
+	if _, err := db.conn.ExecContext(ctx, `INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)`, key, val); err != nil {
+		return "", fmt.Errorf("failed to insert bot_config %q: %w", key, err)
+	}
+	// Re-read in case another writer raced us.
+	if err := db.conn.QueryRowContext(ctx, `SELECT value FROM bot_config WHERE key = ?`, key).Scan(&val); err != nil {
+		return "", fmt.Errorf("failed to re-read bot_config %q: %w", key, err)
+	}
+	return val, nil
 }
 
 type KnownGroup struct {
@@ -79,8 +127,7 @@ func (db *DB) migrate() error {
 		`CREATE TABLE IF NOT EXISTS messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			group_id INTEGER NOT NULL,
-			user_id INTEGER NOT NULL,
-			username TEXT,
+			user_hash TEXT NOT NULL DEFAULT '',
 			text TEXT NOT NULL,
 			timestamp DATETIME NOT NULL,
 			forwarded_from TEXT,
@@ -126,6 +173,10 @@ func (db *DB) migrate() error {
 			msg TEXT     NOT NULL
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_bot_error_log_ts ON bot_error_log(ts)`,
+		`CREATE TABLE IF NOT EXISTS bot_config (
+			key   TEXT PRIMARY KEY,
+			value TEXT NOT NULL
+		)`,
 	}
 
 	for _, q := range queries {
@@ -147,6 +198,16 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	// PII removal: drop user_id and username, add user_hash.
+	for _, col := range []string{"user_id", "username"} {
+		if err := db.dropColumnIfExists("messages", col); err != nil {
+			return err
+		}
+	}
+	if err := db.addColumnIfNotExists("messages", "user_hash", "TEXT NOT NULL DEFAULT ''"); err != nil {
+		return err
+	}
+
 	return nil
 }
 
@@ -156,6 +217,36 @@ func (db *DB) addColumnIfNotExists(table, column, colDef string) error {
 		return fmt.Errorf("failed to migrate %s.%s: %w", table, column, err)
 	}
 	return nil
+}
+
+func (db *DB) dropColumnIfExists(table, column string) error {
+	rows, err := db.conn.Query(fmt.Sprintf(`PRAGMA table_info(%s)`, table))
+	if err != nil {
+		return fmt.Errorf("failed to query table_info(%s): %w", table, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	exists := false
+	for rows.Next() {
+		var cid, notNull, pk int
+		var name, colType string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			return err
+		}
+		if name == column {
+			exists = true
+			break
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if !exists {
+		return nil
+	}
+	_, err = db.conn.Exec(fmt.Sprintf(`ALTER TABLE %s DROP COLUMN %s`, table, column))
+	return err
 }
 
 func nullableInt64(v int64) sql.NullInt64 {
@@ -176,8 +267,8 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 
 	defer db.metrics.DBAdd.Start()()
 	_, err := db.conn.ExecContext(ctx,
-		`INSERT OR IGNORE INTO messages (group_id, user_id, username, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		msg.GroupID, msg.UserID, msg.Username, msg.Text, msg.Timestamp, msg.ForwardedFrom,
+		`INSERT OR IGNORE INTO messages (group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		msg.GroupID, msg.UserHash, msg.Text, msg.Timestamp, msg.ForwardedFrom,
 		nullableInt64(msg.TgMessageID), nullableInt64(msg.ReplyToTgID),
 	)
 	return err
@@ -186,7 +277,7 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
 	defer db.metrics.DBGet.Start()()
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT id, group_id, user_id, username, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
+		`SELECT id, group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
 		 FROM messages
 		 WHERE group_id = ? AND timestamp > ?
 		 ORDER BY timestamp ASC
@@ -203,7 +294,7 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 		var msg Message
 		var forwardedFrom sql.NullString
 		var tgMessageID, replyToTgID sql.NullInt64
-		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserID, &msg.Username, &msg.Text, &msg.Timestamp, &forwardedFrom, &tgMessageID, &replyToTgID); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserHash, &msg.Text, &msg.Timestamp, &forwardedFrom, &tgMessageID, &replyToTgID); err != nil {
 			logger.Error().Err(err).Msg("failed to scan message")
 			continue
 		}

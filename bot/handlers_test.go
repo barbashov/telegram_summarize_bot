@@ -95,8 +95,9 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 			MaxMessages:  250,
 			TopicMax:     5,
 		},
-		username: "testbot",
-		metrics:  metrics.New(),
+		username:     "testbot",
+		metrics:      metrics.New(),
+		userHashSalt: []byte("testsalt"),
 	}
 
 	return b, database, tg
@@ -140,8 +141,7 @@ func TestHandleSummarizeUpdatesLastSummarizeOnSuccess(t *testing.T) {
 
 	err := database.AddMessage(context.Background(), &db.Message{
 		GroupID:   42,
-		UserID:    7,
-		Username:  "alice",
+		UserHash:  "a3f2b1c4",
 		Text:      "Надо катить сегодня",
 		Timestamp: time.Now().Add(-time.Hour),
 	})
@@ -180,8 +180,7 @@ func TestHandleSummarizeDoesNotUpdateLastSummarizeOnFailure(t *testing.T) {
 
 	err := database.AddMessage(context.Background(), &db.Message{
 		GroupID:   42,
-		UserID:    7,
-		Username:  "alice",
+		UserHash:  "a3f2b1c4",
 		Text:      "Надо катить сегодня",
 		Timestamp: time.Now().Add(-time.Hour),
 	})

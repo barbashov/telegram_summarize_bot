@@ -45,13 +45,14 @@ func formatDuration(d time.Duration) string {
 }
 
 type Bot struct {
-	telegram    telegramClient
-	db          *db.DB
-	summarizer  summaryService
-	rateLimiter *RateLimiter
-	cfg         *config.Config
-	username    string
-	metrics     *metrics.Metrics
+	telegram     telegramClient
+	db           *db.DB
+	summarizer   summaryService
+	rateLimiter  *RateLimiter
+	cfg          *config.Config
+	username     string
+	metrics      *metrics.Metrics
+	userHashSalt []byte
 }
 
 func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
@@ -81,6 +82,12 @@ func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *
 
 func (b *Bot) Start(ctx context.Context) error {
 	logger.Info().Msg("Starting Telegram bot with polling...")
+
+	salt, err := b.db.GetUserHashSalt(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to load user hash salt: %w", err)
+	}
+	b.userHashSalt = salt
 
 	u := &telego.GetUpdatesParams{
 		Offset:  0,
@@ -250,7 +257,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	groupID := msg.Chat.ID
-	userID := msg.From.ID
 	text := msg.Text
 	tgMessageID := int64(msg.MessageID)
 
@@ -261,7 +267,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 
 	logger.Debug().
 		Int64("group_id", groupID).
-		Int64("user_id", userID).
 		Str("text", text).
 		Msg("Received message")
 
@@ -284,7 +289,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		if !allowed {
 			logger.Warn().
 				Int64("group_id", groupID).
-				Int64("user_id", userID).
 				Str("chat_type", msg.Chat.Type).
 				Msg("ignoring message from non-allowed group")
 			return
@@ -297,8 +301,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		forwardedFrom := originUsername(msg.ForwardOrigin)
 		if err := b.db.AddMessage(ctx, &db.Message{
 			GroupID:       groupID,
-			UserID:        userID,
-			Username:      msg.From.Username,
+			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 			Text:          text,
 			Timestamp:     time.Now(),
 			ForwardedFrom: forwardedFrom,
@@ -325,8 +328,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 
 	if err := b.db.AddMessage(ctx, &db.Message{
 		GroupID:     groupID,
-		UserID:      userID,
-		Username:    msg.From.Username,
+		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 		Text:        text,
 		Timestamp:   time.Now(),
 		TgMessageID: tgMessageID,
@@ -453,7 +455,7 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 		if isAdmin {
 			// Check if the message contains a URL to summarize.
 			if u := extractURL(msg.Text, msg.Entities); u != "" {
-				b.handleURLSummarize(ctx, msg.Chat.ID, msg.From.ID, u)
+				b.handleURLSummarize(ctx, msg.Chat.ID, u)
 				return
 			}
 			b.handlePrivateAdminHelp(msg.Chat.ID)
@@ -480,8 +482,8 @@ func extractURL(text string, entities []telego.MessageEntity) string {
 	return ""
 }
 
-func (b *Bot) handleURLSummarize(ctx context.Context, chatID, userID int64, rawURL string) {
-	if !b.rateLimiter.Allow(userID, chatID) {
+func (b *Bot) handleURLSummarize(ctx context.Context, chatID int64, rawURL string) {
+	if !b.rateLimiter.Allow(chatID) {
 		b.metrics.IncRateLimitHit()
 		remaining := b.rateLimiter.RemainingTime(chatID)
 		b.sendMessage(chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
@@ -691,7 +693,6 @@ func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEn
 func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []string) {
 	msg := update.Message
 	groupID := msg.Chat.ID
-	userID := msg.From.ID
 
 	hours := b.cfg.SummaryHours
 	if len(args) > 0 {
@@ -733,7 +734,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		return
 	}
 
-	if !b.rateLimiter.Allow(userID, groupID) {
+	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.IncRateLimitHit()
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessage(groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")

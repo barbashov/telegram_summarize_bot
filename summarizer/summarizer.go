@@ -39,10 +39,10 @@ type TopicCluster struct {
 }
 
 type TopicSummary struct {
-	Title              string `json:"title"`
-	Summary            string `json:"summary"`
-	MessageCount       int    `json:"message_count"`
-	FirstTgMessageID   int64  `json:"first_tg_message_id,omitempty"`
+	Title            string `json:"title"`
+	Summary          string `json:"summary"`
+	MessageCount     int    `json:"message_count"`
+	FirstTgMessageID int64  `json:"first_tg_message_id,omitempty"`
 }
 
 type StructuredSummary struct {
@@ -340,9 +340,9 @@ func (s *Summarizer) formatClustersForPrompt(messages []db.Message, clusters []T
 }
 
 func formatMessage(msg db.Message, parent *db.Message) string {
-	username := msg.Username
-	if username == "" {
-		username = fmt.Sprintf("User%d", msg.UserID)
+	author := msg.UserHash
+	if author == "" {
+		author = "anon"
 	}
 	timeStr := msg.Timestamp.Format("15:04")
 
@@ -350,17 +350,17 @@ func formatMessage(msg db.Message, parent *db.Message) string {
 	if msg.ForwardedFrom != "" {
 		annotation = fmt.Sprintf(" (fwd: %s)", msg.ForwardedFrom)
 	} else if parent != nil {
-		parentUser := parent.Username
-		if parentUser == "" {
-			parentUser = fmt.Sprintf("User%d", parent.UserID)
+		parentAuthor := parent.UserHash
+		if parentAuthor == "" {
+			parentAuthor = "anon"
 		}
 		parentText := []rune(parent.Text)
 		if len(parentText) > 60 {
 			parentText = append(parentText[:60], '…')
 		}
-		annotation = fmt.Sprintf(" (↩ %s: %q)", parentUser, string(parentText))
+		annotation = fmt.Sprintf(" (↩ %s: %q)", parentAuthor, string(parentText))
 	}
-	return fmt.Sprintf("[%s] %s%s: %s", timeStr, username, annotation, msg.Text)
+	return fmt.Sprintf("[%s] %s%s: %s", timeStr, author, annotation, msg.Text)
 }
 
 func sanitizeClusters(clusters []TopicCluster, messageCount, topicMax int) ([]TopicCluster, error) {
