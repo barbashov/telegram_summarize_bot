@@ -122,7 +122,10 @@ func (b *Bot) Start(ctx context.Context) error {
 			logger.Info().Msg("Stopping bot...")
 			b.telegram.StopLongPolling()
 			return nil
-		case update := <-updates:
+		case update, ok := <-updates:
+			if !ok {
+				return nil
+			}
 			go b.handleUpdate(ctx, update)
 		}
 	}
@@ -512,7 +515,7 @@ func (b *Bot) handleURLSummarize(ctx context.Context, chatID int64, rawURL strin
 	}
 
 	b.metrics.IncSummarizeOK()
-	result := fmt.Sprintf("🔗 *Суммаризация URL:*\n\n%s", summary)
+	result := fmt.Sprintf("🔗 *Суммаризация URL:*\n\n%s", summarizer.EscapeMarkdown(summary))
 	chunks := splitTelegramMessage(result, telegramMessageLimit)
 	if len(chunks) == 0 {
 		return
@@ -717,6 +720,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if lastSummarize != nil && since.Before(*lastSummarize) {
 		since = *lastSummarize
 	}
+	upperBound := time.Now()
 
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
@@ -763,7 +767,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	committed = true
 	b.metrics.IncSummarizeOK()
 
-	if err := b.db.SetLastSummarizeTime(ctx, groupID, time.Now()); err != nil {
+	if err := b.db.SetLastSummarizeTime(ctx, groupID, upperBound); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
 	}
 
@@ -989,17 +993,14 @@ func (b *Bot) schedulerLoop(ctx context.Context) {
 					continue
 				}
 				groupID := s.GroupID
-				if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {
-					logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to update last daily summary")
-				}
-				go b.runScheduledSummary(ctx, groupID)
+				go b.runScheduledSummary(ctx, groupID, now)
 			}
 		}
 	}
 }
 
-func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
-	since := time.Now().UTC().Add(-24 * time.Hour)
+func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.Time) {
+	since := now.UTC().Add(-24 * time.Hour)
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to get messages")
@@ -1028,6 +1029,10 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64) {
 	b.sendMessage(groupID, preamble+"\n\n"+chunks[0])
 	for _, chunk := range chunks[1:] {
 		b.sendMessage(groupID, chunk)
+	}
+
+	if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to update last daily summary")
 	}
 }
 

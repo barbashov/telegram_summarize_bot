@@ -198,6 +198,13 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	// Deduplication index on Telegram message identity.
+	if _, err := db.conn.Exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_dedup
+		ON messages(group_id, tg_message_id)
+		WHERE tg_message_id IS NOT NULL`); err != nil {
+		return err
+	}
+
 	// PII removal: drop user_id and username, add user_hash.
 	for _, col := range []string{"user_id", "username"} {
 		if err := db.dropColumnIfExists("messages", col); err != nil {
@@ -224,7 +231,6 @@ func (db *DB) dropColumnIfExists(table, column string) error {
 	if err != nil {
 		return fmt.Errorf("failed to query table_info(%s): %w", table, err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	exists := false
 	for rows.Next() {
@@ -232,6 +238,7 @@ func (db *DB) dropColumnIfExists(table, column string) error {
 		var name, colType string
 		var dflt sql.NullString
 		if err := rows.Scan(&cid, &name, &colType, &notNull, &dflt, &pk); err != nil {
+			_ = rows.Close()
 			return err
 		}
 		if name == column {
@@ -239,8 +246,10 @@ func (db *DB) dropColumnIfExists(table, column string) error {
 			break
 		}
 	}
-	if err := rows.Err(); err != nil {
-		return err
+	rowsErr := rows.Err()
+	_ = rows.Close() // close before any write to avoid SQLITE_BUSY
+	if rowsErr != nil {
+		return rowsErr
 	}
 	if !exists {
 		return nil
@@ -280,7 +289,7 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 		`SELECT id, group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
 		 FROM messages
 		 WHERE group_id = ? AND timestamp > ?
-		 ORDER BY timestamp ASC
+		 ORDER BY timestamp DESC
 		 LIMIT ?`,
 		groupID, since, limit,
 	)
@@ -304,7 +313,16 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 		messages = append(messages, msg)
 	}
 
-	return messages, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Reverse so output is chronological (oldest→newest).
+	for i, j := 0, len(messages)-1; i < j; i, j = i+1, j-1 {
+		messages[i], messages[j] = messages[j], messages[i]
+	}
+
+	return messages, nil
 }
 
 func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (int64, error) {

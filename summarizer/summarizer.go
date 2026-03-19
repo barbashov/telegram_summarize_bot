@@ -477,6 +477,10 @@ var markdownReplacer = strings.NewReplacer(
 	"[", "\\[",
 )
 
-func escapeMarkdown(text string) string {
+func EscapeMarkdown(text string) string {
 	return markdownReplacer.Replace(strings.TrimSpace(text))
+}
+
+func escapeMarkdown(text string) string {
+	return EscapeMarkdown(text)
 }
