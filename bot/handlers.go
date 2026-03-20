@@ -404,7 +404,8 @@ func (b *Bot) handleHelp(update telego.Update) {
 		helpText += "\n\n*Команды администратора:*\n" +
 			"• `schedule on` — включить ежедневную сводку\n" +
 			"• `schedule off` — выключить ежедневную сводку\n" +
-			"• `schedule ЧЧ:ММ` — установить время ежедневной сводки в UTC\n\n" +
+			"• `schedule ЧЧ:ММ` — установить время ежедневной сводки в UTC\n" +
+			"• `schedule now` — запустить внеплановую сводку прямо сейчас\n\n" +
 			"_Пример: @bot schedule 08:00_"
 	}
 
@@ -948,13 +949,24 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 
 	arg := strings.ToLower(args[0])
 
+	// "now" triggers an immediate unscheduled summary.
+	if arg == "now" {
+		if !b.isGroupAdmin(groupID, msg.From.ID) {
+			b.sendMessage(groupID, "Только администраторы группы могут запускать внеплановую сводку.")
+			return
+		}
+		b.sendFormatted(groupID, "🔄 Запускаю внеплановую сводку\\.\\.\\.")
+		b.runScheduledSummary(ctx, groupID, time.Now())
+		return
+	}
+
 	// Validate HH:MM format early (before DB fetch) so we can return fast on bad input.
 	var parsedHour, parsedMinute int
 	isTime := false
 	if arg != "on" && arg != "off" {
 		parts := strings.SplitN(arg, ":", 2)
 		if len(parts) != 2 {
-			b.sendFormatted(groupID, "Неверный формат\\. Используйте: `schedule on`, `schedule off` или `schedule ЧЧ:ММ`\\.")
+			b.sendFormatted(groupID, "Неверный формат\\. Используйте: `schedule on`, `schedule off`, `schedule now` или `schedule ЧЧ:ММ`\\.")
 			return
 		}
 		h, err1 := strconv.Atoi(parts[0])

@@ -75,7 +75,11 @@ func TestClusterTopicsSanitizesAssignments(t *testing.T) {
 }
 
 func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
-	sum := NewWithClient(&fakeChatClient{responses: []string{"not-json"}}, "test-model", metrics.New(), true)
+	responses := make([]string, maxLLMRetries)
+	for i := range responses {
+		responses[i] = "not-json"
+	}
+	sum := NewWithClient(&fakeChatClient{responses: responses}, "test-model", metrics.New(), true)
 
 	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
 	if err == nil {

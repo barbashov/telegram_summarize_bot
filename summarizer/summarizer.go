@@ -19,6 +19,7 @@ const (
 	clusterMaxTokens = 400
 	finalMaxTokens   = 1000
 	urlMaxTokens     = 2000
+	maxLLMRetries    = 3
 )
 
 type chatCompletionClient interface {
@@ -91,7 +92,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 	defer s.metrics.LLMCluster.Start()()
 	prompt := s.buildClusteringPrompt(messages, topicMax)
 
-	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
 			{
@@ -106,36 +107,43 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 		},
 		MaxTokens:   clusterMaxTokens,
 		Temperature: 0.1,
-	})
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to create topic clustering completion")
-		s.metrics.RecordError("llm_cluster", err.Error())
-		return nil, fmt.Errorf("failed to cluster topics: %w", err)
 	}
 
-	content, err := firstChoiceContent(resp)
-	if err != nil {
-		return nil, err
-	}
+	var lastErr error
+	for attempt := range maxLLMRetries {
+		resp, err := s.client.CreateChatCompletion(ctx, req)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to create topic clustering completion")
+			s.metrics.RecordError("llm_cluster", err.Error())
+			return nil, fmt.Errorf("failed to cluster topics: %w", err)
+		}
 
-	var parsed topicClusterResponse
-	if err := unmarshalJSONObject(content, &parsed); err != nil {
-		return nil, fmt.Errorf("failed to parse topic clusters: %w", err)
-	}
+		content, err := firstChoiceContent(resp)
+		if err != nil {
+			return nil, err
+		}
 
-	clusters, err := sanitizeClusters(parsed.Topics, len(messages), topicMax)
-	if err != nil {
-		return nil, err
-	}
+		var parsed topicClusterResponse
+		if err := unmarshalJSONObject(content, &parsed); err != nil {
+			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("cluster parse failed, retrying")
+			lastErr = fmt.Errorf("failed to parse topic clusters: %w", err)
+			continue
+		}
 
-	return clusters, nil
+		clusters, err := sanitizeClusters(parsed.Topics, len(messages), topicMax)
+		if err != nil {
+			return nil, err
+		}
+		return clusters, nil
+	}
+	return nil, lastErr
 }
 
 func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster) (*StructuredSummary, error) {
 	defer s.metrics.LLMSummarize.Start()()
 	prompt := s.buildTopicSummaryPrompt(messages, clusters)
 
-	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
 			{
@@ -150,24 +158,32 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 		},
 		MaxTokens:   finalMaxTokens,
 		Temperature: 0.3,
-	})
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to create topic summary completion")
-		s.metrics.RecordError("llm_summarize", err.Error())
-		return nil, fmt.Errorf("failed to summarize topics: %w", err)
 	}
 
-	content, err := firstChoiceContent(resp)
-	if err != nil {
-		return nil, err
-	}
+	var lastErr error
+	for attempt := range maxLLMRetries {
+		resp, err := s.client.CreateChatCompletion(ctx, req)
+		if err != nil {
+			logger.Error().Err(err).Msg("failed to create topic summary completion")
+			s.metrics.RecordError("llm_summarize", err.Error())
+			return nil, fmt.Errorf("failed to summarize topics: %w", err)
+		}
 
-	var summary StructuredSummary
-	if err := unmarshalJSONObject(content, &summary); err != nil {
-		return nil, fmt.Errorf("failed to parse topic summary: %w", err)
-	}
+		content, err := firstChoiceContent(resp)
+		if err != nil {
+			return nil, err
+		}
 
-	return normalizeStructuredSummary(summary, clusters, messages), nil
+		var summary StructuredSummary
+		if err := unmarshalJSONObject(content, &summary); err != nil {
+			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("summary parse failed, retrying")
+			lastErr = fmt.Errorf("failed to parse topic summary: %w", err)
+			continue
+		}
+
+		return normalizeStructuredSummary(summary, clusters, messages), nil
+	}
+	return nil, lastErr
 }
 
 // SummarizeURL sends the extracted page text to the LLM for summarization.
