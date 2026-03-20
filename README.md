@@ -7,7 +7,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Topic-based summaries with a short TL;DR plus per-topic breakdown
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
-- **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins-only configuration
+- **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
@@ -121,6 +121,7 @@ Commands are triggered by mentioning the bot in a group message:
 | `@bot schedule on` | Enable daily summary at the default time (admins only) |
 | `@bot schedule off` | Disable daily summary (admins only) |
 | `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only) |
+| `@bot schedule now` | Trigger an unscheduled summary immediately (admins only) |
 | `@bot help` | Show available commands |
 
 ## Configuration
