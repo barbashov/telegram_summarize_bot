@@ -92,6 +92,13 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 	defer s.metrics.LLMCluster.Start()()
 	prompt := s.buildClusteringPrompt(messages, topicMax)
 
+	// Scale tokens with message count: each message contributes ~12 tokens
+	// (index + comma + JSON overhead). Add 300 as base for structure and titles.
+	clusterTokens := len(messages)*12 + 300
+	if clusterTokens < clusterMaxTokens {
+		clusterTokens = clusterMaxTokens
+	}
+
 	req := openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
@@ -105,7 +112,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 				Content: prompt,
 			},
 		},
-		MaxTokens:   clusterMaxTokens,
+		MaxTokens:   clusterTokens,
 		Temperature: 0.1,
 	}
 
@@ -121,6 +128,11 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 		content, err := firstChoiceContent(resp)
 		if err != nil {
 			return nil, err
+		}
+
+		if resp.Choices[0].FinishReason == "length" {
+			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", req.MaxTokens).
+				Msg("cluster response truncated by token limit")
 		}
 
 		var parsed topicClusterResponse
