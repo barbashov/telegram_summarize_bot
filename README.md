@@ -145,5 +145,6 @@ All configuration is via environment variables (`.env` file):
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 | `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
+| `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + OpenRouter traffic (`socks5://host:port`, `http://host:port`) |
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.

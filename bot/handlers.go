@@ -56,7 +56,7 @@ type Bot struct {
 }
 
 func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
-	bot, err := telego.NewBot(cfg.BotToken)
+	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(buildHTTPClient(60*time.Second)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}

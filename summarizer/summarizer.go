@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,7 +59,12 @@ type topicClusterResponse struct {
 func New(apiKey, baseURL, model string, m *metrics.Metrics, replyThreads bool) (*Summarizer, error) {
 	config := openai.DefaultConfig(apiKey)
 	config.BaseURL = baseURL
-	config.HTTPClient.Timeout = 120 * time.Second
+	config.HTTPClient = &http.Client{
+		Timeout: 120 * time.Second,
+		Transport: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		},
+	}
 
 	return NewWithClient(openai.NewClientWithConfig(config), model, m, replyThreads), nil
 }
