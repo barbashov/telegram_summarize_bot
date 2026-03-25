@@ -15,39 +15,19 @@ A Telegram bot that summarizes group chat messages using OpenRouter (free LLM AP
 
 ## Commands
 
-### Run Locally
+### Build Locally
 
 ```bash
 # Install dependencies
 go mod download
 
-# Run the bot
-go run main.go
-
-# Or build and run
+# Build
 go build -o telegram_summarize_bot main.go
-./telegram_summarize_bot
-```
-
-### Run with Docker
-
-```bash
-# Build the image
-docker-compose build
-
-# Run in background
-docker-compose up -d
-
-# View logs
-docker-compose logs -f
-
-# Stop
-docker-compose down
 ```
 
 ### Development
 
-> **Note**: Never run the bot locally for testing — the production instance shares the same Telegram bot token and a second process would conflict with it.
+**NEVER run the bot by youself for testing.**
 
 ```bash
 # Lint
