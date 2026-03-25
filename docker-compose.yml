@@ -10,8 +10,6 @@ services:
       - bot_data:/app/data
     env_file:
       - .env
-    environment:
-      - DB_PATH=/app/data/bot.db
     logging:
       driver: "json-file"
       options:
@@ -19,7 +17,7 @@ services:
         max-file: "3"
 
   watchtower:
-    image: containrrr/watchtower
+    image: nickfedor/watchtower:latest
     container_name: watchtower
     restart: unless-stopped
     volumes:
