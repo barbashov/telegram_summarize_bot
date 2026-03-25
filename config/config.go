@@ -25,6 +25,16 @@ type Config struct {
 	DailySummaryHour int
 	ReplyThreads     bool
 	URLMaxChars      int
+
+	// RAG (optional — disabled when EmbeddingURL is empty)
+	EmbeddingModel   string
+	EmbeddingURL     string
+	EmbeddingAPIKey  string
+	EmbeddingDims    int
+	QdrantAddr       string
+	QdrantCollection string
+	RAGTopK          int
+	RAGContextWindow int
 }
 
 func Load() (*Config, error) {
@@ -72,6 +82,15 @@ func Load() (*Config, error) {
 		replyThreads = false
 	}
 
+	qdrantAddr := os.Getenv("QDRANT_ADDR")
+	if qdrantAddr == "" {
+		qdrantAddr = "localhost:6334"
+	}
+	qdrantCollection := os.Getenv("QDRANT_COLLECTION")
+	if qdrantCollection == "" {
+		qdrantCollection = "messages"
+	}
+
 	return &Config{
 		BotToken:         botToken,
 		OpenRouterKey:    openRouterKey,
@@ -88,6 +107,15 @@ func Load() (*Config, error) {
 		DailySummaryHour: dailySummaryHour,
 		ReplyThreads:     replyThreads,
 		URLMaxChars:      envIntOr("URL_MAX_CHARS", 64000),
+
+		EmbeddingModel:   os.Getenv("EMBEDDING_MODEL"),
+		EmbeddingURL:     os.Getenv("EMBEDDING_URL"),
+		EmbeddingAPIKey:  os.Getenv("EMBEDDING_API_KEY"),
+		EmbeddingDims:    envIntOrZero("EMBEDDING_DIMS"),
+		QdrantAddr:       qdrantAddr,
+		QdrantCollection: qdrantCollection,
+		RAGTopK:          envIntOr("RAG_TOP_K", 10),
+		RAGContextWindow: envIntOr("RAG_CONTEXT_WINDOW", 300),
 	}, nil
 }
 
@@ -107,6 +135,10 @@ func (c *Config) RetentionDuration() time.Duration {
 	return time.Duration(c.RetentionDays) * 24 * time.Hour
 }
 
+func (c *Config) RAGEnabled() bool {
+	return c.EmbeddingURL != ""
+}
+
 func (c *Config) IsAdminUser(userID int64) bool {
 	for _, id := range c.AdminUserIDs {
 		if id == userID {
@@ -123,6 +155,15 @@ func envIntOr(key string, def int) int {
 		}
 	}
 	return def
+}
+
+func envIntOrZero(key string) int {
+	if v := os.Getenv(key); v != "" {
+		if parsed, err := strconv.Atoi(v); err == nil {
+			return parsed
+		}
+	}
+	return 0
 }
 
 func parseIDList(value string) []int64 {

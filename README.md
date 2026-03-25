@@ -8,6 +8,7 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
 - **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
+- **RAG chat history Q&A** — `@bot ask <question>` searches the full chat history (including backfilled data) using semantic search via Qdrant and answers questions with source links. Optional — disabled when `EMBEDDING_URL` is not configured.
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
@@ -47,6 +48,11 @@ docker-compose up -d
 ```
 
 The compose file references the pre-built image from GHCR (`ghcr.io/barbashov/telegram_summarize_bot:main`) and includes a **Watchtower** sidecar that polls for new image digests every 60 seconds. Once Watchtower is running, every push to `main` automatically triggers a rolling restart on the server — no manual steps needed.
+
+With RAG enabled (see [RAG Setup](#rag-setup)):
+```bash
+docker compose --profile rag up -d
+```
 
 To check Watchtower activity:
 ```bash
@@ -117,6 +123,8 @@ Commands are triggered by mentioning the bot in a group message:
 | `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
 | `@bot s [hours]` | Shorthand for `summarize` |
 | `@bot sub [hours]` | Additional shorthand for `summarize` |
+| `@bot ask <question>` | Search chat history and answer a question with source links (requires RAG setup) |
+| `@bot search <question>` | Alias for `ask` |
 | `@bot schedule` | Show current daily summary schedule |
 | `@bot schedule on` | Enable daily summary at the default time (admins only) |
 | `@bot schedule off` | Disable daily summary (admins only) |
@@ -147,4 +155,76 @@ All configuration is via environment variables (`.env` file):
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
 | `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + OpenRouter traffic (`socks5://host:port`, `http://host:port`) |
 
+### RAG Configuration
+
+These variables are only needed when using the `@bot ask` feature. Leave `EMBEDDING_URL` empty to disable RAG entirely.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `EMBEDDING_URL` | *(empty = disabled)* | Embedding API endpoint (OpenAI-compatible) |
+| `EMBEDDING_API_KEY` | *(empty)* | API key for the embedding endpoint |
+| `EMBEDDING_MODEL` | *(empty)* | Embedding model name (e.g. `openai/text-embedding-3-small`) |
+| `EMBEDDING_DIMS` | `0` | Embedding dimensions (0 = auto-detect) |
+| `QDRANT_ADDR` | `localhost:6334` | Qdrant gRPC address |
+| `QDRANT_COLLECTION` | `messages` | Qdrant collection name |
+| `RAG_TOP_K` | `10` | Number of top results for semantic search |
+| `RAG_CONTEXT_WINDOW` | `300` | Context expansion window in seconds around each search hit |
+
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.
+
+## RAG Setup
+
+The RAG (Retrieval-Augmented Generation) feature lets users ask questions about the full chat history — including data from before the bot was added, via Telegram JSON export backfill.
+
+### 1. Choose an Embedding Provider
+
+**OpenRouter** (easiest — reuse your existing API key):
+```env
+EMBEDDING_URL=https://openrouter.ai/api/v1
+EMBEDDING_API_KEY=<your OpenRouter key>
+EMBEDDING_MODEL=openai/text-embedding-3-small   # 1536 dims, cheap
+# or: openai/text-embedding-3-large             # 3072 dims, better quality
+```
+
+**Local via Ollama** (free, good multilingual support):
+```env
+EMBEDDING_URL=http://localhost:11434/v1
+EMBEDDING_MODEL=nomic-embed-text   # 768 dims
+# No API key needed
+```
+
+### 2. Start Qdrant
+
+With Docker Compose (recommended):
+```bash
+docker compose --profile rag up -d
+```
+
+Or standalone:
+```bash
+docker run -d -p 6334:6334 -v qdrant_data:/qdrant/storage qdrant/qdrant:v1.13.2
+```
+
+### 3. Backfill Historical Data (optional)
+
+Export your chat history from Telegram Desktop (Settings → Advanced → Export chat history → JSON format), then import:
+
+```bash
+./telegram_summarize_bot --backfill export.json --group-id -1001234567890
+```
+
+Options:
+- `--reset` — wipe the group's vectors before importing (useful for re-imports)
+
+```bash
+./telegram_summarize_bot --backfill export.json --group-id -1001234567890 --reset
+```
+
+Backfill uses deterministic UUIDs, so re-running with overlapping exports is safe (deduplication via upsert).
+
+### Architecture Notes
+
+- **Summarization stays on SQLite** — `@bot summarize` uses SQLite for fast local queries over the retention window. RAG is only used for `@bot ask`.
+- **Async embedding** — new messages are embedded in the background with micro-batching (up to 50 messages or 5-second window). Messages become searchable with up to ~5s delay.
+- **Context expansion** — each search hit pulls in surrounding messages (±`RAG_CONTEXT_WINDOW` seconds) for better LLM context.
+- **Privacy** — backfill applies the same HMAC anonymization as live messages. No Telegram user IDs are stored in Qdrant.

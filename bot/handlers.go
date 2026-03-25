@@ -12,6 +12,7 @@ import (
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
+	"telegram_summarize_bot/rag"
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
@@ -53,9 +54,10 @@ type Bot struct {
 	username     string
 	metrics      *metrics.Metrics
 	userHashSalt []byte
+	rag          *rag.Service // nil when RAG is disabled
 }
 
-func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
+func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics, ragSvc *rag.Service) (*Bot, error) {
 	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(buildHTTPClient(60*time.Second)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
@@ -77,6 +79,7 @@ func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *
 		cfg:         cfg,
 		username:    strings.ToLower(me.Username),
 		metrics:     m,
+		rag:         ragSvc,
 	}, nil
 }
 
@@ -109,6 +112,10 @@ func (b *Bot) Start(ctx context.Context) error {
 		logger.Info().Msg("metrics loaded from DB")
 	}
 	go b.metricsFlushLoop(ctx)
+
+	if b.rag != nil {
+		b.rag.StartWorker(ctx)
+	}
 
 	go b.cleanupLoop(ctx)
 	go b.rateLimitCleanupLoop(ctx)
@@ -302,7 +309,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	// treated as commands — the forwarder didn't intend to issue one.
 	if msg.ForwardOrigin != nil {
 		forwardedFrom := originUsername(msg.ForwardOrigin)
-		if err := b.db.AddMessage(ctx, &db.Message{
+		dbMsg := &db.Message{
 			GroupID:       groupID,
 			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 			Text:          text,
@@ -310,10 +317,18 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			ForwardedFrom: forwardedFrom,
 			TgMessageID:   tgMessageID,
 			ReplyToTgID:   replyToTgID,
-		}); err != nil {
+		}
+		if err := b.db.AddMessage(ctx, dbMsg); err != nil {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
 		} else {
 			b.metrics.IncMessagesStored()
+			if b.rag != nil {
+				b.rag.Enqueue(rag.Message{
+					GroupID: dbMsg.GroupID, UserHash: dbMsg.UserHash, Text: dbMsg.Text,
+					Timestamp: dbMsg.Timestamp, ForwardedFrom: dbMsg.ForwardedFrom,
+					TgMessageID: dbMsg.TgMessageID, ReplyToTgID: dbMsg.ReplyToTgID,
+				})
+			}
 		}
 		return
 	}
@@ -329,17 +344,24 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	if err := b.db.AddMessage(ctx, &db.Message{
+	dbMsg := &db.Message{
 		GroupID:     groupID,
 		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 		Text:        text,
 		Timestamp:   time.Now(),
 		TgMessageID: tgMessageID,
 		ReplyToTgID: replyToTgID,
-	}); err != nil {
+	}
+	if err := b.db.AddMessage(ctx, dbMsg); err != nil {
 		logger.Error().Err(err).Msg("failed to add message")
 	} else {
 		b.metrics.IncMessagesStored()
+		if b.rag != nil {
+			b.rag.Enqueue(rag.Message{
+				GroupID: dbMsg.GroupID, UserHash: dbMsg.UserHash, Text: dbMsg.Text,
+				Timestamp: dbMsg.Timestamp, TgMessageID: dbMsg.TgMessageID, ReplyToTgID: dbMsg.ReplyToTgID,
+			})
+		}
 	}
 }
 
@@ -379,6 +401,8 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	switch cmd {
 	case "summarize", "sub", "s":
 		b.handleSummarize(ctx, update, parts[1:])
+	case "ask", "search":
+		b.handleAsk(ctx, update, parts[1:])
 	case "schedule":
 		b.handleSchedule(ctx, update, parts[1:])
 	case "help":
@@ -396,9 +420,10 @@ func (b *Bot) handleHelp(update telego.Update) {
 
 	helpText := "📖 *Доступные команды:*\n\n" +
 		"• `summarize [часы]` \\(или `s`, `sub`\\) — суммировать сообщения за последние N часов \\(по умолчанию 24\\)\n" +
+		"• `ask <вопрос>` \\(или `search`\\) — поиск и ответ по истории чата\n" +
 		"• `schedule` — показать расписание ежедневной сводки\n" +
 		"• `help` — показать это сообщение\n\n" +
-		"_Примеры: @bot summarize, @bot summarize 12_"
+		"_Примеры: @bot summarize, @bot ask Что решили про деплой?_"
 
 	if b.isGroupAdmin(msg.Chat.ID, msg.From.ID) {
 		helpText += "\n\n*Команды администратора:*\n" +
@@ -919,6 +944,58 @@ func (b *Bot) isGroupAdmin(groupID, userID int64) bool {
 	}
 	status := member.MemberStatus()
 	return status == "creator" || status == "administrator"
+}
+
+func (b *Bot) handleAsk(ctx context.Context, update telego.Update, args []string) {
+	msg := update.Message
+	groupID := msg.Chat.ID
+
+	if b.rag == nil {
+		b.sendMessage(groupID, "Функция поиска по истории чата не настроена.")
+		return
+	}
+
+	if len(args) == 0 {
+		b.sendMessage(groupID, "Укажите вопрос. Пример: @bot ask Что обсуждали про деплой?")
+		return
+	}
+
+	if !b.rateLimiter.Allow(groupID) {
+		b.metrics.IncRateLimitHit()
+		remaining := b.rateLimiter.RemainingTime(groupID)
+		b.sendMessage(groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
+		return
+	}
+
+	committed := false
+	defer func() {
+		if !committed {
+			b.rateLimiter.Release(groupID)
+		}
+	}()
+
+	question := strings.Join(args, " ")
+	statusMsgID := b.sendMessage(groupID, "Ищу в истории чата...")
+
+	answer, sources, err := b.rag.Ask(ctx, groupID, question)
+	if err != nil {
+		logger.Error().Err(err).Msg("rag ask failed")
+		b.editOrSend(groupID, statusMsgID, "Ошибка поиска. Попробуйте позже.")
+		return
+	}
+
+	committed = true
+
+	formatted := rag.FormatRAGResponseMarkdown(answer, sources, groupID)
+	chunks := splitTelegramMessage(formatted, telegramMessageLimit)
+	if len(chunks) == 0 {
+		b.editOrSend(groupID, statusMsgID, answer)
+		return
+	}
+	b.editOrSendFormatted(groupID, statusMsgID, chunks[0])
+	for _, chunk := range chunks[1:] {
+		b.sendFormatted(groupID, chunk)
+	}
 }
 
 func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []string) {
