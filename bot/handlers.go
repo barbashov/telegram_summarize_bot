@@ -1066,7 +1066,7 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	}
 	b.metrics.IncSummarizeOK()
 
-	preamble := "🌅 *Утренняя #сводка за последние 24 часа:*"
+	preamble := "🌅 *Утренняя \\#сводка за последние 24 часа:*"
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, groupID), telegramMessageLimit)
 	if len(chunks) == 0 {
 		return
