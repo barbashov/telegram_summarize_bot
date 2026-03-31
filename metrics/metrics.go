@@ -325,8 +325,8 @@ func (m *Metrics) LoadFromPersistable(s PersistableSnapshot) {
 }
 
 // FormatStatusReport generates a human-readable status report in Russian.
-func (m *Metrics) FormatStatusReport() string {
-	return formatSnapshot(m.Snapshot())
+func (m *Metrics) FormatStatusReport(model string) string {
+	return formatSnapshot(m.Snapshot(), model)
 }
 
 func trafficLight(p95, threshold time.Duration) string {
@@ -365,10 +365,11 @@ func latencyRow(emoji, name string, snap LatencySnapshot) string {
 		emoji, name+":", snap.Count, formatDur(snap.Mean), formatDur(snap.P95), formatDur(snap.Max))
 }
 
-func formatSnapshot(snap MetricsSnapshot) string {
+func formatSnapshot(snap MetricsSnapshot, model string) string {
 	var sb strings.Builder
 
 	sb.WriteString("🤖 Статус бота\n\n")
+	fmt.Fprintf(&sb, "🧠 Модель: %s\n", model)
 
 	h := int(snap.Uptime.Hours())
 	m := int(snap.Uptime.Minutes()) % 60

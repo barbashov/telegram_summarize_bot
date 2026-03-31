@@ -28,6 +28,7 @@ type telegramClient interface {
 	EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error)
 	GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error)
 	GetChat(params *telego.GetChatParams) (*telego.ChatFullInfo, error)
+	SetMyCommands(params *telego.SetMyCommandsParams) error
 }
 
 type summaryService interface {
@@ -88,6 +89,17 @@ func (b *Bot) Start(ctx context.Context) error {
 		return fmt.Errorf("failed to load user hash salt: %w", err)
 	}
 	b.userHashSalt = salt
+
+	if err := b.telegram.SetMyCommands(&telego.SetMyCommandsParams{
+		Commands: []telego.BotCommand{
+			{Command: "status", Description: "Статус бота и метрики"},
+			{Command: "groups", Description: "Управление группами"},
+			{Command: "help", Description: "Справка"},
+		},
+		Scope: &telego.BotCommandScopeAllPrivateChats{},
+	}); err != nil {
+		logger.Warn().Err(err).Msg("failed to register bot commands")
+	}
 
 	u := &telego.GetUpdatesParams{
 		Offset:  0,
@@ -442,7 +454,7 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
-		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport())
+		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport(b.cfg.Model))
 	case "/groups":
 		if !isAdmin {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")

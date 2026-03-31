@@ -49,6 +49,8 @@ func (f *fakeTelegram) GetChat(_ *telego.GetChatParams) (*telego.ChatFullInfo, e
 	return &telego.ChatFullInfo{}, nil
 }
 
+func (f *fakeTelegram) SetMyCommands(_ *telego.SetMyCommandsParams) error { return nil }
+
 type fakeSummarizer struct {
 	summary    *summarizer.StructuredSummary
 	err        error

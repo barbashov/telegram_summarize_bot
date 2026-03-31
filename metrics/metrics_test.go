@@ -99,7 +99,7 @@ func TestFormatStatusReportNoIssues(t *testing.T) {
 	}
 	m.IncSummarizeOK()
 
-	report := m.FormatStatusReport()
+	report := m.FormatStatusReport("test-model")
 	if !strings.Contains(report, "✅") {
 		t.Errorf("expected ✅ in clean report, got:\n%s", report)
 	}
@@ -115,7 +115,7 @@ func TestFormatStatusReportWithIssues(t *testing.T) {
 		m.TelegramSend.Record(5 * time.Second)
 	}
 
-	report := m.FormatStatusReport()
+	report := m.FormatStatusReport("test-model")
 	if !strings.Contains(report, "⚠️") {
 		t.Errorf("expected ⚠️ in problem report, got:\n%s", report)
 	}
