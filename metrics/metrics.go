@@ -458,7 +458,7 @@ func formatSnapshot(snap MetricsSnapshot, model string) string {
 	if len(snap.RecentErrors) > 0 {
 		sb.WriteString("\n🚨 Последние ошибки:\n")
 		for _, e := range snap.RecentErrors {
-			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.Ts.Format("15:04:05"), e.Key, e.Msg)
+			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.Ts.Format("2006-01-02 15:04:05 MST"), e.Key, e.Msg)
 		}
 	}
 
