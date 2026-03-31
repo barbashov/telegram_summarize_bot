@@ -133,9 +133,10 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	t.Run("parent annotation included", func(t *testing.T) {
 		parent := db.Message{UserHash: "a3f2b1c4", Text: "hello", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "world", Timestamp: ts}
-		out := formatMessage(msg, &parent)
-		if !strings.Contains(out, "↩ a3f2b1c4") {
-			t.Fatalf("expected reply annotation, got: %q", out)
+		aliases := buildUserAliasMap([]db.Message{parent, msg})
+		out := formatMessage(msg, &parent, aliases)
+		if !strings.Contains(out, "↩ У1") {
+			t.Fatalf("expected reply annotation with alias, got: %q", out)
 		}
 		if !strings.Contains(out, `"hello"`) {
 			t.Fatalf("expected parent text in annotation, got: %q", out)
@@ -145,7 +146,8 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	t.Run("empty hash falls back to anon", func(t *testing.T) {
 		parent := db.Message{UserHash: "", Text: "hi", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "yo", Timestamp: ts}
-		out := formatMessage(msg, &parent)
+		aliases := buildUserAliasMap([]db.Message{parent, msg})
+		out := formatMessage(msg, &parent, aliases)
 		if !strings.Contains(out, "↩ anon") {
 			t.Fatalf("expected anon fallback, got: %q", out)
 		}
@@ -155,7 +157,8 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		longText := strings.Repeat("а", 70)
 		parent := db.Message{UserHash: "a3f2b1c4", Text: longText, Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "reply", Timestamp: ts}
-		out := formatMessage(msg, &parent)
+		aliases := buildUserAliasMap([]db.Message{parent, msg})
+		out := formatMessage(msg, &parent, aliases)
 		if !strings.Contains(out, "…") {
 			t.Fatalf("expected truncation ellipsis, got: %q", out)
 		}
@@ -164,7 +167,8 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	t.Run("forwarded wins over parent", func(t *testing.T) {
 		parent := db.Message{UserHash: "a3f2b1c4", Text: "original", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
-		out := formatMessage(msg, &parent)
+		aliases := buildUserAliasMap([]db.Message{parent, msg})
+		out := formatMessage(msg, &parent, aliases)
 		if !strings.Contains(out, "fwd: channel") {
 			t.Fatalf("expected fwd annotation, got: %q", out)
 		}

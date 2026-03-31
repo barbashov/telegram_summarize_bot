@@ -330,6 +330,7 @@ func buildReplyIndex(messages []db.Message) map[int64]int {
 }
 
 func (s *Summarizer) formatIndexedMessages(messages []db.Message) string {
+	aliases := buildUserAliasMap(messages)
 	var idx map[int64]int
 	if s.replyThreads {
 		idx = buildReplyIndex(messages)
@@ -342,12 +343,13 @@ func (s *Summarizer) formatIndexedMessages(messages []db.Message) string {
 				parent = &messages[pi]
 			}
 		}
-		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg, parent))
+		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg, parent, aliases))
 	}
 	return sb.String()
 }
 
 func (s *Summarizer) formatClustersForPrompt(messages []db.Message, clusters []TopicCluster) string {
+	aliases := buildUserAliasMap(messages)
 	var idx map[int64]int
 	if s.replyThreads {
 		idx = buildReplyIndex(messages)
@@ -366,15 +368,34 @@ func (s *Summarizer) formatClustersForPrompt(messages []db.Message, clusters []T
 					parent = &messages[pi]
 				}
 			}
-			fmt.Fprintf(&sb, "- %s\n", formatMessage(msg, parent))
+			fmt.Fprintf(&sb, "- %s\n", formatMessage(msg, parent, aliases))
 		}
 		sb.WriteString("\n")
 	}
 	return strings.TrimSpace(sb.String())
 }
 
-func formatMessage(msg db.Message, parent *db.Message) string {
-	author := msg.UserHash
+// buildUserAliasMap assigns ephemeral sequential aliases (У1, У2, …) to each
+// unique non-empty UserHash in messages, in order of first appearance. Aliases
+// reset per call so they cannot be used for cross-summary tracking.
+func buildUserAliasMap(messages []db.Message) map[string]string {
+	aliases := make(map[string]string)
+	counter := 0
+	for _, msg := range messages {
+		h := msg.UserHash
+		if h == "" {
+			continue
+		}
+		if _, exists := aliases[h]; !exists {
+			counter++
+			aliases[h] = fmt.Sprintf("У%d", counter)
+		}
+	}
+	return aliases
+}
+
+func formatMessage(msg db.Message, parent *db.Message, aliases map[string]string) string {
+	author := aliases[msg.UserHash]
 	if author == "" {
 		author = "anon"
 	}
@@ -384,7 +405,7 @@ func formatMessage(msg db.Message, parent *db.Message) string {
 	if msg.ForwardedFrom != "" {
 		annotation = fmt.Sprintf(" (fwd: %s)", msg.ForwardedFrom)
 	} else if parent != nil {
-		parentAuthor := parent.UserHash
+		parentAuthor := aliases[parent.UserHash]
 		if parentAuthor == "" {
 			parentAuthor = "anon"
 		}
