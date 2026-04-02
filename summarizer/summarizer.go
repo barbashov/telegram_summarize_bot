@@ -139,6 +139,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 		if resp.Choices[0].FinishReason == "length" {
 			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", req.MaxTokens).
 				Msg("cluster response truncated by token limit")
+			req.MaxTokens = req.MaxTokens * 3 / 2
 		}
 
 		var parsed topicClusterResponse
