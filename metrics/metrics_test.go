@@ -200,6 +200,30 @@ func TestFormatLatencyDeepDiveCapsAt20(t *testing.T) {
 	}
 }
 
+func TestReset(t *testing.T) {
+	m := New()
+	m.IncMessagesStored()
+	m.IncSummarizeOK()
+	m.IncSummarizeFail()
+	m.IncRateLimitHit()
+	m.RecordError("test", "err")
+	m.TelegramSend.Record(100 * time.Millisecond)
+	m.LLMCluster.Record(5 * time.Second)
+
+	m.Reset()
+
+	snap := m.Snapshot()
+	if snap.MessagesStored != 0 || snap.SummarizeOK != 0 || snap.SummarizeFail != 0 || snap.RateLimitHits != 0 {
+		t.Errorf("counters not zeroed: %+v", snap)
+	}
+	if len(snap.ErrorCounts) != 0 || len(snap.RecentErrors) != 0 {
+		t.Errorf("errors not cleared: counts=%v recent=%d", snap.ErrorCounts, len(snap.RecentErrors))
+	}
+	if snap.TelegramSend.Count != 0 || snap.LLMCluster.Count != 0 {
+		t.Errorf("latency windows not cleared: send=%d cluster=%d", snap.TelegramSend.Count, snap.LLMCluster.Count)
+	}
+}
+
 func TestLoadRawStateZeroTimestamps(t *testing.T) {
 	// Simulate old data without timestamps.
 	var s LatencyStat

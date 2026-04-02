@@ -94,6 +94,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	if err := b.telegram.SetMyCommands(&telego.SetMyCommandsParams{
 		Commands: []telego.BotCommand{
 			{Command: "status", Description: "Статус бота и метрики"},
+			{Command: "reset", Description: "Сбросить все метрики"},
 			{Command: "groups", Description: "Управление группами"},
 			{Command: "help", Description: "Справка"},
 		},
@@ -466,6 +467,16 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 			return
 		}
 		b.sendStatusWithButtons(msg.Chat.ID)
+	case "/reset":
+		if !isAdmin {
+			b.sendMessage(msg.Chat.ID, "Нет доступа.")
+			return
+		}
+		b.metrics.Reset()
+		if err := b.db.ClearMetrics(ctx); err != nil {
+			logger.Error().Err(err).Msg("failed to clear persisted metrics")
+		}
+		b.sendMessage(msg.Chat.ID, "Метрики сброшены.")
 	case "/groups":
 		if !isAdmin {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
@@ -670,6 +681,7 @@ func (b *Bot) handlePrivateAdminHelp(chatID int64) {
 	helpText := "*Команды администратора*\n\n" +
 		"`/help` — показать это сообщение\n" +
 		"`/status` — статус бота и метрики\n" +
+		"`/reset` — сбросить все метрики\n" +
 		"`/groups` — список разрешённых групп\n" +
 		"`/groups add <group_id>` — добавить группу\n" +
 		"`/groups remove <group_id>` — удалить группу\n\n" +

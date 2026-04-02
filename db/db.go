@@ -627,6 +627,17 @@ func (db *DB) LoadMetrics(ctx context.Context, retentionCutoff time.Time) (metri
 	return s, rows.Err()
 }
 
+// ClearMetrics removes all persisted metrics and error log entries.
+func (db *DB) ClearMetrics(ctx context.Context) error {
+	if _, err := db.conn.ExecContext(ctx, `DELETE FROM bot_metrics WHERE id = 1`); err != nil {
+		return fmt.Errorf("failed to clear bot_metrics: %w", err)
+	}
+	if _, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log`); err != nil {
+		return fmt.Errorf("failed to clear bot_error_log: %w", err)
+	}
+	return nil
+}
+
 func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {
 	if len(groupIDs) == 0 {
 		return nil

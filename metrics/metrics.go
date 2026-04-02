@@ -102,7 +102,8 @@ type TimedSample struct {
 
 // LatencyDetailSnapshot provides raw data points and statistics for deep-dive views.
 type LatencyDetailSnapshot struct {
-	Samples []TimedSample // newest-first, only entries with non-zero timestamps
+	Samples   []TimedSample   // newest-first, only entries with non-zero timestamps
+	Durations []time.Duration // all durations in the window (for histogram)
 	LatencySnapshot
 	P50 time.Duration
 }
@@ -135,6 +136,9 @@ func (l *LatencyStat) DetailSnapshot() LatencyDetailSnapshot {
 	for i, j := 0, len(ds.Samples)-1; i < j; i, j = i+1, j-1 {
 		ds.Samples[i], ds.Samples[j] = ds.Samples[j], ds.Samples[i]
 	}
+
+	// Keep all durations for histogram.
+	ds.Durations = durations
 
 	// Compute stats from sorted durations.
 	sorted := make([]time.Duration, len(durations))
@@ -191,9 +195,7 @@ func FormatLatencyDeepDive(name string, d LatencyDetailSnapshot) string {
 	}
 
 	counts := make([]int, len(buckets))
-	// Use all samples (including those without timestamps) for distribution.
-	for _, s := range d.Samples {
-		dur := s.Duration
+	for _, dur := range d.Durations {
 		for bi, b := range buckets {
 			if dur >= b.lo && (b.hi == 0 || dur < b.hi) {
 				counts[bi]++
@@ -201,12 +203,6 @@ func FormatLatencyDeepDive(name string, d LatencyDetailSnapshot) string {
 			}
 		}
 	}
-	// Also count samples without timestamps if d.Samples < d.Count.
-	// Actually, d.Samples only has timestamped entries. We need all durations for
-	// the histogram. Let's use a different approach — we already have the stats,
-	// but not the raw durations. We'll count from d.Samples only, which represents
-	// all samples that have timestamps (after the data structure change, all new
-	// samples will have timestamps).
 
 	maxCount := 0
 	for _, c := range counts {
@@ -335,6 +331,27 @@ func New() *Metrics {
 		StartTime:   time.Now(),
 		errorCounts: make(map[string]int64),
 	}
+}
+
+// Reset clears all metrics state (latency windows, counters, errors).
+func (m *Metrics) Reset() {
+	m.TelegramSend = LatencyStat{}
+	m.TelegramEdit = LatencyStat{}
+	m.LLMCluster = LatencyStat{}
+	m.LLMSummarize = LatencyStat{}
+	m.DBAdd = LatencyStat{}
+	m.DBGet = LatencyStat{}
+
+	m.mu.Lock()
+	m.messagesStored = 0
+	m.summarizeOK = 0
+	m.summarizeFail = 0
+	m.rateLimitHits = 0
+	m.errorCounts = make(map[string]int64)
+	m.errorRing = [ringSize]ErrorEntry{}
+	m.errorRingPos = 0
+	m.errorRingFilled = 0
+	m.mu.Unlock()
 }
 
 func (m *Metrics) IncMessagesStored() {
