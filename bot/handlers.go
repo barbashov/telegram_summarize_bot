@@ -105,6 +105,11 @@ func (b *Bot) Start(ctx context.Context) error {
 	u := &telego.GetUpdatesParams{
 		Offset:  0,
 		Timeout: 60,
+		AllowedUpdates: []string{
+			"message",
+			"my_chat_member",
+			"callback_query",
+		},
 	}
 
 	updates, err := b.telegram.UpdatesViaLongPolling(u)
