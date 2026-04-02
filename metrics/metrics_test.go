@@ -123,3 +123,102 @@ func TestFormatStatusReportWithIssues(t *testing.T) {
 		t.Errorf("expected 🔴 Проблемы in report, got:\n%s", report)
 	}
 }
+
+func TestDetailSnapshotTimestamps(t *testing.T) {
+	var s LatencyStat
+	s.Record(100 * time.Millisecond)
+	s.Record(200 * time.Millisecond)
+	s.Record(300 * time.Millisecond)
+
+	d := s.DetailSnapshot()
+	if d.Count != 3 {
+		t.Fatalf("count=%d, want 3", d.Count)
+	}
+	if len(d.Samples) != 3 {
+		t.Fatalf("samples len=%d, want 3", len(d.Samples))
+	}
+	// Newest first.
+	if d.Samples[0].Duration != 300*time.Millisecond {
+		t.Errorf("first sample=%v, want 300ms", d.Samples[0].Duration)
+	}
+	if d.Samples[2].Duration != 100*time.Millisecond {
+		t.Errorf("last sample=%v, want 100ms", d.Samples[2].Duration)
+	}
+	// All timestamps should be non-zero.
+	for i, s := range d.Samples {
+		if s.At.IsZero() {
+			t.Errorf("sample %d has zero timestamp", i)
+		}
+	}
+}
+
+func TestDetailSnapshotEmpty(t *testing.T) {
+	var s LatencyStat
+	d := s.DetailSnapshot()
+	if d.Count != 0 {
+		t.Fatalf("count=%d, want 0", d.Count)
+	}
+	if len(d.Samples) != 0 {
+		t.Fatalf("samples len=%d, want 0", len(d.Samples))
+	}
+}
+
+func TestFormatLatencyDeepDiveEmpty(t *testing.T) {
+	result := FormatLatencyDeepDive("llm_cluster", LatencyDetailSnapshot{})
+	if !strings.Contains(result, "Нет данных") {
+		t.Errorf("expected 'Нет данных' for empty snapshot, got:\n%s", result)
+	}
+}
+
+func TestFormatLatencyDeepDiveSections(t *testing.T) {
+	var s LatencyStat
+	for i := 1; i <= 25; i++ {
+		s.Record(time.Duration(i*100) * time.Millisecond)
+	}
+	d := s.DetailSnapshot()
+	result := FormatLatencyDeepDive("llm_cluster", d)
+
+	for _, section := range []string{"📊 Детализация", "📈 Статистика", "📉 Распределение", "🕐 Последние"} {
+		if !strings.Contains(result, section) {
+			t.Errorf("missing section %q in:\n%s", section, result)
+		}
+	}
+	if !strings.Contains(result, "P50") || !strings.Contains(result, "P95") {
+		t.Errorf("missing percentile labels in:\n%s", result)
+	}
+}
+
+func TestFormatLatencyDeepDiveCapsAt20(t *testing.T) {
+	var s LatencyStat
+	for i := 0; i < 50; i++ {
+		s.Record(time.Duration(i+1) * time.Millisecond)
+	}
+	d := s.DetailSnapshot()
+	result := FormatLatencyDeepDive("db_add", d)
+	if !strings.Contains(result, "Последние 20 замеров") {
+		t.Errorf("expected cap at 20, got:\n%s", result)
+	}
+}
+
+func TestLoadRawStateZeroTimestamps(t *testing.T) {
+	// Simulate old data without timestamps.
+	var s LatencyStat
+	raw := LatencyRawState{Count: 2, Pos: 2}
+	raw.Samples[0] = int64(100 * time.Millisecond)
+	raw.Samples[1] = int64(200 * time.Millisecond)
+	// Timestamps are all zero (old format).
+	s.loadRawState(raw)
+
+	d := s.DetailSnapshot()
+	if d.Count != 2 {
+		t.Fatalf("count=%d, want 2", d.Count)
+	}
+	// No timestamped samples since timestamps were zero.
+	if len(d.Samples) != 0 {
+		t.Errorf("expected 0 timestamped samples from old data, got %d", len(d.Samples))
+	}
+	// Stats should still work.
+	if d.Min != 100*time.Millisecond {
+		t.Errorf("min=%v, want 100ms", d.Min)
+	}
+}

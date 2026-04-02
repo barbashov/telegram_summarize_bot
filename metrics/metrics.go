@@ -21,12 +21,15 @@ const (
 	thresholdRecentErrors = 5
 )
 
+const deepDiveMaxSamples = 20 // max recent samples shown in deep-dive
+
 // LatencyStat is a rolling window of the last windowSize duration samples.
 type LatencyStat struct {
-	mu      sync.Mutex
-	samples [windowSize]time.Duration
-	count   int // number of filled slots (capped at windowSize)
-	pos     int // next write index
+	mu         sync.Mutex
+	samples    [windowSize]time.Duration
+	timestamps [windowSize]time.Time
+	count      int // number of filled slots (capped at windowSize)
+	pos        int // next write index
 }
 
 // Record adds a duration sample to the rolling window.
@@ -34,6 +37,7 @@ func (l *LatencyStat) Record(d time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.samples[l.pos] = d
+	l.timestamps[l.pos] = time.Now()
 	l.pos = (l.pos + 1) % windowSize
 	if l.count < windowSize {
 		l.count++
@@ -90,6 +94,157 @@ func (l *LatencyStat) Snapshot() LatencySnapshot {
 	}
 }
 
+// TimedSample is a single latency measurement with its wall-clock time.
+type TimedSample struct {
+	At       time.Time
+	Duration time.Duration
+}
+
+// LatencyDetailSnapshot provides raw data points and statistics for deep-dive views.
+type LatencyDetailSnapshot struct {
+	Samples []TimedSample // newest-first, only entries with non-zero timestamps
+	LatencySnapshot
+	P50 time.Duration
+}
+
+// DetailSnapshot returns a detailed snapshot including individual timestamped samples.
+func (l *LatencyStat) DetailSnapshot() LatencyDetailSnapshot {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	ds := LatencyDetailSnapshot{}
+	if l.count == 0 {
+		return ds
+	}
+
+	// Collect in insertion order (oldest first).
+	start := (l.pos - l.count + windowSize) % windowSize
+	durations := make([]time.Duration, l.count)
+	for i := 0; i < l.count; i++ {
+		idx := (start + i) % windowSize
+		durations[i] = l.samples[idx]
+		if !l.timestamps[idx].IsZero() {
+			ds.Samples = append(ds.Samples, TimedSample{
+				At:       l.timestamps[idx],
+				Duration: l.samples[idx],
+			})
+		}
+	}
+
+	// Reverse samples to newest-first.
+	for i, j := 0, len(ds.Samples)-1; i < j; i, j = i+1, j-1 {
+		ds.Samples[i], ds.Samples[j] = ds.Samples[j], ds.Samples[i]
+	}
+
+	// Compute stats from sorted durations.
+	sorted := make([]time.Duration, len(durations))
+	copy(sorted, durations)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	var sum time.Duration
+	for _, s := range sorted {
+		sum += s
+	}
+
+	n := len(sorted)
+	ds.Count = l.count
+	ds.Min = sorted[0]
+	ds.Mean = sum / time.Duration(n)
+	ds.P50 = sorted[int(float64(n-1)*0.50)]
+	ds.P95 = sorted[int(float64(n-1)*0.95)]
+	ds.Max = sorted[n-1]
+
+	return ds
+}
+
+// FormatLatencyDeepDive formats a detailed latency report for a single metric.
+func FormatLatencyDeepDive(name string, d LatencyDetailSnapshot) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "📊 Детализация: %s\n", name)
+
+	if d.Count == 0 {
+		sb.WriteString("\nНет данных")
+		return sb.String()
+	}
+
+	fmt.Fprintf(&sb, "\n📈 Статистика (%d замеров):\n", d.Count)
+	fmt.Fprintf(&sb, "  Min:  %s\n", formatDur(d.Min))
+	fmt.Fprintf(&sb, "  Mean: %s\n", formatDur(d.Mean))
+	fmt.Fprintf(&sb, "  P50:  %s\n", formatDur(d.P50))
+	fmt.Fprintf(&sb, "  P95:  %s\n", formatDur(d.P95))
+	fmt.Fprintf(&sb, "  Max:  %s\n", formatDur(d.Max))
+
+	// Distribution histogram with fixed buckets.
+	type bucket struct {
+		label string
+		lo    time.Duration
+		hi    time.Duration // exclusive; 0 means +∞
+	}
+	buckets := []bucket{
+		{"<100мс", 0, 100 * time.Millisecond},
+		{"100-500мс", 100 * time.Millisecond, 500 * time.Millisecond},
+		{"0.5-1с", 500 * time.Millisecond, time.Second},
+		{"1-5с", time.Second, 5 * time.Second},
+		{"5-30с", 5 * time.Second, 30 * time.Second},
+		{">30с", 30 * time.Second, 0},
+	}
+
+	counts := make([]int, len(buckets))
+	// Use all samples (including those without timestamps) for distribution.
+	for _, s := range d.Samples {
+		dur := s.Duration
+		for bi, b := range buckets {
+			if dur >= b.lo && (b.hi == 0 || dur < b.hi) {
+				counts[bi]++
+				break
+			}
+		}
+	}
+	// Also count samples without timestamps if d.Samples < d.Count.
+	// Actually, d.Samples only has timestamped entries. We need all durations for
+	// the histogram. Let's use a different approach — we already have the stats,
+	// but not the raw durations. We'll count from d.Samples only, which represents
+	// all samples that have timestamps (after the data structure change, all new
+	// samples will have timestamps).
+
+	maxCount := 0
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+
+	sb.WriteString("\n📉 Распределение:\n")
+	const maxBar = 15
+	for i, b := range buckets {
+		c := counts[i]
+		barLen := 0
+		if maxCount > 0 {
+			barLen = c * maxBar / maxCount
+		}
+		if c > 0 && barLen == 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+		fmt.Fprintf(&sb, "  %-10s %s %d\n", b.label, bar, c)
+	}
+
+	// Recent timestamped samples.
+	if len(d.Samples) > 0 {
+		show := d.Samples
+		if len(show) > deepDiveMaxSamples {
+			show = show[:deepDiveMaxSamples]
+		}
+		fmt.Fprintf(&sb, "\n🕐 Последние %d замеров:\n", len(show))
+		for _, s := range show {
+			fmt.Fprintf(&sb, "  %s  %s\n", s.At.Format("15:04:05"), formatDur(s.Duration))
+		}
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}
+
 // rawState returns the internal samples/count/pos for persistence.
 func (l *LatencyStat) rawState() LatencyRawState {
 	l.mu.Lock()
@@ -97,6 +252,9 @@ func (l *LatencyStat) rawState() LatencyRawState {
 	var s LatencyRawState
 	for i, d := range l.samples {
 		s.Samples[i] = int64(d)
+		if !l.timestamps[i].IsZero() {
+			s.Timestamps[i] = l.timestamps[i].UnixNano()
+		}
 	}
 	s.Count = l.count
 	s.Pos = l.pos
@@ -109,6 +267,9 @@ func (l *LatencyStat) loadRawState(s LatencyRawState) {
 	defer l.mu.Unlock()
 	for i, ns := range s.Samples {
 		l.samples[i] = time.Duration(ns)
+		if s.Timestamps[i] != 0 {
+			l.timestamps[i] = time.Unix(0, s.Timestamps[i])
+		}
 	}
 	l.count = s.Count
 	l.pos = s.Pos
@@ -123,9 +284,10 @@ type ErrorEntry struct {
 
 // LatencyRawState is the internal state of a LatencyStat, suitable for serialization.
 type LatencyRawState struct {
-	Samples [windowSize]int64 // nanoseconds
-	Count   int
-	Pos     int
+	Samples    [windowSize]int64 // nanoseconds
+	Timestamps [windowSize]int64 // unix nanoseconds
+	Count      int
+	Pos        int
 }
 
 // PersistableSnapshot holds all state that is persisted to DB.

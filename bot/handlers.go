@@ -29,6 +29,7 @@ type telegramClient interface {
 	GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error)
 	GetChat(params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 	SetMyCommands(params *telego.SetMyCommandsParams) error
+	AnswerCallbackQuery(params *telego.AnswerCallbackQueryParams) error
 }
 
 type summaryService interface {
@@ -262,6 +263,11 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	if update.CallbackQuery != nil {
+		b.handleCallbackQuery(update.CallbackQuery)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}
@@ -454,7 +460,7 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
 			return
 		}
-		b.sendMessage(msg.Chat.ID, b.metrics.FormatStatusReport(b.cfg.Model))
+		b.sendStatusWithButtons(msg.Chat.ID)
 	case "/groups":
 		if !isAdmin {
 			b.sendMessage(msg.Chat.ID, "Нет доступа.")
@@ -852,6 +858,73 @@ func (b *Bot) editFormatted(chatID, messageID int64, text string) error {
 func (b *Bot) editOrSendFormatted(chatID, msgID int64, text string) {
 	if editErr := b.editFormatted(chatID, msgID, text); editErr != nil {
 		b.sendFormatted(chatID, text)
+	}
+}
+
+func (b *Bot) sendStatusWithButtons(chatID int64) {
+	defer b.metrics.TelegramSend.Start()()
+	keyboard := tu.InlineKeyboard(
+		tu.InlineKeyboardRow(
+			telego.InlineKeyboardButton{Text: "llm_cluster", CallbackData: "lat:llm_cluster"},
+			telego.InlineKeyboardButton{Text: "llm_summarize", CallbackData: "lat:llm_summarize"},
+		),
+		tu.InlineKeyboardRow(
+			telego.InlineKeyboardButton{Text: "telegram_send", CallbackData: "lat:telegram_send"},
+			telego.InlineKeyboardButton{Text: "telegram_edit", CallbackData: "lat:telegram_edit"},
+		),
+		tu.InlineKeyboardRow(
+			telego.InlineKeyboardButton{Text: "db_add", CallbackData: "lat:db_add"},
+			telego.InlineKeyboardButton{Text: "db_get", CallbackData: "lat:db_get"},
+		),
+	)
+	_, err := b.telegram.SendMessage(
+		tu.Message(tu.ID(chatID), b.metrics.FormatStatusReport(b.cfg.Model)).
+			WithReplyMarkup(keyboard),
+	)
+	if err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send status with keyboard")
+		b.metrics.RecordError("telegram_send", err.Error())
+	}
+}
+
+func (b *Bot) handleCallbackQuery(cq *telego.CallbackQuery) {
+	_ = b.telegram.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
+		CallbackQueryID: cq.ID,
+	})
+
+	if !b.cfg.IsAdminUser(cq.From.ID) {
+		return
+	}
+
+	data := cq.Data
+	if !strings.HasPrefix(data, "lat:") {
+		return
+	}
+	metricName := strings.TrimPrefix(data, "lat:")
+
+	var stat *metrics.LatencyStat
+	switch metricName {
+	case "llm_cluster":
+		stat = &b.metrics.LLMCluster
+	case "llm_summarize":
+		stat = &b.metrics.LLMSummarize
+	case "telegram_send":
+		stat = &b.metrics.TelegramSend
+	case "telegram_edit":
+		stat = &b.metrics.TelegramEdit
+	case "db_add":
+		stat = &b.metrics.DBAdd
+	case "db_get":
+		stat = &b.metrics.DBGet
+	default:
+		return
+	}
+
+	detail := stat.DetailSnapshot()
+	text := metrics.FormatLatencyDeepDive(metricName, detail)
+
+	if cq.Message != nil {
+		b.sendMessage(cq.Message.GetChat().ID, text)
 	}
 }
 
