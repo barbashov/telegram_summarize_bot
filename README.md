@@ -106,7 +106,7 @@ Send a URL in a private message — the bot fetches the page, extracts the artic
 
 SSRF protection is built in: only `http`/`https` schemes are allowed, private/reserved IP ranges are blocked (including cloud metadata endpoints like `169.254.169.254`), DNS is pre-resolved and pinned to prevent rebinding, and redirect targets are re-validated.
 
-Any user not in `ADMIN_USER_IDS` receives "Нет доступа."
+Any user not in `ADMIN_USER_IDS` receives setup guidance instead of admin commands.
 
 ## Bot Commands
 
