@@ -20,9 +20,9 @@ import (
 )
 
 const (
-	openAIAuthURL = "https://auth0.openai.com/authorize"
-	oauthAudience = "https://api.openai.com/v1"
-	oauthScopes   = "openid profile email offline_access"
+	openAIAuthURL    = "https://auth.openai.com/oauth/authorize"
+	oauthScopes      = "openid profile email offline_access api.connectors.read api.connectors.invoke"
+	oauthDefaultPort = 1455
 )
 
 // RunAuth performs the OAuth PKCE flow for OpenAI Codex subscription.
@@ -38,19 +38,18 @@ func RunAuth(clientID, tokenDir string) error {
 		return fmt.Errorf("generate state: %w", err)
 	}
 
-	// Start local callback server
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	// Start local callback server on the well-known Codex CLI port.
+	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", oauthDefaultPort))
 	if err != nil {
-		return fmt.Errorf("start callback server: %w", err)
+		return fmt.Errorf("start callback server on port %d: %w", oauthDefaultPort, err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", oauthDefaultPort)
 
 	codeCh := make(chan string, 1)
 	errCh := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("state") != state {
 			errCh <- fmt.Errorf("state mismatch")
 			http.Error(w, "State mismatch", http.StatusBadRequest)
@@ -59,6 +58,7 @@ func RunAuth(clientID, tokenDir string) error {
 		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
 			desc := r.URL.Query().Get("error_description")
 			errCh <- fmt.Errorf("OAuth error: %s: %s", errMsg, desc)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>", errMsg, desc)
 			return
 		}
@@ -69,6 +69,7 @@ func RunAuth(clientID, tokenDir string) error {
 			return
 		}
 		codeCh <- code
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		_, _ = fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
 	})
 
@@ -113,7 +114,7 @@ func RunAuth(clientID, tokenDir string) error {
 	fmt.Printf("\n✓ Authentication successful! Token saved to %s/openai_tokens.json\n", tokenDir)
 
 	// List available models
-	if err := listModels(tokens.AccessToken); err != nil {
+	if err := listModels(tokens.AccessToken, tokens.AccountID); err != nil {
 		fmt.Printf("\nWarning: could not list models: %v\n", err)
 	}
 
@@ -124,8 +125,71 @@ func RunAuth(clientID, tokenDir string) error {
 	return nil
 }
 
+// RunTokenRefresh forces a token refresh and prints the result.
+func RunTokenRefresh(clientID, tokenDir string) error {
+	store := provider.NewTokenStore(tokenDir, clientID)
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, "bot")
+	}
+
+	fmt.Println("Forcing token refresh...")
+	if err := store.ForceRefresh(); err != nil {
+		return fmt.Errorf("refresh failed: %w", err)
+	}
+
+	token, err := store.GetValidToken()
+	if err != nil {
+		return fmt.Errorf("get token after refresh: %w", err)
+	}
+
+	fmt.Println("✓ Token refreshed successfully")
+	fmt.Printf("  Token prefix: %s...\n", token[:20])
+	return nil
+}
+
+// RunModels lists available OpenAI models using stored OAuth tokens.
+func RunModels(clientID, tokenDir string) error {
+	store := provider.NewTokenStore(tokenDir, clientID)
+	if err := store.Load(); err != nil {
+		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, "bot")
+	}
+
+	token, err := store.GetValidToken()
+	if err != nil {
+		return err
+	}
+
+	return listModels(token, store.GetAccountID())
+}
+
+// RunTest sends a test prompt to the given model via OAuth and prints the response.
+func RunTest(clientID, tokenDir, model string) error {
+	client, err := provider.NewOAuthClient(tokenDir, clientID)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("Sending test prompt to %s...\n", model)
+
+	resp, err := client.Complete(context.Background(), provider.CompletionRequest{
+		Model: model,
+		Messages: []provider.Message{
+			{Role: "system", Content: "You are a helpful assistant. Keep your answer to 2-3 sentences."},
+			{Role: "user", Content: "Explain why cats always land on their feet, but in the style of a dramatic movie trailer narrator."},
+		},
+		MaxTokens:   256,
+		Temperature: 0.8,
+	})
+	if err != nil {
+		return fmt.Errorf("completion failed: %w", err)
+	}
+
+	fmt.Printf("\n✓ Model %s responded (finish_reason=%s):\n\n%s\n", model, resp.FinishReason, resp.Content)
+	return nil
+}
+
 func generateCodeVerifier() (string, error) {
-	b := make([]byte, 32)
+	b := make([]byte, 64)
 	if _, err := rand.Read(b); err != nil {
 		return "", err
 	}
@@ -147,15 +211,18 @@ func generateState() (string, error) {
 
 func buildAuthURL(clientID, redirectURI, challenge, state string) string {
 	params := url.Values{}
+	params.Set("response_type", "code")
 	params.Set("client_id", clientID)
 	params.Set("redirect_uri", redirectURI)
-	params.Set("response_type", "code")
 	params.Set("scope", oauthScopes)
-	params.Set("state", state)
 	params.Set("code_challenge", challenge)
 	params.Set("code_challenge_method", "S256")
-	params.Set("audience", oauthAudience)
-	return openAIAuthURL + "?" + params.Encode()
+	params.Set("id_token_add_organizations", "true")
+	params.Set("codex_cli_simplified_flow", "true")
+	params.Set("state", state)
+	params.Set("originator", "codex-tui")
+	// Use %20 for spaces instead of + (url.Values.Encode uses +, but OAuth expects %20).
+	return openAIAuthURL + "?" + strings.ReplaceAll(params.Encode(), "+", "%20")
 }
 
 func openBrowser(rawURL string) {
@@ -212,22 +279,30 @@ func exchangeCode(clientID, code, redirectURI, verifier string) (*provider.OAuth
 	return &provider.OAuthTokens{
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
+		IDToken:      tr.IDToken,
+		AccountID:    provider.ExtractAccountID(tr.IDToken),
 		ExpiresAt:    expiresAt,
 	}, nil
 }
 
 type modelsResponse struct {
-	Data []struct {
-		ID string `json:"id"`
-	} `json:"data"`
+	Models []struct {
+		Slug        string `json:"slug"`
+		DisplayName string `json:"display_name"`
+	} `json:"models"`
 }
 
-func listModels(accessToken string) error {
-	req, err := http.NewRequest("GET", "https://api.openai.com/v1/models", http.NoBody)
+func listModels(accessToken, accountID string) error {
+	req, err := http.NewRequest("GET", "https://chatgpt.com/backend-api/codex/models?client_version=0.118.0", http.NoBody)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
+	req.Header.Set("version", "0.118.0")
+	req.Header.Set("originator", "codex-tui")
+	if accountID != "" {
+		req.Header.Set("ChatGPT-Account-ID", accountID)
+	}
 
 	resp, err := provider.HTTPClient(10 * time.Second).Do(req)
 	if err != nil {
@@ -245,14 +320,18 @@ func listModels(accessToken string) error {
 		return err
 	}
 
-	if len(models.Data) == 0 {
+	if len(models.Models) == 0 {
 		fmt.Println("\nNo models available.")
 		return nil
 	}
 
 	fmt.Println("\nAvailable models:")
-	for _, m := range models.Data {
-		fmt.Printf("  - %s\n", m.ID)
+	for _, m := range models.Models {
+		if m.DisplayName != "" {
+			fmt.Printf("  - %s (%s)\n", m.Slug, m.DisplayName)
+		} else {
+			fmt.Printf("  - %s\n", m.Slug)
+		}
 	}
 	return nil
 }

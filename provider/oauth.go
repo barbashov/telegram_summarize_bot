@@ -5,13 +5,15 @@ import (
 	"fmt"
 )
 
+const chatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+
 type oauthClient struct {
 	inner      LLMClient
 	tokenStore *TokenStore
 }
 
 // NewOAuthClient creates an LLM client that authenticates via OAuth tokens.
-// Uses the Responses API under the hood with OAuth token injection.
+// Uses the ChatGPT backend Codex API with the OAuth access_token and ChatGPT-Account-ID header.
 func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 	store := NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
@@ -24,10 +26,12 @@ func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 		return nil, err
 	}
 
-	// Create a responses client with the current token
-	inner, err := NewResponsesClient(token, "https://api.openai.com/v1")
+	inner, err := newResponsesClient(token, chatGPTCodexBaseURL, false)
 	if err != nil {
 		return nil, fmt.Errorf("create responses client: %w", err)
+	}
+	if rc, ok := inner.(*responsesClient); ok {
+		rc.accountID = store.GetAccountID()
 	}
 
 	return &oauthClient{
@@ -43,9 +47,10 @@ func (c *oauthClient) Complete(ctx context.Context, req CompletionRequest) (Comp
 		return CompletionResponse{}, fmt.Errorf("get OAuth token: %w", err)
 	}
 
-	// Update the inner client's token
+	// Update token and account ID on the inner responses client.
 	if rc, ok := c.inner.(*responsesClient); ok {
 		rc.token = token
+		rc.accountID = c.tokenStore.GetAccountID()
 	}
 
 	return c.inner.Complete(ctx, req)

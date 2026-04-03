@@ -3,6 +3,7 @@ package cmd
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -73,14 +74,16 @@ func TestBuildAuthURL(t *testing.T) {
 
 	params := parsed.Query()
 	checks := map[string]string{
-		"client_id":             "client-123",
-		"redirect_uri":          "http://localhost:8080/callback",
-		"response_type":         "code",
-		"scope":                 oauthScopes,
-		"state":                 "state-xyz",
-		"code_challenge":        "challenge-abc",
-		"code_challenge_method": "S256",
-		"audience":              oauthAudience,
+		"client_id":                  "client-123",
+		"redirect_uri":               "http://localhost:8080/callback",
+		"response_type":              "code",
+		"scope":                      oauthScopes,
+		"state":                      "state-xyz",
+		"code_challenge":             "challenge-abc",
+		"code_challenge_method":      "S256",
+		"id_token_add_organizations": "true",
+		"codex_cli_simplified_flow":  "true",
+		"originator":                 "codex-tui",
 	}
 	for key, want := range checks {
 		if got := params.Get(key); got != want {
@@ -95,36 +98,44 @@ func TestCallbackHandler(t *testing.T) {
 	errCh := make(chan error, 1)
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/callback", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("state") != state {
-			errCh <- http.ErrAbortHandler
+			errCh <- fmt.Errorf("state mismatch")
 			http.Error(w, "State mismatch", http.StatusBadRequest)
 			return
 		}
 		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
-			errCh <- http.ErrAbortHandler
+			desc := r.URL.Query().Get("error_description")
+			errCh <- fmt.Errorf("OAuth error: %s: %s", errMsg, desc)
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>", errMsg, desc)
 			return
 		}
 		code := r.URL.Query().Get("code")
 		if code == "" {
-			errCh <- http.ErrAbortHandler
+			errCh <- fmt.Errorf("no authorization code in callback")
 			http.Error(w, "No code", http.StatusBadRequest)
 			return
 		}
 		codeCh <- code
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
 	})
 
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
 	t.Run("success", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/callback?code=auth123&state=" + state)
+		resp, err := http.Get(ts.URL + "/auth/callback?code=auth123&state=" + state)
 		if err != nil {
 			t.Fatalf("GET: %v", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
 		}
 		code := <-codeCh
 		if code != "auth123" {
@@ -133,7 +144,7 @@ func TestCallbackHandler(t *testing.T) {
 	})
 
 	t.Run("state mismatch", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/callback?code=auth123&state=wrong-state")
+		resp, err := http.Get(ts.URL + "/auth/callback?code=auth123&state=wrong-state")
 		if err != nil {
 			t.Fatalf("GET: %v", err)
 		}
@@ -145,13 +156,28 @@ func TestCallbackHandler(t *testing.T) {
 	})
 
 	t.Run("missing code", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/callback?state=" + state)
+		resp, err := http.Get(ts.URL + "/auth/callback?state=" + state)
 		if err != nil {
 			t.Fatalf("GET: %v", err)
 		}
 		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != http.StatusBadRequest {
 			t.Errorf("status = %d, want 400", resp.StatusCode)
+		}
+		<-errCh
+	})
+
+	t.Run("oauth error", func(t *testing.T) {
+		resp, err := http.Get(ts.URL + "/auth/callback?state=" + state + "&error=access_denied&error_description=user+denied")
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("status = %d, want 200", resp.StatusCode)
+		}
+		if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
+			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
 		}
 		<-errCh
 	})

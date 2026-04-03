@@ -26,11 +26,33 @@ func main() {
 	}
 
 	// Handle subcommands before full bot startup
-	if len(os.Args) >= 3 && os.Args[1] == "openai" && os.Args[2] == "auth" {
-		if err := cmd.RunAuth(cfg.OAuthClientID, cfg.OAuthTokenDir); err != nil {
-			logger.Fatal().Err(err).Msg("OAuth authentication failed")
+	if len(os.Args) >= 3 && os.Args[1] == "openai" {
+		switch os.Args[2] {
+		case "auth":
+			if len(os.Args) >= 4 && os.Args[3] == "token-refresh" {
+				if err := cmd.RunTokenRefresh(cfg.OAuthClientID, cfg.OAuthTokenDir); err != nil {
+					logger.Fatal().Err(err).Msg("Token refresh failed")
+				}
+			} else {
+				if err := cmd.RunAuth(cfg.OAuthClientID, cfg.OAuthTokenDir); err != nil {
+					logger.Fatal().Err(err).Msg("OAuth authentication failed")
+				}
+			}
+			return
+		case "models":
+			if err := cmd.RunModels(cfg.OAuthClientID, cfg.OAuthTokenDir); err != nil {
+				logger.Fatal().Err(err).Msg("Model listing failed")
+			}
+			return
+		case "test":
+			if len(os.Args) < 4 {
+				logger.Fatal().Msg("Usage: bot openai test MODEL_NAME")
+			}
+			if err := cmd.RunTest(cfg.OAuthClientID, cfg.OAuthTokenDir, os.Args[3]); err != nil {
+				logger.Fatal().Err(err).Msg("Model test failed")
+			}
+			return
 		}
-		return
 	}
 
 	m := metrics.New()

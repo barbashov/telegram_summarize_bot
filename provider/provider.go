@@ -3,11 +3,32 @@ package provider
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"telegram_summarize_bot/config"
+	"telegram_summarize_bot/logger"
 )
+
+// debugTransport logs the outgoing request body and response status for debugging.
+type debugTransport struct{ inner http.RoundTripper }
+
+func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		body, _ := io.ReadAll(req.Body)
+		req.Body = io.NopCloser(strings.NewReader(string(body)))
+		logger.Debug().Str("url", req.URL.String()).Str("body", string(body)).Msg("LLM request")
+	}
+	resp, err := d.inner.RoundTrip(req)
+	if resp != nil && resp.StatusCode >= 400 {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
+		logger.Debug().Int("status", resp.StatusCode).Str("body", string(respBody)).Str("url", req.URL.String()).Msg("LLM error response")
+	}
+	return resp, err
+}
 
 // HTTPClient creates an HTTP client with proxy support and the given timeout.
 func HTTPClient(timeout time.Duration) *http.Client {
@@ -16,6 +37,16 @@ func HTTPClient(timeout time.Duration) *http.Client {
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
 		},
+	}
+}
+
+// DebugHTTPClient creates an HTTP client that logs all requests and responses.
+func DebugHTTPClient(timeout time.Duration) *http.Client {
+	return &http.Client{
+		Timeout: timeout,
+		Transport: &debugTransport{inner: &http.Transport{
+			Proxy: http.ProxyFromEnvironment,
+		}},
 	}
 }
 

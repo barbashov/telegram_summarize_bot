@@ -20,7 +20,7 @@ const (
 	LLMModeOAuth       LLMMode = "oauth"       // OpenAI Codex subscription via OAuth
 )
 
-const defaultOAuthClientID = "app_z7FeiKmHBMTgoLkU61e9b" // Codex CLI well-known client ID
+const defaultOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI well-known client ID
 
 type Config struct {
 	BotToken         string

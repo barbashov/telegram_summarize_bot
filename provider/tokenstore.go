@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,13 +18,14 @@ import (
 const (
 	tokenFileName  = "openai_tokens.json"
 	refreshBuffer  = 5 * time.Minute
-	OpenAITokenURL = "https://auth0.openai.com/oauth/token"
+	OpenAITokenURL = "https://auth.openai.com/oauth/token"
 )
 
 // TokenResponse is the OAuth token endpoint response format.
 type TokenResponse struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
+	IDToken      string `json:"id_token"`
 	ExpiresIn    int    `json:"expires_in"`
 	TokenType    string `json:"token_type"`
 	Error        string `json:"error"`
@@ -34,6 +36,8 @@ type TokenResponse struct {
 type OAuthTokens struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
+	IDToken      string    `json:"id_token,omitempty"`
+	AccountID    string    `json:"account_id,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
 }
 
@@ -118,6 +122,13 @@ func (s *TokenStore) GetValidToken() (string, error) {
 	return s.tokens.AccessToken, nil
 }
 
+// ForceRefresh forces a token refresh regardless of expiration.
+func (s *TokenStore) ForceRefresh() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refreshLocked()
+}
+
 func (s *TokenStore) refreshLocked() error {
 	if s.tokens.RefreshToken == "" {
 		return fmt.Errorf("no refresh token available, re-authenticate with '%s openai auth'", os.Args[0])
@@ -158,6 +169,8 @@ func (s *TokenStore) refreshLocked() error {
 	newTokens := &OAuthTokens{
 		AccessToken:  tr.AccessToken,
 		RefreshToken: s.tokens.RefreshToken,
+		IDToken:      tr.IDToken,
+		AccountID:    ExtractAccountID(tr.IDToken),
 		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
 	}
 	// Store rotated refresh token if provided
@@ -177,4 +190,39 @@ func (s *TokenStore) refreshLocked() error {
 	s.tokens = newTokens
 	logger.Info().Time("expires_at", newTokens.ExpiresAt).Msg("OAuth token refreshed successfully")
 	return nil
+}
+
+// GetAccountID returns the ChatGPT account ID extracted from the stored id_token.
+func (s *TokenStore) GetAccountID() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		return ""
+	}
+	return s.tokens.AccountID
+}
+
+// ExtractAccountID extracts the chatgpt_account_id claim from a JWT id_token.
+// No signature verification is performed — we trust the token endpoint.
+func ExtractAccountID(idToken string) string {
+	if idToken == "" {
+		return ""
+	}
+	parts := strings.Split(idToken, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Auth struct {
+			AccountID string `json:"chatgpt_account_id"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.Auth.AccountID
 }

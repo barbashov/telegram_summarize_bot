@@ -14,6 +14,8 @@ func TestTokenStoreSaveAndLoad(t *testing.T) {
 	tokens := &OAuthTokens{
 		AccessToken:  "access-123",
 		RefreshToken: "refresh-456",
+		IDToken:      "id-token-789",
+		AccountID:    "account-abc",
 		ExpiresAt:    time.Now().Add(time.Hour),
 	}
 
@@ -39,6 +41,12 @@ func TestTokenStoreSaveAndLoad(t *testing.T) {
 	}
 	if token != "access-123" {
 		t.Errorf("token = %q, want %q", token, "access-123")
+	}
+	if store2.tokens.IDToken != "id-token-789" {
+		t.Errorf("IDToken = %q, want %q", store2.tokens.IDToken, "id-token-789")
+	}
+	if store2.tokens.AccountID != "account-abc" {
+		t.Errorf("AccountID = %q, want %q", store2.tokens.AccountID, "account-abc")
 	}
 }
 
