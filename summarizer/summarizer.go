@@ -17,10 +17,11 @@ import (
 )
 
 const (
-	clusterMaxTokens = 400
-	finalMaxTokens   = 1000
-	urlMaxTokens     = 2000
-	maxLLMRetries    = 3
+	clusterMaxTokens    = 400
+	finalMaxTokens      = 1000
+	urlMaxTokens        = 2000
+	maxLLMRetries       = 3
+	maxClusterTokensCap = 8000
 )
 
 type chatCompletionClient interface {
@@ -140,6 +141,9 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", req.MaxTokens).
 				Msg("cluster response truncated by token limit")
 			req.MaxTokens = req.MaxTokens * 3 / 2
+			if req.MaxTokens > maxClusterTokensCap {
+				req.MaxTokens = maxClusterTokensCap
+			}
 		}
 
 		var parsed topicClusterResponse
@@ -516,7 +520,15 @@ func unmarshalJSONObject(content string, target interface{}) error {
 		return fmt.Errorf("model response does not contain a JSON object")
 	}
 
-	return json.Unmarshal([]byte(content[start:end+1]), target)
+	raw := content[start : end+1]
+	if err := json.Unmarshal([]byte(raw), target); err != nil {
+		truncated := raw
+		if len(truncated) > 200 {
+			truncated = truncated[:200] + "..."
+		}
+		return fmt.Errorf("json unmarshal: %w; raw (truncated): %s", err, truncated)
+	}
+	return nil
 }
 
 func firstChoiceContent(resp openai.ChatCompletionResponse) (string, error) {

@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"telegram_summarize_bot/logger"
 )
 
 const (
@@ -47,7 +49,9 @@ func (l *LatencyStat) Record(d time.Duration) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	_ = l.db.InsertBotEvent(ctx, l.metric, time.Now(), int64(d))
+	if err := l.db.InsertBotEvent(ctx, l.metric, time.Now(), int64(d)); err != nil {
+		logger.Warn().Err(err).Str("metric", l.metric).Msg("failed to record latency event")
+	}
 }
 
 // Start returns a closure that, when called, records time.Since(start).

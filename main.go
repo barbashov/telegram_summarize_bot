@@ -7,9 +7,9 @@ import (
 	"syscall"
 	"time"
 
-	"telegram_summarize_bot/bot"
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/handlers"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
@@ -26,12 +26,10 @@ func main() {
 	m := metrics.New()
 
 	database, err := db.New(cfg.DBPath, m)
-	if err == nil {
-		m.InitLatencyStats(database)
-	}
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
+	m.InitLatencyStats(database)
 	defer func() { _ = database.Close() }()
 
 	{
@@ -58,7 +56,7 @@ func main() {
 		logger.Fatal().Err(err).Msg("Failed to initialize summarizer")
 	}
 
-	tgBot, err := bot.NewBot(cfg, database, sum, m)
+	tgBot, err := handlers.NewBot(cfg, database, sum, m)
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize bot")
 	}
