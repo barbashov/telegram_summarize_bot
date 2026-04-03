@@ -94,7 +94,8 @@ func (s *Summarizer) retrySleep(ctx context.Context, attempt int) error {
 }
 
 func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt string, maxTokens int, temperature float32) (provider.CompletionResponse, error) {
-	return s.client.Complete(ctx, provider.CompletionRequest{
+	logger.Debug().Str("model", s.model).Int("max_tokens", maxTokens).Int("prompt_len", len(userPrompt)).Msg("LLM request started")
+	resp, err := s.client.Complete(ctx, provider.CompletionRequest{
 		Model: s.model,
 		Messages: []provider.Message{
 			{Role: "system", Content: systemPrompt},
@@ -103,6 +104,12 @@ func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt stri
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
 	})
+	if err != nil {
+		logger.Debug().Err(err).Str("model", s.model).Msg("LLM request failed")
+	} else {
+		logger.Debug().Str("model", s.model).Str("finish_reason", resp.FinishReason).Int("response_len", len(resp.Content)).Msg("LLM request completed")
+	}
+	return resp, err
 }
 
 func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*StructuredSummary, error) {
