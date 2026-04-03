@@ -77,9 +77,9 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 	if c.accountID != "" {
 		// ChatGPT backend requires store=false; rejects max_output_tokens and temperature.
 		params.Store = openai.Bool(false)
-		reqOpts = append(reqOpts, option.WithHeader("ChatGPT-Account-ID", c.accountID))
-		reqOpts = append(reqOpts, option.WithHeader("version", "0.118.0"))
-		reqOpts = append(reqOpts, option.WithHeader("originator", "codex-tui"))
+		reqOpts = append(reqOpts, option.WithHeader(HeaderAccountID, c.accountID))
+		reqOpts = append(reqOpts, option.WithHeader("version", CodexClientVersion))
+		reqOpts = append(reqOpts, option.WithHeader("originator", CodexOriginator))
 		return c.completeStreaming(ctx, params, reqOpts)
 	}
 

@@ -3,9 +3,15 @@ package provider
 import (
 	"context"
 	"fmt"
+	"os"
 )
 
-const chatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+const (
+	ChatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
+	CodexClientVersion  = "0.118.0"
+	CodexOriginator     = "codex-tui"
+	HeaderAccountID     = "ChatGPT-Account-ID"
+)
 
 type oauthClient struct {
 	inner      LLMClient
@@ -17,7 +23,7 @@ type oauthClient struct {
 func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 	store := NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
-		return nil, fmt.Errorf("load OAuth tokens: %w (run '%s openai auth' first)", err, "bot")
+		return nil, fmt.Errorf("load OAuth tokens: %w (run '%s openai auth' first)", err, os.Args[0])
 	}
 
 	// Get initial token to verify it's valid
@@ -26,7 +32,7 @@ func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 		return nil, err
 	}
 
-	inner, err := newResponsesClient(token, chatGPTCodexBaseURL, false)
+	inner, err := newResponsesClient(token, ChatGPTCodexBaseURL, false)
 	if err != nil {
 		return nil, fmt.Errorf("create responses client: %w", err)
 	}

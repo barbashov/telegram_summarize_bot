@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"os/exec"
 	"runtime"
 	"strings"
@@ -129,7 +130,7 @@ func RunAuth(clientID, tokenDir string) error {
 func RunTokenRefresh(clientID, tokenDir string) error {
 	store := provider.NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
-		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, "bot")
+		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, os.Args[0])
 	}
 
 	fmt.Println("Forcing token refresh...")
@@ -151,7 +152,7 @@ func RunTokenRefresh(clientID, tokenDir string) error {
 func RunModels(clientID, tokenDir string) error {
 	store := provider.NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
-		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, "bot")
+		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, os.Args[0])
 	}
 
 	token, err := store.GetValidToken()
@@ -220,7 +221,7 @@ func buildAuthURL(clientID, redirectURI, challenge, state string) string {
 	params.Set("id_token_add_organizations", "true")
 	params.Set("codex_cli_simplified_flow", "true")
 	params.Set("state", state)
-	params.Set("originator", "codex-tui")
+	params.Set("originator", provider.CodexOriginator)
 	// Use %20 for spaces instead of + (url.Values.Encode uses +, but OAuth expects %20).
 	return openAIAuthURL + "?" + strings.ReplaceAll(params.Encode(), "+", "%20")
 }
@@ -241,47 +242,23 @@ func openBrowser(rawURL string) {
 }
 
 func exchangeCode(clientID, code, redirectURI, verifier string) (*provider.OAuthTokens, error) {
-	data := url.Values{
+	tr, err := provider.PostTokenRequest(url.Values{
 		"grant_type":    {"authorization_code"},
 		"client_id":     {clientID},
 		"code":          {code},
 		"redirect_uri":  {redirectURI},
 		"code_verifier": {verifier},
-	}
-
-	client := provider.HTTPClient(30 * time.Second)
-	resp, err := client.Post(
-		provider.OpenAITokenURL, "application/x-www-form-urlencoded",
-		strings.NewReader(data.Encode()),
-	)
+	})
 	if err != nil {
-		return nil, fmt.Errorf("HTTP request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read response: %w", err)
+		return nil, err
 	}
 
-	var tr provider.TokenResponse
-	if err := json.Unmarshal(body, &tr); err != nil {
-		return nil, fmt.Errorf("parse response: %w (body: %s)", err, string(body))
-	}
-	if tr.Error != "" {
-		return nil, fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
-	}
-	if tr.AccessToken == "" {
-		return nil, fmt.Errorf("no access_token in response")
-	}
-
-	expiresAt := time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second)
 	return &provider.OAuthTokens{
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
 		IDToken:      tr.IDToken,
 		AccountID:    provider.ExtractAccountID(tr.IDToken),
-		ExpiresAt:    expiresAt,
+		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
 	}, nil
 }
 
@@ -293,15 +270,15 @@ type modelsResponse struct {
 }
 
 func listModels(accessToken, accountID string) error {
-	req, err := http.NewRequest("GET", "https://chatgpt.com/backend-api/codex/models?client_version=0.118.0", http.NoBody)
+	req, err := http.NewRequest("GET", provider.ChatGPTCodexBaseURL+"/models?client_version="+provider.CodexClientVersion, http.NoBody)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("version", "0.118.0")
-	req.Header.Set("originator", "codex-tui")
+	req.Header.Set("version", provider.CodexClientVersion)
+	req.Header.Set("originator", provider.CodexOriginator)
 	if accountID != "" {
-		req.Header.Set("ChatGPT-Account-ID", accountID)
+		req.Header.Set(provider.HeaderAccountID, accountID)
 	}
 
 	resp, err := provider.HTTPClient(10 * time.Second).Do(req)

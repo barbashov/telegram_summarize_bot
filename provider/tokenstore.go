@@ -134,36 +134,13 @@ func (s *TokenStore) refreshLocked() error {
 		return fmt.Errorf("no refresh token available, re-authenticate with '%s openai auth'", os.Args[0])
 	}
 
-	data := url.Values{
+	tr, err := PostTokenRequest(url.Values{
 		"grant_type":    {"refresh_token"},
 		"client_id":     {s.clientID},
 		"refresh_token": {s.tokens.RefreshToken},
-	}
-
-	client := HTTPClient(30 * time.Second)
-	resp, err := client.Post(
-		OpenAITokenURL, "application/x-www-form-urlencoded",
-		strings.NewReader(data.Encode()),
-	)
+	})
 	if err != nil {
-		return fmt.Errorf("HTTP request: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return fmt.Errorf("read response: %w", err)
-	}
-
-	var tr TokenResponse
-	if err := json.Unmarshal(body, &tr); err != nil {
-		return fmt.Errorf("parse response: %w", err)
-	}
-	if tr.Error != "" {
-		return fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
-	}
-	if tr.AccessToken == "" {
-		return fmt.Errorf("no access_token in refresh response")
+		return err
 	}
 
 	newTokens := &OAuthTokens{
@@ -190,6 +167,36 @@ func (s *TokenStore) refreshLocked() error {
 	s.tokens = newTokens
 	logger.Info().Time("expires_at", newTokens.ExpiresAt).Msg("OAuth token refreshed successfully")
 	return nil
+}
+
+// PostTokenRequest posts form data to OpenAITokenURL and returns the parsed response.
+func PostTokenRequest(data url.Values) (*TokenResponse, error) {
+	client := HTTPClient(30 * time.Second)
+	resp, err := client.Post(
+		OpenAITokenURL, "application/x-www-form-urlencoded",
+		strings.NewReader(data.Encode()),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("HTTP request: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("read response: %w", err)
+	}
+
+	var tr TokenResponse
+	if err := json.Unmarshal(body, &tr); err != nil {
+		return nil, fmt.Errorf("parse response: %w (body: %s)", err, string(body))
+	}
+	if tr.Error != "" {
+		return nil, fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
+	}
+	if tr.AccessToken == "" {
+		return nil, fmt.Errorf("no access_token in response")
+	}
+	return &tr, nil
 }
 
 // GetAccountID returns the ChatGPT account ID extracted from the stored id_token.
