@@ -43,7 +43,7 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	content, err := fetcher.Fetch(ctx, rawURL, a.cfg.URLMaxChars)
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to fetch URL")
-		a.deps.EditOrSend(chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error())
+		a.deps.EditWithRetry(chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error())
 		return
 	}
 
@@ -54,7 +54,7 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	summary, err := a.summarizer.SummarizeURL(ctx, rawURL, content)
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to summarize URL")
-		a.deps.EditOrSend(chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		a.deps.EditWithRetry(chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
@@ -63,7 +63,7 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	if len(chunks) == 0 {
 		return
 	}
-	a.deps.EditOrSendFormatted(chatID, statusMsgID, chunks[0])
+	a.deps.EditFormattedWithRetry(chatID, statusMsgID, chunks[0])
 	for _, chunk := range chunks[1:] {
 		a.deps.SendFormatted(chatID, chunk)
 	}

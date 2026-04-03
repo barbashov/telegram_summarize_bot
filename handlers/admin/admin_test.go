@@ -35,12 +35,12 @@ func (f *fakeDeps) EditMessage(chatID, messageID int64, text string) error {
 	return nil
 }
 
-func (f *fakeDeps) EditOrSend(chatID, msgID int64, text string) {
-	f.sentTexts = append(f.sentTexts, text)
+func (f *fakeDeps) EditWithRetry(chatID, msgID int64, text string) {
+	f.editTexts = append(f.editTexts, text)
 }
 
-func (f *fakeDeps) EditOrSendFormatted(chatID, msgID int64, text string) {
-	f.formattedText = append(f.formattedText, text)
+func (f *fakeDeps) EditFormattedWithRetry(chatID, msgID int64, text string) {
+	f.editTexts = append(f.editTexts, text)
 }
 
 type fakeTelegram struct {

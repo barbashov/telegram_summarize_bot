@@ -18,8 +18,8 @@ type Deps interface {
 	SendMessage(chatID int64, text string) int64
 	SendFormatted(chatID int64, text string)
 	EditMessage(chatID, messageID int64, text string) error
-	EditOrSend(chatID, msgID int64, text string)
-	EditOrSendFormatted(chatID, msgID int64, text string)
+	EditWithRetry(chatID, msgID int64, text string)
+	EditFormattedWithRetry(chatID, msgID int64, text string)
 }
 
 // SummaryService abstracts the summarizer for URL summarization.

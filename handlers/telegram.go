@@ -2,11 +2,17 @@ package handlers
 
 import (
 	"context"
+	"time"
 
 	"telegram_summarize_bot/logger"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
+)
+
+const (
+	editRetries    = 3
+	editRetryDelay = 2 * time.Second
 )
 
 func (b *Bot) sendMessage(chatID int64, text string) int64 {
@@ -23,9 +29,12 @@ func (b *Bot) sendMessage(chatID int64, text string) int64 {
 	return int64(msg.MessageID)
 }
 
-func (b *Bot) editOrSend(chatID, msgID int64, text string) {
-	if editErr := b.editMessage(chatID, msgID, text); editErr != nil {
-		b.sendMessage(chatID, text)
+func (b *Bot) editWithRetry(chatID, msgID int64, text string) {
+	for range editRetries {
+		if err := b.editMessage(chatID, msgID, text); err == nil {
+			return
+		}
+		time.Sleep(editRetryDelay)
 	}
 }
 
@@ -70,9 +79,12 @@ func (b *Bot) editFormatted(chatID, messageID int64, text string) error {
 	return err
 }
 
-func (b *Bot) editOrSendFormatted(chatID, msgID int64, text string) {
-	if editErr := b.editFormatted(chatID, msgID, text); editErr != nil {
-		b.sendFormatted(chatID, text)
+func (b *Bot) editFormattedWithRetry(chatID, msgID int64, text string) {
+	for range editRetries {
+		if err := b.editFormatted(chatID, msgID, text); err == nil {
+			return
+		}
+		time.Sleep(editRetryDelay)
 	}
 }
 

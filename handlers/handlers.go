@@ -158,14 +158,14 @@ func (b *Bot) EditMessage(chatID, messageID int64, text string) error {
 	return b.editMessage(chatID, messageID, text)
 }
 
-// EditOrSend tries to edit a message; falls back to sending a new one.
-func (b *Bot) EditOrSend(chatID, msgID int64, text string) {
-	b.editOrSend(chatID, msgID, text)
+// EditWithRetry tries to edit a message, retrying on failure.
+func (b *Bot) EditWithRetry(chatID, msgID int64, text string) {
+	b.editWithRetry(chatID, msgID, text)
 }
 
-// EditOrSendFormatted tries to edit a MarkdownV2 message; falls back to sending.
-func (b *Bot) EditOrSendFormatted(chatID, msgID int64, text string) {
-	b.editOrSendFormatted(chatID, msgID, text)
+// EditFormattedWithRetry tries to edit a MarkdownV2 message, retrying on failure.
+func (b *Bot) EditFormattedWithRetry(chatID, msgID int64, text string) {
+	b.editFormattedWithRetry(chatID, msgID, text)
 }
 
 // TelegramClient returns the underlying Telegram client for direct API calls.

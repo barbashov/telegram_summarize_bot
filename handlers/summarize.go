@@ -79,7 +79,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
-		b.editOrSend(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		b.editWithRetry(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
@@ -98,7 +98,7 @@ func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.Structu
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации\\."}
 	}
 
-	b.editOrSendFormatted(chatID, statusMsgID, chunks[0])
+	b.editFormattedWithRetry(chatID, statusMsgID, chunks[0])
 	for _, chunk := range chunks[1:] {
 		b.sendFormatted(chatID, chunk)
 	}
