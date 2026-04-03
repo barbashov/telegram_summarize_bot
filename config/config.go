@@ -1,56 +1,121 @@
 package config
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/joho/godotenv"
+	"telegram_summarize_bot/logger"
 )
+
+// LLMMode selects which LLM API backend to use.
+type LLMMode string
+
+const (
+	LLMModeCompletions LLMMode = "completions" // OpenAI Chat Completions API (default)
+	LLMModeResponses   LLMMode = "responses"   // OpenAI Responses API
+	LLMModeOAuth       LLMMode = "oauth"       // OpenAI Codex subscription via OAuth
+)
+
+const defaultOAuthClientID = "app_z7FeiKmHBMTgoLkU61e9b" // Codex CLI well-known client ID
 
 type Config struct {
 	BotToken         string
-	OpenRouterKey    string
+	LLMMode          LLMMode
+	LLMToken         string
+	LLMEndpoint      string
+	Model            string
 	SummaryHours     int
 	RetentionDays    int
 	MaxMessages      int
 	TopicMax         int
 	RateLimitSec     int
-	OpenRouterURL    string
-	Model            string
 	DBPath           string
 	AllowedGroups    []int64
 	AdminUserIDs     []int64
 	DailySummaryHour int
 	ReplyThreads     bool
 	URLMaxChars      int
+	OAuthTokenDir    string
+	OAuthClientID    string
 }
 
 func Load() (*Config, error) {
 	_ = godotenv.Load()
 
 	botToken := os.Getenv("BOT_TOKEN")
-	openRouterKey := os.Getenv("OPENROUTER_API_KEY")
-	openRouterURL := os.Getenv("OPENROUTER_URL")
-	model := os.Getenv("MODEL")
-	dbPath := os.Getenv("DB_PATH")
-
 	if botToken == "" {
 		return nil, &ConfigError{Field: "BOT_TOKEN"}
 	}
-	if openRouterKey == "" {
-		return nil, &ConfigError{Field: "OPENROUTER_API_KEY"}
+
+	llmMode := LLMMode(strings.TrimSpace(strings.ToLower(os.Getenv("LLM_MODE"))))
+	if llmMode == "" {
+		llmMode = LLMModeCompletions
 	}
 
-	if openRouterURL == "" {
-		openRouterURL = "https://openrouter.ai/api/v1"
+	// LLM_TOKEN with fallback to deprecated OPENROUTER_API_KEY
+	llmToken := os.Getenv("LLM_TOKEN")
+	if llmToken == "" {
+		if legacy := os.Getenv("OPENROUTER_API_KEY"); legacy != "" {
+			logger.Warn().Msg("DEPRECATED: OPENROUTER_API_KEY is deprecated, use LLM_TOKEN instead")
+			llmToken = legacy
+		}
 	}
+
+	// LLM_ENDPOINT with fallback to deprecated OPENROUTER_URL
+	llmEndpoint := os.Getenv("LLM_ENDPOINT")
+	if llmEndpoint == "" {
+		if legacy := os.Getenv("OPENROUTER_URL"); legacy != "" {
+			logger.Warn().Msg("DEPRECATED: OPENROUTER_URL is deprecated, use LLM_ENDPOINT instead")
+			llmEndpoint = legacy
+		}
+	}
+
+	// Validate and set defaults based on mode
+	switch llmMode {
+	case LLMModeCompletions:
+		if llmToken == "" {
+			return nil, &ConfigError{Field: "LLM_TOKEN (or OPENROUTER_API_KEY)"}
+		}
+		if llmEndpoint == "" {
+			llmEndpoint = "https://openrouter.ai/api/v1"
+		}
+	case LLMModeResponses:
+		if llmToken == "" {
+			return nil, &ConfigError{Field: "LLM_TOKEN"}
+		}
+		if llmEndpoint == "" {
+			llmEndpoint = "https://api.openai.com/v1"
+		}
+	case LLMModeOAuth:
+		if llmEndpoint == "" {
+			llmEndpoint = "https://api.openai.com/v1"
+		}
+	default:
+		return nil, fmt.Errorf("config: unknown LLM_MODE: %q (valid: completions, responses, oauth)", llmMode)
+	}
+
+	model := os.Getenv("MODEL")
 	if model == "" {
 		model = "meta-llama/llama-3.3-70b-instruct"
 	}
+
+	dbPath := os.Getenv("DB_PATH")
 	if dbPath == "" {
 		dbPath = "./data/bot.db"
+	}
+
+	oauthTokenDir := os.Getenv("OAUTH_TOKEN_DIR")
+	if oauthTokenDir == "" {
+		oauthTokenDir = "./data"
+	}
+
+	oauthClientID := os.Getenv("OAUTH_CLIENT_ID")
+	if oauthClientID == "" {
+		oauthClientID = defaultOAuthClientID
 	}
 
 	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
@@ -74,20 +139,23 @@ func Load() (*Config, error) {
 
 	return &Config{
 		BotToken:         botToken,
-		OpenRouterKey:    openRouterKey,
+		LLMMode:          llmMode,
+		LLMToken:         llmToken,
+		LLMEndpoint:      llmEndpoint,
+		Model:            model,
 		SummaryHours:     envIntOr("SUMMARY_HOURS", 24),
 		RetentionDays:    envIntOr("RETENTION_DAYS", 7),
 		MaxMessages:      envIntOr("MAX_MESSAGES", 250),
 		TopicMax:         envIntOr("TOPIC_MAX", 5),
 		RateLimitSec:     envIntOr("RATE_LIMIT_SEC", 60),
-		OpenRouterURL:    openRouterURL,
-		Model:            model,
 		DBPath:           dbPath,
 		AllowedGroups:    allowedGroups,
 		AdminUserIDs:     adminUserIDs,
 		DailySummaryHour: dailySummaryHour,
 		ReplyThreads:     replyThreads,
 		URLMaxChars:      envIntOr("URL_MAX_CHARS", 64000),
+		OAuthTokenDir:    oauthTokenDir,
+		OAuthClientID:    oauthClientID,
 	}, nil
 }
 

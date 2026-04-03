@@ -9,46 +9,41 @@ import (
 	"testing"
 	"time"
 
-	"github.com/sashabaranov/go-openai"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/metrics"
+	"telegram_summarize_bot/provider"
 )
 
-type fakeChatClient struct {
+type fakeLLMClient struct {
 	responses []string
 	err       error
-	requests  []openai.ChatCompletionRequest
+	requests  []provider.CompletionRequest
 }
 
-func (f *fakeChatClient) CreateChatCompletion(_ context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
-	f.requests = append(f.requests, request)
+func (f *fakeLLMClient) Complete(_ context.Context, req provider.CompletionRequest) (provider.CompletionResponse, error) {
+	f.requests = append(f.requests, req)
 	if f.err != nil {
-		return openai.ChatCompletionResponse{}, f.err
+		return provider.CompletionResponse{}, f.err
 	}
 	if len(f.responses) == 0 {
-		return openai.ChatCompletionResponse{}, nil
+		return provider.CompletionResponse{}, nil
 	}
 
 	content := f.responses[0]
 	f.responses = f.responses[1:]
-	return openai.ChatCompletionResponse{
-		Choices: []openai.ChatCompletionChoice{
-			{
-				Message: openai.ChatCompletionMessage{
-					Content: content,
-				},
-			},
-		},
+	return provider.CompletionResponse{
+		Content:      content,
+		FinishReason: "stop",
 	}, nil
 }
 
 func TestClusterTopicsSanitizesAssignments(t *testing.T) {
-	client := &fakeChatClient{
+	client := &fakeLLMClient{
 		responses: []string{
 			`{"topics":[{"title":"Релиз","message_indexes":[0,1,1],"message_count":3},{"title":"Оффтоп","message_indexes":[3],"message_count":1}]}`,
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 
 	messages := []db.Message{
 		{Text: "Первое", Timestamp: time.Unix(0, 0)},
@@ -81,7 +76,7 @@ func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
 	for i := range responses {
 		responses[i] = "not-json"
 	}
-	sum := NewWithClient(&fakeChatClient{responses: responses}, "test-model", metrics.New(), true)
+	sum := New(&fakeLLMClient{responses: responses}, "test-model", metrics.New(), true)
 
 	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
 	if err == nil {
@@ -93,13 +88,13 @@ func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
 }
 
 func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
-	client := &fakeChatClient{
+	client := &fakeLLMClient{
 		responses: []string{
 			`{"topics":[{"title":"Релиз","message_indexes":[0,1],"message_count":2}]}`,
 			`{"tldr":"Обсудили релиз.","topics":[{"title":"Релиз","summary":"Договорились выкатить сегодня.","message_count":2}]}`,
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 
 	summary, err := sum.SummarizeByTopics(context.Background(), []db.Message{
 		{Text: "катим релиз", Timestamp: time.Unix(0, 0)},
@@ -121,7 +116,7 @@ func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
 }
 
 func TestSummarizeByTopicsPropagatesClientError(t *testing.T) {
-	sum := NewWithClient(&fakeChatClient{err: errors.New("boom")}, "test-model", metrics.New(), true)
+	sum := New(&fakeLLMClient{err: errors.New("boom")}, "test-model", metrics.New(), true)
 
 	_, err := sum.SummarizeByTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
 	if err == nil {
@@ -186,7 +181,7 @@ func TestFormatIndexedMessages_ReplyThreadsEnabled(t *testing.T) {
 		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
-	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
+	s := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
 	out := s.formatIndexedMessages(messages)
 	if !strings.Contains(out, "↩") {
 		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
@@ -199,7 +194,7 @@ func TestFormatIndexedMessages_ReplyThreadsDisabled(t *testing.T) {
 		{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "first", Timestamp: ts},
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
-	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)
+	s := New(&fakeLLMClient{}, "test-model", metrics.New(), false)
 	out := s.formatIndexedMessages(messages)
 	if strings.Contains(out, "↩") {
 		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
@@ -213,7 +208,7 @@ func TestFormatClustersForPrompt_ReplyThreadsEnabled(t *testing.T) {
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
-	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), true)
+	s := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
 	out := s.formatClustersForPrompt(messages, clusters)
 	if !strings.Contains(out, "↩") {
 		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
@@ -227,7 +222,7 @@ func TestFormatClustersForPrompt_ReplyThreadsDisabled(t *testing.T) {
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
-	s := NewWithClient(&fakeChatClient{}, "test-model", metrics.New(), false)
+	s := New(&fakeLLMClient{}, "test-model", metrics.New(), false)
 	out := s.formatClustersForPrompt(messages, clusters)
 	if strings.Contains(out, "↩") {
 		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
@@ -235,10 +230,10 @@ func TestFormatClustersForPrompt_ReplyThreadsDisabled(t *testing.T) {
 }
 
 func TestSummarizeURLPromptConstruction(t *testing.T) {
-	client := &fakeChatClient{
+	client := &fakeLLMClient{
 		responses: []string{"Краткое содержание страницы."},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 
 	result, err := sum.SummarizeURL(context.Background(), "https://example.com/article", "Article text here")
 	if err != nil {
@@ -267,7 +262,7 @@ func TestSummarizeURLPromptConstruction(t *testing.T) {
 }
 
 func TestSummarizeURLPropagatesError(t *testing.T) {
-	sum := NewWithClient(&fakeChatClient{err: errors.New("api error")}, "test-model", metrics.New(), true)
+	sum := New(&fakeLLMClient{err: errors.New("api error")}, "test-model", metrics.New(), true)
 
 	_, err := sum.SummarizeURL(context.Background(), "https://example.com", "content")
 	if err == nil {
@@ -344,8 +339,8 @@ func TestFormatTelegramSummaryNoLinkWhenMsgIDZero(t *testing.T) {
 	}
 }
 
-// sequenceChatClient returns different responses/errors for each successive call.
-type sequenceChatClient struct {
+// sequenceLLMClient returns different responses/errors for each successive call.
+type sequenceLLMClient struct {
 	calls []sequenceCall
 	idx   int
 }
@@ -355,32 +350,31 @@ type sequenceCall struct {
 	err  error
 }
 
-func (s *sequenceChatClient) CreateChatCompletion(_ context.Context, _ openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+func (s *sequenceLLMClient) Complete(_ context.Context, _ provider.CompletionRequest) (provider.CompletionResponse, error) {
 	if s.idx >= len(s.calls) {
-		return openai.ChatCompletionResponse{}, fmt.Errorf("sequenceChatClient: unexpected call #%d", s.idx+1)
+		return provider.CompletionResponse{}, fmt.Errorf("sequenceLLMClient: unexpected call #%d", s.idx+1)
 	}
 	c := s.calls[s.idx]
 	s.idx++
 	if c.err != nil {
-		return openai.ChatCompletionResponse{}, c.err
+		return provider.CompletionResponse{}, c.err
 	}
-	return openai.ChatCompletionResponse{
-		Choices: []openai.ChatCompletionChoice{
-			{Message: openai.ChatCompletionMessage{Content: c.resp}},
-		},
+	return provider.CompletionResponse{
+		Content:      c.resp,
+		FinishReason: "stop",
 	}, nil
 }
 
 func TestClusterTopicsRetriesOnNetworkError(t *testing.T) {
 	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
-	client := &sequenceChatClient{
+	client := &sequenceLLMClient{
 		calls: []sequenceCall{
 			{err: netErr},
 			{err: netErr},
 			{resp: `{"topics":[{"title":"Тема","message_indexes":[0],"message_count":1}]}`},
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 	sum.retryBaseDelay = 0
 
 	clusters, err := sum.ClusterTopics(context.Background(), []db.Message{
@@ -398,13 +392,13 @@ func TestClusterTopicsRetriesOnNetworkError(t *testing.T) {
 }
 
 func TestClusterTopicsNoRetryOnContextCanceled(t *testing.T) {
-	client := &sequenceChatClient{
+	client := &sequenceLLMClient{
 		calls: []sequenceCall{
 			{err: context.Canceled},
 			{resp: `{"topics":[]}`}, // should never be reached
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 	sum.retryBaseDelay = 0
 
 	_, err := sum.ClusterTopics(context.Background(), []db.Message{
@@ -420,13 +414,13 @@ func TestClusterTopicsNoRetryOnContextCanceled(t *testing.T) {
 
 func TestSummarizeTopicsRetriesOnNetworkError(t *testing.T) {
 	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
-	client := &sequenceChatClient{
+	client := &sequenceLLMClient{
 		calls: []sequenceCall{
 			{err: netErr},
 			{resp: `{"tldr":"Итог","topics":[{"title":"Тема","summary":"Ок","message_count":1}]}`},
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 	sum.retryBaseDelay = 0
 
 	messages := []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}
@@ -446,13 +440,13 @@ func TestSummarizeTopicsRetriesOnNetworkError(t *testing.T) {
 
 func TestSummarizeURLRetriesOnNetworkError(t *testing.T) {
 	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
-	client := &sequenceChatClient{
+	client := &sequenceLLMClient{
 		calls: []sequenceCall{
 			{err: netErr},
 			{resp: "Краткое содержание."},
 		},
 	}
-	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum := New(client, "test-model", metrics.New(), true)
 	sum.retryBaseDelay = 0
 
 	result, err := sum.SummarizeURL(context.Background(), "https://example.com", "content")
@@ -478,10 +472,10 @@ func TestIsRetryableError(t *testing.T) {
 		{"context.DeadlineExceeded", context.DeadlineExceeded, true},
 		{"network error", &net.OpError{Op: "dial", Err: fmt.Errorf("timeout")}, true},
 		{"generic error", errors.New("boom"), true},
-		{"API 500", &openai.APIError{HTTPStatusCode: 500, Message: "internal"}, true},
-		{"API 429", &openai.APIError{HTTPStatusCode: 429, Message: "rate limit"}, true},
-		{"API 400", &openai.APIError{HTTPStatusCode: 400, Message: "bad request"}, false},
-		{"API 401", &openai.APIError{HTTPStatusCode: 401, Message: "unauthorized"}, false},
+		{"API 500", &provider.APIError{HTTPStatusCode: 500, Message: "internal"}, true},
+		{"API 429", &provider.APIError{HTTPStatusCode: 429, Message: "rate limit"}, true},
+		{"API 400", &provider.APIError{HTTPStatusCode: 400, Message: "bad request"}, false},
+		{"API 401", &provider.APIError{HTTPStatusCode: 401, Message: "unauthorized"}, false},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

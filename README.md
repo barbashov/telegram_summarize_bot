@@ -1,12 +1,13 @@
 # Telegram Summarize Bot
 
-Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compatible LLM API).
+Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, OpenAI, or OpenAI Codex subscription).
 
 ## Features
 
 - Topic-based summaries with a short TL;DR plus per-topic breakdown
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
+- **Multiple LLM backends**: OpenAI-compatible Completions API (OpenRouter, LiteLLM, etc.), OpenAI Responses API, or OpenAI Codex subscription via OAuth
 - **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
@@ -27,9 +28,50 @@ Telegram bot that summarizes group chat messages using OpenRouter (OpenAI-compat
    cp .env.example .env
    ```
 2. Get your **Telegram Bot Token** from [@BotFather](https://t.me/BotFather).
-3. Get your **OpenRouter API key** from [openrouter.ai](https://openrouter.ai).
+3. Configure your LLM provider (see [LLM Modes](#llm-modes) below).
 4. Set `ALLOWED_GROUPS` to seed the initial group allowlist (stored in DB; can be managed at runtime via `/groups`).
 5. If you want admin users (lifecycle alerts + group management), set `ADMIN_USER_IDS` to Telegram user IDs that already started a private chat with the bot.
+
+### LLM Modes
+
+The bot supports three LLM backends, selected via `LLM_MODE`:
+
+#### Completions API (default)
+
+Works with any OpenAI-compatible endpoint (OpenRouter, LiteLLM, Ollama, etc.).
+
+```bash
+# .env
+LLM_MODE=completions
+LLM_TOKEN=your-api-key
+LLM_ENDPOINT=https://openrouter.ai/api/v1  # default
+MODEL=meta-llama/llama-3.3-70b-instruct
+```
+
+#### OpenAI Responses API
+
+Uses OpenAI's newer Responses API directly.
+
+```bash
+# .env
+LLM_MODE=responses
+LLM_TOKEN=sk-your-openai-key
+MODEL=gpt-4o
+```
+
+#### OpenAI Codex (OAuth)
+
+Uses an OpenAI Codex subscription with OAuth authentication. No API key needed — authenticate via browser:
+
+```bash
+# First, authenticate:
+./telegram_summarize_bot openai auth
+# Follow the browser prompts, then add to .env:
+LLM_MODE=oauth
+MODEL=gpt-4o
+```
+
+The `openai auth` command opens your browser for OAuth login, saves tokens locally, and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
 
 ## Running
 
@@ -131,7 +173,12 @@ All configuration is via environment variables (`.env` file):
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `BOT_TOKEN` | *(required)* | Telegram Bot Token |
-| `OPENROUTER_API_KEY` | *(required)* | OpenRouter API Key |
+| `LLM_MODE` | `completions` | LLM backend: `completions`, `responses`, or `oauth` |
+| `LLM_TOKEN` | *(required for completions/responses)* | API token for the LLM provider |
+| `LLM_ENDPOINT` | *(mode-dependent)* | API endpoint (defaults: `https://openrouter.ai/api/v1` for completions, `https://api.openai.com/v1` for responses/oauth) |
+| `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
+| `OAUTH_TOKEN_DIR` | `./data` | Directory for OAuth token storage |
+| `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
 | `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
 | `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts + `/groups` management). Falls back to `ALERT_USER_IDS` for backward compatibility. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
@@ -140,11 +187,11 @@ All configuration is via environment variables (`.env` file):
 | `MAX_MESSAGES` | `250` | Max messages to include in summary |
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
-| `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model via OpenRouter |
-| `OPENROUTER_URL` | `https://openrouter.ai/api/v1` | OpenRouter API base URL |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 | `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
-| `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + OpenRouter traffic (`socks5://host:port`, `http://host:port`) |
+| `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + LLM traffic (`socks5://host:port`, `http://host:port`) |
+
+> **Migration note:** `OPENROUTER_API_KEY` and `OPENROUTER_URL` still work but are deprecated. Use `LLM_TOKEN` and `LLM_ENDPOINT` instead.
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.

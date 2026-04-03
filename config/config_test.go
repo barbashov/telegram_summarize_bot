@@ -10,6 +10,9 @@ import (
 // Each test that calls Load() should clear them to avoid cross-test leaks.
 var allEnvKeys = []string{
 	"BOT_TOKEN",
+	"LLM_MODE",
+	"LLM_TOKEN",
+	"LLM_ENDPOINT",
 	"OPENROUTER_API_KEY",
 	"OPENROUTER_URL",
 	"MODEL",
@@ -25,6 +28,8 @@ var allEnvKeys = []string{
 	"DAILY_SUMMARY_HOUR",
 	"REPLY_THREADS",
 	"URL_MAX_CHARS",
+	"OAUTH_TOKEN_DIR",
+	"OAUTH_CLIENT_ID",
 }
 
 func clearEnv(t *testing.T) {
@@ -37,7 +42,7 @@ func clearEnv(t *testing.T) {
 func setRequired(t *testing.T) {
 	t.Helper()
 	t.Setenv("BOT_TOKEN", "test-token")
-	t.Setenv("OPENROUTER_API_KEY", "test-key")
+	t.Setenv("LLM_TOKEN", "test-key")
 }
 
 // --- Load validation ---
@@ -45,7 +50,7 @@ func setRequired(t *testing.T) {
 func TestLoad_MissingBotToken(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("BOT_TOKEN", "")
-	t.Setenv("OPENROUTER_API_KEY", "some-key")
+	t.Setenv("LLM_TOKEN", "some-key")
 
 	_, err := Load()
 	var cfgErr *ConfigError
@@ -60,18 +65,46 @@ func TestLoad_MissingBotToken(t *testing.T) {
 	}
 }
 
-func TestLoad_MissingOpenRouterKey(t *testing.T) {
+func TestLoad_MissingLLMToken(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("BOT_TOKEN", "test-token")
-	t.Setenv("OPENROUTER_API_KEY", "")
+	t.Setenv("LLM_TOKEN", "")
 
 	_, err := Load()
 	var cfgErr *ConfigError
 	if !errors.As(err, &cfgErr) {
 		t.Fatalf("expected ConfigError, got %v", err)
 	}
-	if cfgErr.Field != "OPENROUTER_API_KEY" {
-		t.Errorf("expected field OPENROUTER_API_KEY, got %s", cfgErr.Field)
+	if cfgErr.Field != "LLM_TOKEN (or OPENROUTER_API_KEY)" {
+		t.Errorf("expected field LLM_TOKEN, got %s", cfgErr.Field)
+	}
+}
+
+func TestLoad_LegacyOpenRouterKeyFallback(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("OPENROUTER_API_KEY", "legacy-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLMToken != "legacy-key" {
+		t.Errorf("LLMToken = %s, want legacy-key", cfg.LLMToken)
+	}
+}
+
+func TestLoad_LegacyOpenRouterURLFallback(t *testing.T) {
+	clearEnv(t)
+	setRequired(t)
+	t.Setenv("OPENROUTER_URL", "https://custom.api/v1")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLMEndpoint != "https://custom.api/v1" {
+		t.Errorf("LLMEndpoint = %s, want https://custom.api/v1", cfg.LLMEndpoint)
 	}
 }
 
@@ -90,8 +123,9 @@ func TestLoad_Defaults(t *testing.T) {
 		want interface{}
 	}{
 		{"BotToken", cfg.BotToken, "test-token"},
-		{"OpenRouterKey", cfg.OpenRouterKey, "test-key"},
-		{"OpenRouterURL", cfg.OpenRouterURL, "https://openrouter.ai/api/v1"},
+		{"LLMToken", cfg.LLMToken, "test-key"},
+		{"LLMEndpoint", cfg.LLMEndpoint, "https://openrouter.ai/api/v1"},
+		{"LLMMode", string(cfg.LLMMode), "completions"},
 		{"Model", cfg.Model, "meta-llama/llama-3.3-70b-instruct"},
 		{"DBPath", cfg.DBPath, "./data/bot.db"},
 		{"SummaryHours", cfg.SummaryHours, 24},
@@ -102,6 +136,8 @@ func TestLoad_Defaults(t *testing.T) {
 		{"DailySummaryHour", cfg.DailySummaryHour, 7},
 		{"ReplyThreads", cfg.ReplyThreads, true},
 		{"URLMaxChars", cfg.URLMaxChars, 64000},
+		{"OAuthTokenDir", cfg.OAuthTokenDir, "./data"},
+		{"OAuthClientID", cfg.OAuthClientID, defaultOAuthClientID},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -120,8 +156,8 @@ func TestLoad_Defaults(t *testing.T) {
 func TestLoad_CustomValues(t *testing.T) {
 	clearEnv(t)
 	t.Setenv("BOT_TOKEN", "custom-token")
-	t.Setenv("OPENROUTER_API_KEY", "custom-key")
-	t.Setenv("OPENROUTER_URL", "https://custom.api/v1")
+	t.Setenv("LLM_TOKEN", "custom-key")
+	t.Setenv("LLM_ENDPOINT", "https://custom.api/v1")
 	t.Setenv("MODEL", "gpt-4")
 	t.Setenv("DB_PATH", "/tmp/test.db")
 	t.Setenv("ALLOWED_GROUPS", "-100123,-100456")
@@ -143,11 +179,11 @@ func TestLoad_CustomValues(t *testing.T) {
 	if cfg.BotToken != "custom-token" {
 		t.Errorf("BotToken = %s", cfg.BotToken)
 	}
-	if cfg.OpenRouterKey != "custom-key" {
-		t.Errorf("OpenRouterKey = %s", cfg.OpenRouterKey)
+	if cfg.LLMToken != "custom-key" {
+		t.Errorf("LLMToken = %s", cfg.LLMToken)
 	}
-	if cfg.OpenRouterURL != "https://custom.api/v1" {
-		t.Errorf("OpenRouterURL = %s", cfg.OpenRouterURL)
+	if cfg.LLMEndpoint != "https://custom.api/v1" {
+		t.Errorf("LLMEndpoint = %s", cfg.LLMEndpoint)
 	}
 	if cfg.Model != "gpt-4" {
 		t.Errorf("Model = %s", cfg.Model)
@@ -198,6 +234,71 @@ func TestLoad_CustomValues(t *testing.T) {
 		if cfg.AdminUserIDs[i] != v {
 			t.Errorf("AdminUserIDs[%d] = %d, want %d", i, cfg.AdminUserIDs[i], v)
 		}
+	}
+}
+
+func TestLoad_ResponsesMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("LLM_MODE", "responses")
+	t.Setenv("LLM_TOKEN", "openai-key")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLMMode != LLMModeResponses {
+		t.Errorf("LLMMode = %s, want responses", cfg.LLMMode)
+	}
+	if cfg.LLMEndpoint != "https://api.openai.com/v1" {
+		t.Errorf("LLMEndpoint = %s, want https://api.openai.com/v1", cfg.LLMEndpoint)
+	}
+}
+
+func TestLoad_OAuthMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("LLM_MODE", "oauth")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LLMMode != LLMModeOAuth {
+		t.Errorf("LLMMode = %s, want oauth", cfg.LLMMode)
+	}
+	if cfg.LLMToken != "" {
+		t.Errorf("LLMToken = %s, want empty (not required for oauth)", cfg.LLMToken)
+	}
+	if cfg.OAuthClientID != defaultOAuthClientID {
+		t.Errorf("OAuthClientID = %s, want default", cfg.OAuthClientID)
+	}
+}
+
+func TestLoad_OAuthModeCustomClientID(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("LLM_MODE", "oauth")
+	t.Setenv("OAUTH_CLIENT_ID", "custom-client-id")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.OAuthClientID != "custom-client-id" {
+		t.Errorf("OAuthClientID = %s, want custom-client-id", cfg.OAuthClientID)
+	}
+}
+
+func TestLoad_InvalidMode(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("BOT_TOKEN", "test-token")
+	t.Setenv("LLM_TOKEN", "key")
+	t.Setenv("LLM_MODE", "invalid")
+
+	_, err := Load()
+	if err == nil {
+		t.Fatal("expected error for invalid mode")
 	}
 }
 

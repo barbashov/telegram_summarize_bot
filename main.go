@@ -7,11 +7,13 @@ import (
 	"syscall"
 	"time"
 
+	"telegram_summarize_bot/cmd"
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/handlers"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
+	"telegram_summarize_bot/provider"
 	"telegram_summarize_bot/summarizer"
 )
 
@@ -21,6 +23,14 @@ func main() {
 	cfg, err := config.Load()
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to load config")
+	}
+
+	// Handle subcommands before full bot startup
+	if len(os.Args) >= 3 && os.Args[1] == "openai" && os.Args[2] == "auth" {
+		if err := cmd.RunAuth(cfg.OAuthClientID, cfg.OAuthTokenDir); err != nil {
+			logger.Fatal().Err(err).Msg("OAuth authentication failed")
+		}
+		return
 	}
 
 	m := metrics.New()
@@ -43,6 +53,7 @@ func main() {
 
 	logger.Info().
 		Str("db_path", cfg.DBPath).
+		Str("llm_mode", string(cfg.LLMMode)).
 		Int("summary_hours", cfg.SummaryHours).
 		Int("retention_days", cfg.RetentionDays).
 		Int("max_messages", cfg.MaxMessages).
@@ -51,10 +62,12 @@ func main() {
 		Str("model", cfg.Model).
 		Msg("Configuration loaded")
 
-	sum, err := summarizer.New(cfg.OpenRouterKey, cfg.OpenRouterURL, cfg.Model, m, cfg.ReplyThreads)
+	llmClient, err := provider.New(cfg)
 	if err != nil {
-		logger.Fatal().Err(err).Msg("Failed to initialize summarizer")
+		logger.Fatal().Err(err).Msg("Failed to initialize LLM provider")
 	}
+
+	sum := summarizer.New(llmClient, cfg.Model, m, cfg.ReplyThreads)
 
 	tgBot, err := handlers.NewBot(cfg, database, sum, m)
 	if err != nil {
