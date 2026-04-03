@@ -26,6 +26,9 @@ func main() {
 	m := metrics.New()
 
 	database, err := db.New(cfg.DBPath, m)
+	if err == nil {
+		m.InitLatencyStats(database)
+	}
 	if err != nil {
 		logger.Fatal().Err(err).Msg("Failed to initialize database")
 	}
@@ -85,8 +88,6 @@ func main() {
 	if err := tgBot.Start(ctx); err != nil {
 		logger.Error().Err(err).Msg("Bot stopped with error")
 	}
-
-	tgBot.FlushMetrics()
 
 	logger.Info().Msg("Bot shutdown complete")
 }

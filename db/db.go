@@ -8,7 +8,6 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -156,16 +155,14 @@ func (db *DB) migrate() error {
 			added_at DATETIME NOT NULL,
 			added_by INTEGER
 		)`,
-		`CREATE TABLE IF NOT EXISTS bot_metrics (
-			id              INTEGER PRIMARY KEY CHECK (id = 1),
-			messages_stored INTEGER NOT NULL DEFAULT 0,
-			summarize_ok    INTEGER NOT NULL DEFAULT 0,
-			summarize_fail  INTEGER NOT NULL DEFAULT 0,
-			rate_limit_hits INTEGER NOT NULL DEFAULT 0,
-			error_counts    TEXT    NOT NULL DEFAULT '{}',
-			latency_json    TEXT    NOT NULL DEFAULT '{}',
-			saved_at        DATETIME NOT NULL
+		`DROP TABLE IF EXISTS bot_metrics`,
+		`CREATE TABLE IF NOT EXISTS bot_events (
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			metric      TEXT     NOT NULL,
+			timestamp   DATETIME NOT NULL,
+			duration_ns INTEGER  NOT NULL
 		)`,
+		`CREATE INDEX IF NOT EXISTS idx_bot_events_metric_ts ON bot_events(metric, timestamp)`,
 		`CREATE TABLE IF NOT EXISTS bot_error_log (
 			id  INTEGER PRIMARY KEY AUTOINCREMENT,
 			ts  DATETIME NOT NULL,
@@ -509,133 +506,131 @@ func (db *DB) GetAllowedGroupIDs(ctx context.Context) ([]int64, error) {
 	return ids, rows.Err()
 }
 
-func (db *DB) SaveMetrics(ctx context.Context, s metrics.PersistableSnapshot) error {
-	ecJSON, err := json.Marshal(s.ErrorCounts)
-	if err != nil {
-		return fmt.Errorf("failed to marshal error counts: %w", err)
-	}
-
-	latencyMap := map[string]metrics.LatencyRawState{
-		"telegram_send": s.TelegramSend,
-		"telegram_edit": s.TelegramEdit,
-		"llm_cluster":   s.LLMCluster,
-		"llm_summarize": s.LLMSummarize,
-		"db_add":        s.DBAdd,
-		"db_get":        s.DBGet,
-	}
-	latencyJSON, err := json.Marshal(latencyMap)
-	if err != nil {
-		return fmt.Errorf("failed to marshal latency: %w", err)
-	}
-
-	tx, err := db.conn.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("failed to begin transaction: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-
-	_, err = tx.ExecContext(ctx,
-		`INSERT INTO bot_metrics (id, messages_stored, summarize_ok, summarize_fail, rate_limit_hits, error_counts, latency_json, saved_at)
-		 VALUES (1, ?, ?, ?, ?, ?, ?, ?)
-		 ON CONFLICT(id) DO UPDATE SET
-		   messages_stored = excluded.messages_stored,
-		   summarize_ok    = excluded.summarize_ok,
-		   summarize_fail  = excluded.summarize_fail,
-		   rate_limit_hits = excluded.rate_limit_hits,
-		   error_counts    = excluded.error_counts,
-		   latency_json    = excluded.latency_json,
-		   saved_at        = excluded.saved_at`,
-		s.MessagesStored, s.SummarizeOK, s.SummarizeFail, s.RateLimitHits,
-		string(ecJSON), string(latencyJSON), time.Now(),
+// InsertErrorLog persists a single error log entry.
+func (db *DB) InsertErrorLog(ctx context.Context, ts time.Time, key, msg string) error {
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO bot_error_log (ts, key, msg) VALUES (?, ?, ?)`,
+		ts, key, msg,
 	)
-	if err != nil {
-		return fmt.Errorf("failed to upsert bot_metrics: %w", err)
-	}
-
-	if _, err = tx.ExecContext(ctx, `DELETE FROM bot_error_log`); err != nil {
-		return fmt.Errorf("failed to delete bot_error_log: %w", err)
-	}
-
-	for _, e := range s.RecentErrors {
-		if _, err = tx.ExecContext(ctx,
-			`INSERT INTO bot_error_log (ts, key, msg) VALUES (?, ?, ?)`,
-			e.Ts, e.Key, e.Msg,
-		); err != nil {
-			return fmt.Errorf("failed to insert bot_error_log entry: %w", err)
-		}
-	}
-
-	return tx.Commit()
+	return err
 }
 
-func (db *DB) LoadMetrics(ctx context.Context, retentionCutoff time.Time) (metrics.PersistableSnapshot, error) {
-	var s metrics.PersistableSnapshot
-	var ecJSON, latencyJSON string
+// InsertBotEvent persists a single metric event.
+func (db *DB) InsertBotEvent(ctx context.Context, metric string, ts time.Time, durationNS int64) error {
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO bot_events (metric, timestamp, duration_ns) VALUES (?, ?, ?)`,
+		metric, ts, durationNS,
+	)
+	return err
+}
 
-	err := db.conn.QueryRowContext(ctx,
-		`SELECT messages_stored, summarize_ok, summarize_fail, rate_limit_hits, error_counts, latency_json
-		 FROM bot_metrics WHERE id = 1`,
-	).Scan(&s.MessagesStored, &s.SummarizeOK, &s.SummarizeFail, &s.RateLimitHits, &ecJSON, &latencyJSON)
-	if err == sql.ErrNoRows {
-		return metrics.PersistableSnapshot{}, nil
-	}
-	if err != nil {
-		return s, fmt.Errorf("failed to query bot_metrics: %w", err)
-	}
+// BotEvent is a single metric event row.
+type BotEvent struct {
+	Metric     string
+	Timestamp  time.Time
+	DurationNS int64
+}
 
-	s.ErrorCounts = make(map[string]int64)
-	if err := json.Unmarshal([]byte(ecJSON), &s.ErrorCounts); err != nil {
-		return s, fmt.Errorf("failed to unmarshal error_counts: %w", err)
-	}
-
-	var lj struct {
-		TelegramSend metrics.LatencyRawState `json:"telegram_send"`
-		TelegramEdit metrics.LatencyRawState `json:"telegram_edit"`
-		LLMCluster   metrics.LatencyRawState `json:"llm_cluster"`
-		LLMSummarize metrics.LatencyRawState `json:"llm_summarize"`
-		DBAdd        metrics.LatencyRawState `json:"db_add"`
-		DBGet        metrics.LatencyRawState `json:"db_get"`
-	}
-	if err := json.Unmarshal([]byte(latencyJSON), &lj); err != nil {
-		return s, fmt.Errorf("failed to unmarshal latency_json: %w", err)
-	}
-	s.TelegramSend = lj.TelegramSend
-	s.TelegramEdit = lj.TelegramEdit
-	s.LLMCluster = lj.LLMCluster
-	s.LLMSummarize = lj.LLMSummarize
-	s.DBAdd = lj.DBAdd
-	s.DBGet = lj.DBGet
-
+// QueryBotEvents returns all events for a metric since the given time, ordered by timestamp.
+func (db *DB) QueryBotEvents(ctx context.Context, metric string, since time.Time) ([]BotEvent, error) {
 	rows, err := db.conn.QueryContext(ctx,
-		`SELECT ts, key, msg FROM bot_error_log WHERE ts >= ? ORDER BY ts ASC`,
-		retentionCutoff,
+		`SELECT metric, timestamp, duration_ns FROM bot_events WHERE metric = ? AND timestamp >= ? ORDER BY timestamp`,
+		metric, since,
 	)
 	if err != nil {
-		return s, fmt.Errorf("failed to query bot_error_log: %w", err)
+		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 
+	var events []BotEvent
 	for rows.Next() {
-		var e metrics.ErrorEntry
-		if err := rows.Scan(&e.Ts, &e.Key, &e.Msg); err != nil {
-			logger.Error().Err(err).Msg("failed to scan bot_error_log row")
+		var e BotEvent
+		if err := rows.Scan(&e.Metric, &e.Timestamp, &e.DurationNS); err != nil {
 			continue
 		}
-		s.RecentErrors = append(s.RecentErrors, e)
+		events = append(events, e)
 	}
-
-	return s, rows.Err()
+	return events, rows.Err()
 }
 
-// ClearMetrics removes all persisted metrics and error log entries.
-func (db *DB) ClearMetrics(ctx context.Context) error {
-	if _, err := db.conn.ExecContext(ctx, `DELETE FROM bot_metrics WHERE id = 1`); err != nil {
-		return fmt.Errorf("failed to clear bot_metrics: %w", err)
+// CountBotEvents returns the count of events for a metric since the given time.
+func (db *DB) CountBotEvents(ctx context.Context, metric string, since time.Time) (int64, error) {
+	var count int64
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM bot_events WHERE metric = ? AND timestamp >= ?`,
+		metric, since,
+	).Scan(&count)
+	return count, err
+}
+
+// QueryErrorCounts returns error counts grouped by key.
+func (db *DB) QueryErrorCounts(ctx context.Context, since time.Time) (map[string]int64, error) {
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT key, COUNT(*) FROM bot_error_log WHERE ts >= ? GROUP BY key`,
+		since,
+	)
+	if err != nil {
+		return nil, err
 	}
-	if _, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log`); err != nil {
-		return fmt.Errorf("failed to clear bot_error_log: %w", err)
+	defer func() { _ = rows.Close() }()
+
+	counts := make(map[string]int64)
+	for rows.Next() {
+		var key string
+		var count int64
+		if err := rows.Scan(&key, &count); err != nil {
+			continue
+		}
+		counts[key] = count
 	}
-	return nil
+	return counts, rows.Err()
+}
+
+// CountErrors returns the count of errors with given keys since a time.
+func (db *DB) CountErrors(ctx context.Context, since time.Time, keys ...string) (int64, error) {
+	if len(keys) == 0 {
+		return 0, nil
+	}
+	placeholders := make([]string, len(keys))
+	args := []any{since}
+	for i, k := range keys {
+		placeholders[i] = "?"
+		args = append(args, k)
+	}
+	var count int64
+	err := db.conn.QueryRowContext(ctx,
+		fmt.Sprintf(`SELECT COUNT(*) FROM bot_error_log WHERE ts >= ? AND key IN (%s)`,
+			strings.Join(placeholders, ",")),
+		args...,
+	).Scan(&count)
+	return count, err
+}
+
+// PurgeOldBotEvents deletes events older than the given time.
+func (db *DB) PurgeOldBotEvents(ctx context.Context, before time.Time) (int64, error) {
+	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_events WHERE timestamp < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// PurgeOldErrors deletes error log entries older than the given time.
+func (db *DB) PurgeOldErrors(ctx context.Context, before time.Time) (int64, error) {
+	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log WHERE ts < ?`, before)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+// ClearAllMetrics removes all bot events and error log entries.
+func (db *DB) ClearAllMetrics(ctx context.Context) error {
+	if _, err := db.conn.ExecContext(ctx, `DELETE FROM bot_events`); err != nil {
+		return err
+	}
+	_, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log`)
+	return err
 }
 
 func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {

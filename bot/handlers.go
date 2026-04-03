@@ -120,14 +120,8 @@ func (b *Bot) Start(ctx context.Context) error {
 
 	b.scanKnownGroups(ctx)
 
-	retentionCutoff := time.Now().Add(-b.cfg.RetentionDuration())
-	if snap, err := b.db.LoadMetrics(ctx, retentionCutoff); err != nil {
-		logger.Error().Err(err).Msg("failed to load persisted metrics; starting fresh")
-	} else {
-		b.metrics.LoadFromPersistable(snap)
-		logger.Info().Msg("metrics loaded from DB")
-	}
-	go b.metricsFlushLoop(ctx)
+	b.refreshStatsCache()
+	go b.statsCacheLoop(ctx)
 
 	go b.cleanupLoop(ctx)
 	go b.rateLimitCleanupLoop(ctx)
@@ -176,7 +170,7 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 	}
 }
 
-func (b *Bot) metricsFlushLoop(ctx context.Context) {
+func (b *Bot) statsCacheLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
 	for {
@@ -184,21 +178,54 @@ func (b *Bot) metricsFlushLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			b.flushMetrics()
+			b.refreshStatsCache()
 		}
 	}
 }
 
-func (b *Bot) flushMetrics() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := b.db.SaveMetrics(ctx, b.metrics.PersistableSnapshot()); err != nil {
-		logger.Error().Err(err).Msg("failed to flush metrics to DB")
-	}
-}
+const metricsRetention = 30 * 24 * time.Hour
 
-// FlushMetrics is called once during graceful shutdown.
-func (b *Bot) FlushMetrics() { b.flushMetrics() }
+func (b *Bot) refreshStatsCache() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	since := time.Now().Add(-metricsRetention)
+	metricNames := []string{"telegram_send", "telegram_edit", "llm_cluster", "llm_summarize", "db_add", "db_get"}
+
+	latency := make(map[string]metrics.LatencyDetailSnapshot, len(metricNames))
+	for _, name := range metricNames {
+		events, err := b.db.QueryBotEvents(ctx, name, since)
+		if err != nil {
+			logger.Error().Err(err).Str("metric", name).Msg("failed to query bot events")
+			continue
+		}
+		timestamps := make([]time.Time, len(events))
+		durations := make([]time.Duration, len(events))
+		for i, e := range events {
+			timestamps[i] = e.Timestamp
+			durations[i] = time.Duration(e.DurationNS)
+		}
+		latency[name] = metrics.ComputeDetailSnapshot(timestamps, durations)
+	}
+
+	// Derive counters from DB.
+	messagesStored, _ := b.db.CountBotEvents(ctx, "db_add", since)
+	summarizeOK, _ := b.db.CountBotEvents(ctx, "llm_summarize", since)
+	summarizeFail, _ := b.db.CountErrors(ctx, since, "llm_cluster", "llm_summarize")
+	rateLimitHits, _ := b.db.CountBotEvents(ctx, "rate_limit", since)
+	errorCounts, _ := b.db.QueryErrorCounts(ctx, since)
+	if errorCounts == nil {
+		errorCounts = make(map[string]int64)
+	}
+
+	b.metrics.UpdateCache(latency, metrics.CachedCounters{
+		MessagesStored: messagesStored,
+		SummarizeOK:    summarizeOK,
+		SummarizeFail:  summarizeFail,
+		RateLimitHits:  rateLimitHits,
+		ErrorCounts:    errorCounts,
+	})
+}
 
 func (b *Bot) cleanupLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Hour)
@@ -214,6 +241,17 @@ func (b *Bot) cleanupLoop(ctx context.Context) {
 				logger.Error().Err(err).Msg("failed to cleanup old messages")
 			} else if deleted > 0 {
 				logger.Info().Int64("deleted", deleted).Msg("cleaned up old messages")
+			}
+			cutoff := time.Now().Add(-metricsRetention)
+			if purged, err := b.db.PurgeOldBotEvents(ctx, cutoff); err != nil {
+				logger.Error().Err(err).Msg("failed to purge old bot events")
+			} else if purged > 0 {
+				logger.Info().Int64("purged", purged).Msg("purged old bot events")
+			}
+			if purged, err := b.db.PurgeOldErrors(ctx, cutoff); err != nil {
+				logger.Error().Err(err).Msg("failed to purge old errors")
+			} else if purged > 0 {
+				logger.Info().Int64("purged", purged).Msg("purged old error log entries")
 			}
 		}
 	}
@@ -336,8 +374,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			ReplyToTgID:   replyToTgID,
 		}); err != nil {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
-		} else {
-			b.metrics.IncMessagesStored()
 		}
 		return
 	}
@@ -362,8 +398,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		ReplyToTgID: replyToTgID,
 	}); err != nil {
 		logger.Error().Err(err).Msg("failed to add message")
-	} else {
-		b.metrics.IncMessagesStored()
 	}
 }
 
@@ -473,7 +507,7 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 			return
 		}
 		b.metrics.Reset()
-		if err := b.db.ClearMetrics(ctx); err != nil {
+		if err := b.db.ClearAllMetrics(ctx); err != nil {
 			logger.Error().Err(err).Msg("failed to clear persisted metrics")
 		}
 		b.sendMessage(msg.Chat.ID, "Метрики сброшены.")
@@ -522,7 +556,7 @@ func extractURL(text string, entities []telego.MessageEntity) string {
 
 func (b *Bot) handleURLSummarize(ctx context.Context, chatID int64, rawURL string) {
 	if !b.rateLimiter.Allow(chatID) {
-		b.metrics.IncRateLimitHit()
+		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(chatID)
 		b.sendMessage(chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
 		return
@@ -543,13 +577,11 @@ func (b *Bot) handleURLSummarize(ctx context.Context, chatID int64, rawURL strin
 
 	summary, err := b.summarizer.SummarizeURL(ctx, rawURL, content)
 	if err != nil {
-		b.metrics.IncSummarizeFail()
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to summarize URL")
 		b.editOrSend(chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
-	b.metrics.IncSummarizeOK()
 	result := fmt.Sprintf("🔗 *Суммаризация URL:*\n\n%s", summarizer.EscapeMarkdown(summary))
 	chunks := splitTelegramMessage(result, telegramMessageLimit)
 	if len(chunks) == 0 {
@@ -776,7 +808,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	}
 
 	if !b.rateLimiter.Allow(groupID) {
-		b.metrics.IncRateLimitHit()
+		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessage(groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
@@ -795,14 +827,12 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
-		b.metrics.IncSummarizeFail()
 		logger.Error().Err(err).Msg("failed to summarize")
 		b.editOrSend(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
 	committed = true
-	b.metrics.IncSummarizeOK()
 
 	if err := b.db.SetLastSummarizeTime(ctx, groupID, upperBound); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
@@ -919,25 +949,16 @@ func (b *Bot) handleCallbackQuery(cq *telego.CallbackQuery) {
 	}
 	metricName := strings.TrimPrefix(data, "lat:")
 
-	var stat *metrics.LatencyStat
-	switch metricName {
-	case "llm_cluster":
-		stat = &b.metrics.LLMCluster
-	case "llm_summarize":
-		stat = &b.metrics.LLMSummarize
-	case "telegram_send":
-		stat = &b.metrics.TelegramSend
-	case "telegram_edit":
-		stat = &b.metrics.TelegramEdit
-	case "db_add":
-		stat = &b.metrics.DBAdd
-	case "db_get":
-		stat = &b.metrics.DBGet
-	default:
+	validMetrics := map[string]bool{
+		"llm_cluster": true, "llm_summarize": true,
+		"telegram_send": true, "telegram_edit": true,
+		"db_add": true, "db_get": true,
+	}
+	if !validMetrics[metricName] {
 		return
 	}
 
-	detail := stat.DetailSnapshot()
+	detail := b.metrics.CachedLatency(metricName)
 	text := metrics.FormatLatencyDeepDive(metricName, detail)
 
 	if cq.Message != nil {
@@ -1162,11 +1183,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
 	if err != nil {
-		b.metrics.IncSummarizeFail()
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to summarize")
 		return
 	}
-	b.metrics.IncSummarizeOK()
 
 	preamble := "🌅 *Утренняя \\#сводка за последние 24 часа:*"
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, groupID), telegramMessageLimit)

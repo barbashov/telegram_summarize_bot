@@ -1,6 +1,7 @@
 package metrics
 
 import (
+	"context"
 	"fmt"
 	"sort"
 	"strings"
@@ -9,8 +10,7 @@ import (
 )
 
 const (
-	windowSize = 100
-	ringSize   = 10
+	ringSize = 10
 
 	thresholdTelegramSend = 3 * time.Second
 	thresholdTelegramEdit = 3 * time.Second
@@ -19,29 +19,35 @@ const (
 	thresholdDB           = 500 * time.Millisecond
 	thresholdFailRatio    = 0.20
 	thresholdRecentErrors = 5
+
+	deepDiveMaxSamples = 20 // max recent samples shown in deep-dive
 )
 
-const deepDiveMaxSamples = 20 // max recent samples shown in deep-dive
-
-// LatencyStat is a rolling window of the last windowSize duration samples.
-type LatencyStat struct {
-	mu         sync.Mutex
-	samples    [windowSize]time.Duration
-	timestamps [windowSize]time.Time
-	count      int // number of filled slots (capped at windowSize)
-	pos        int // next write index
+// EventWriter persists a single metric event to the database.
+type EventWriter interface {
+	InsertBotEvent(ctx context.Context, metric string, ts time.Time, durationNS int64) error
+	InsertErrorLog(ctx context.Context, ts time.Time, key, msg string) error
 }
 
-// Record adds a duration sample to the rolling window.
+// LatencyStat records latency samples directly to the database.
+type LatencyStat struct {
+	metric string
+	db     EventWriter
+}
+
+// NewLatencyStat creates a LatencyStat that writes to the given DB.
+func NewLatencyStat(metric string, db EventWriter) LatencyStat {
+	return LatencyStat{metric: metric, db: db}
+}
+
+// Record inserts a duration sample into the database.
 func (l *LatencyStat) Record(d time.Duration) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.samples[l.pos] = d
-	l.timestamps[l.pos] = time.Now()
-	l.pos = (l.pos + 1) % windowSize
-	if l.count < windowSize {
-		l.count++
+	if l.db == nil {
+		return
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = l.db.InsertBotEvent(ctx, l.metric, time.Now(), int64(d))
 }
 
 // Start returns a closure that, when called, records time.Since(start).
@@ -51,47 +57,13 @@ func (l *LatencyStat) Start() func() {
 	return func() { l.Record(time.Since(start)) }
 }
 
-// LatencySnapshot is a point-in-time copy of LatencyStat statistics.
+// LatencySnapshot is a point-in-time copy of latency statistics.
 type LatencySnapshot struct {
 	Count int
 	Min   time.Duration
 	Mean  time.Duration
 	P95   time.Duration
 	Max   time.Duration
-}
-
-// Snapshot returns a safe copy of the current statistics.
-func (l *LatencyStat) Snapshot() LatencySnapshot {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	if l.count == 0 {
-		return LatencySnapshot{}
-	}
-
-	// Collect samples in insertion order.
-	samples := make([]time.Duration, l.count)
-	start := (l.pos - l.count + windowSize) % windowSize
-	for i := 0; i < l.count; i++ {
-		samples[i] = l.samples[(start+i)%windowSize]
-	}
-
-	sorted := make([]time.Duration, len(samples))
-	copy(sorted, samples)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	var sum time.Duration
-	for _, s := range sorted {
-		sum += s
-	}
-	p95idx := int(float64(len(sorted)-1) * 0.95)
-	return LatencySnapshot{
-		Count: l.count,
-		Min:   sorted[0],
-		Mean:  sum / time.Duration(len(sorted)),
-		P95:   sorted[p95idx],
-		Max:   sorted[len(sorted)-1],
-	}
 }
 
 // TimedSample is a single latency measurement with its wall-clock time.
@@ -102,173 +74,10 @@ type TimedSample struct {
 
 // LatencyDetailSnapshot provides raw data points and statistics for deep-dive views.
 type LatencyDetailSnapshot struct {
-	Samples   []TimedSample   // newest-first, only entries with non-zero timestamps
-	Durations []time.Duration // all durations in the window (for histogram)
+	Samples   []TimedSample   // newest-first
+	Durations []time.Duration // all durations (for histogram)
 	LatencySnapshot
 	P50 time.Duration
-}
-
-// DetailSnapshot returns a detailed snapshot including individual timestamped samples.
-func (l *LatencyStat) DetailSnapshot() LatencyDetailSnapshot {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	ds := LatencyDetailSnapshot{}
-	if l.count == 0 {
-		return ds
-	}
-
-	// Collect in insertion order (oldest first).
-	start := (l.pos - l.count + windowSize) % windowSize
-	durations := make([]time.Duration, l.count)
-	for i := 0; i < l.count; i++ {
-		idx := (start + i) % windowSize
-		durations[i] = l.samples[idx]
-		if !l.timestamps[idx].IsZero() {
-			ds.Samples = append(ds.Samples, TimedSample{
-				At:       l.timestamps[idx],
-				Duration: l.samples[idx],
-			})
-		}
-	}
-
-	// Reverse samples to newest-first.
-	for i, j := 0, len(ds.Samples)-1; i < j; i, j = i+1, j-1 {
-		ds.Samples[i], ds.Samples[j] = ds.Samples[j], ds.Samples[i]
-	}
-
-	// Keep all durations for histogram.
-	ds.Durations = durations
-
-	// Compute stats from sorted durations.
-	sorted := make([]time.Duration, len(durations))
-	copy(sorted, durations)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
-
-	var sum time.Duration
-	for _, s := range sorted {
-		sum += s
-	}
-
-	n := len(sorted)
-	ds.Count = l.count
-	ds.Min = sorted[0]
-	ds.Mean = sum / time.Duration(n)
-	ds.P50 = sorted[int(float64(n-1)*0.50)]
-	ds.P95 = sorted[int(float64(n-1)*0.95)]
-	ds.Max = sorted[n-1]
-
-	return ds
-}
-
-// FormatLatencyDeepDive formats a detailed latency report for a single metric.
-func FormatLatencyDeepDive(name string, d LatencyDetailSnapshot) string {
-	var sb strings.Builder
-
-	fmt.Fprintf(&sb, "📊 Детализация: %s\n", name)
-
-	if d.Count == 0 {
-		sb.WriteString("\nНет данных")
-		return sb.String()
-	}
-
-	fmt.Fprintf(&sb, "\n📈 Статистика (%d замеров):\n", d.Count)
-	fmt.Fprintf(&sb, "  Min:  %s\n", formatDur(d.Min))
-	fmt.Fprintf(&sb, "  Mean: %s\n", formatDur(d.Mean))
-	fmt.Fprintf(&sb, "  P50:  %s\n", formatDur(d.P50))
-	fmt.Fprintf(&sb, "  P95:  %s\n", formatDur(d.P95))
-	fmt.Fprintf(&sb, "  Max:  %s\n", formatDur(d.Max))
-
-	// Distribution histogram with fixed buckets.
-	type bucket struct {
-		label string
-		lo    time.Duration
-		hi    time.Duration // exclusive; 0 means +∞
-	}
-	buckets := []bucket{
-		{"<100мс", 0, 100 * time.Millisecond},
-		{"100-500мс", 100 * time.Millisecond, 500 * time.Millisecond},
-		{"0.5-1с", 500 * time.Millisecond, time.Second},
-		{"1-5с", time.Second, 5 * time.Second},
-		{"5-30с", 5 * time.Second, 30 * time.Second},
-		{">30с", 30 * time.Second, 0},
-	}
-
-	counts := make([]int, len(buckets))
-	for _, dur := range d.Durations {
-		for bi, b := range buckets {
-			if dur >= b.lo && (b.hi == 0 || dur < b.hi) {
-				counts[bi]++
-				break
-			}
-		}
-	}
-
-	maxCount := 0
-	for _, c := range counts {
-		if c > maxCount {
-			maxCount = c
-		}
-	}
-
-	sb.WriteString("\n📉 Распределение:\n")
-	const maxBar = 15
-	for i, b := range buckets {
-		c := counts[i]
-		barLen := 0
-		if maxCount > 0 {
-			barLen = c * maxBar / maxCount
-		}
-		if c > 0 && barLen == 0 {
-			barLen = 1
-		}
-		bar := strings.Repeat("█", barLen)
-		fmt.Fprintf(&sb, "  %-10s %s %d\n", b.label, bar, c)
-	}
-
-	// Recent timestamped samples.
-	if len(d.Samples) > 0 {
-		show := d.Samples
-		if len(show) > deepDiveMaxSamples {
-			show = show[:deepDiveMaxSamples]
-		}
-		fmt.Fprintf(&sb, "\n🕐 Последние %d замеров:\n", len(show))
-		for _, s := range show {
-			fmt.Fprintf(&sb, "  %s  %s\n", s.At.Format("15:04:05"), formatDur(s.Duration))
-		}
-	}
-
-	return strings.TrimRight(sb.String(), "\n")
-}
-
-// rawState returns the internal samples/count/pos for persistence.
-func (l *LatencyStat) rawState() LatencyRawState {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	var s LatencyRawState
-	for i, d := range l.samples {
-		s.Samples[i] = int64(d)
-		if !l.timestamps[i].IsZero() {
-			s.Timestamps[i] = l.timestamps[i].UnixNano()
-		}
-	}
-	s.Count = l.count
-	s.Pos = l.pos
-	return s
-}
-
-// loadRawState restores internal state from a persisted snapshot.
-func (l *LatencyStat) loadRawState(s LatencyRawState) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	for i, ns := range s.Samples {
-		l.samples[i] = time.Duration(ns)
-		if s.Timestamps[i] != 0 {
-			l.timestamps[i] = time.Unix(0, s.Timestamps[i])
-		}
-	}
-	l.count = s.Count
-	l.pos = s.Pos
 }
 
 // ErrorEntry is a single error event stored in the ring buffer.
@@ -278,116 +87,13 @@ type ErrorEntry struct {
 	Msg string
 }
 
-// LatencyRawState is the internal state of a LatencyStat, suitable for serialization.
-type LatencyRawState struct {
-	Samples    [windowSize]int64 // nanoseconds
-	Timestamps [windowSize]int64 // unix nanoseconds
-	Count      int
-	Pos        int
-}
-
-// PersistableSnapshot holds all state that is persisted to DB.
-type PersistableSnapshot struct {
+// CachedCounters holds counter values derived from DB during cache refresh.
+type CachedCounters struct {
 	MessagesStored int64
 	SummarizeOK    int64
 	SummarizeFail  int64
 	RateLimitHits  int64
 	ErrorCounts    map[string]int64
-	RecentErrors   []ErrorEntry
-	TelegramSend   LatencyRawState
-	TelegramEdit   LatencyRawState
-	LLMCluster     LatencyRawState
-	LLMSummarize   LatencyRawState
-	DBAdd          LatencyRawState
-	DBGet          LatencyRawState
-}
-
-// Metrics holds all runtime observability data for the bot.
-// All methods are safe for concurrent use.
-type Metrics struct {
-	StartTime time.Time
-
-	TelegramSend LatencyStat
-	TelegramEdit LatencyStat
-	LLMCluster   LatencyStat
-	LLMSummarize LatencyStat
-	DBAdd        LatencyStat
-	DBGet        LatencyStat
-
-	mu              sync.Mutex
-	messagesStored  int64
-	summarizeOK     int64
-	summarizeFail   int64
-	rateLimitHits   int64
-	errorCounts     map[string]int64
-	errorRing       [ringSize]ErrorEntry
-	errorRingPos    int
-	errorRingFilled int
-}
-
-// New returns a new Metrics instance with the start time set to now.
-func New() *Metrics {
-	return &Metrics{
-		StartTime:   time.Now(),
-		errorCounts: make(map[string]int64),
-	}
-}
-
-// Reset clears all metrics state (latency windows, counters, errors).
-func (m *Metrics) Reset() {
-	m.TelegramSend = LatencyStat{}
-	m.TelegramEdit = LatencyStat{}
-	m.LLMCluster = LatencyStat{}
-	m.LLMSummarize = LatencyStat{}
-	m.DBAdd = LatencyStat{}
-	m.DBGet = LatencyStat{}
-
-	m.mu.Lock()
-	m.messagesStored = 0
-	m.summarizeOK = 0
-	m.summarizeFail = 0
-	m.rateLimitHits = 0
-	m.errorCounts = make(map[string]int64)
-	m.errorRing = [ringSize]ErrorEntry{}
-	m.errorRingPos = 0
-	m.errorRingFilled = 0
-	m.mu.Unlock()
-}
-
-func (m *Metrics) IncMessagesStored() {
-	m.mu.Lock()
-	m.messagesStored++
-	m.mu.Unlock()
-}
-
-func (m *Metrics) IncSummarizeOK() {
-	m.mu.Lock()
-	m.summarizeOK++
-	m.mu.Unlock()
-}
-
-func (m *Metrics) IncSummarizeFail() {
-	m.mu.Lock()
-	m.summarizeFail++
-	m.mu.Unlock()
-}
-
-func (m *Metrics) IncRateLimitHit() {
-	m.mu.Lock()
-	m.rateLimitHits++
-	m.mu.Unlock()
-}
-
-// RecordError adds an error entry to the ring buffer and increments the per-key counter.
-func (m *Metrics) RecordError(key, errMsg string) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.errorCounts[key]++
-	m.errorRing[m.errorRingPos] = ErrorEntry{Ts: time.Now(), Key: key, Msg: errMsg}
-	m.errorRingPos = (m.errorRingPos + 1) % ringSize
-	if m.errorRingFilled < ringSize {
-		m.errorRingFilled++
-	}
 }
 
 // MetricsSnapshot is a point-in-time copy of all metrics, safe to read without holding locks.
@@ -407,105 +113,183 @@ type MetricsSnapshot struct {
 	RecentErrors   []ErrorEntry
 }
 
-// Snapshot returns a consistent point-in-time copy of all metrics.
-func (m *Metrics) Snapshot() MetricsSnapshot {
-	s := MetricsSnapshot{
-		Uptime:       time.Since(m.StartTime),
-		TelegramSend: m.TelegramSend.Snapshot(),
-		TelegramEdit: m.TelegramEdit.Snapshot(),
-		LLMCluster:   m.LLMCluster.Snapshot(),
-		LLMSummarize: m.LLMSummarize.Snapshot(),
-		DBAdd:        m.DBAdd.Snapshot(),
-		DBGet:        m.DBGet.Snapshot(),
-	}
+// Metrics holds all runtime observability data for the bot.
+// Latency stats are written directly to DB; reads come from a periodically refreshed cache.
+type Metrics struct {
+	StartTime time.Time
 
+	TelegramSend LatencyStat
+	TelegramEdit LatencyStat
+	LLMCluster   LatencyStat
+	LLMSummarize LatencyStat
+	DBAdd        LatencyStat
+	DBGet        LatencyStat
+	RateLimit    LatencyStat
+
+	db EventWriter // set by InitLatencyStats
+
+	cacheMu      sync.RWMutex
+	latencyCache map[string]LatencyDetailSnapshot
+	counters     CachedCounters
+
+	mu              sync.Mutex
+	errorRing       [ringSize]ErrorEntry
+	errorRingPos    int
+	errorRingFilled int
+}
+
+// New returns a new Metrics instance with the start time set to now.
+func New() *Metrics {
+	return &Metrics{
+		StartTime:    time.Now(),
+		latencyCache: make(map[string]LatencyDetailSnapshot),
+		counters:     CachedCounters{ErrorCounts: make(map[string]int64)},
+	}
+}
+
+// InitLatencyStats initializes all LatencyStat fields with a DB writer.
+// Must be called after the DB is available.
+func (m *Metrics) InitLatencyStats(db EventWriter) {
+	m.db = db
+	m.TelegramSend = NewLatencyStat("telegram_send", db)
+	m.TelegramEdit = NewLatencyStat("telegram_edit", db)
+	m.LLMCluster = NewLatencyStat("llm_cluster", db)
+	m.LLMSummarize = NewLatencyStat("llm_summarize", db)
+	m.DBAdd = NewLatencyStat("db_add", db)
+	m.DBGet = NewLatencyStat("db_get", db)
+	m.RateLimit = NewLatencyStat("rate_limit", db)
+}
+
+// UpdateCache replaces the latency cache and counter values.
+func (m *Metrics) UpdateCache(latency map[string]LatencyDetailSnapshot, counters CachedCounters) {
+	m.cacheMu.Lock()
+	defer m.cacheMu.Unlock()
+	m.latencyCache = latency
+	m.counters = counters
+}
+
+// CachedLatency returns the cached detail snapshot for a metric.
+func (m *Metrics) CachedLatency(metric string) LatencyDetailSnapshot {
+	m.cacheMu.RLock()
+	defer m.cacheMu.RUnlock()
+	return m.latencyCache[metric]
+}
+
+func (m *Metrics) cachedSnapshot(metric string) LatencySnapshot {
+	m.cacheMu.RLock()
+	defer m.cacheMu.RUnlock()
+	return m.latencyCache[metric].LatencySnapshot
+}
+
+func (m *Metrics) cachedCounters() CachedCounters {
+	m.cacheMu.RLock()
+	defer m.cacheMu.RUnlock()
+	return m.counters
+}
+
+// RecordError adds an error entry to the ring buffer and persists it to DB.
+func (m *Metrics) RecordError(key, errMsg string) {
+	now := time.Now()
+	m.mu.Lock()
+	m.errorRing[m.errorRingPos] = ErrorEntry{Ts: now, Key: key, Msg: errMsg}
+	m.errorRingPos = (m.errorRingPos + 1) % ringSize
+	if m.errorRingFilled < ringSize {
+		m.errorRingFilled++
+	}
+	m.mu.Unlock()
+
+	if m.db != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = m.db.InsertErrorLog(ctx, now, key, errMsg)
+	}
+}
+
+func (m *Metrics) recentErrors() []ErrorEntry {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-
-	s.MessagesStored = m.messagesStored
-	s.SummarizeOK = m.summarizeOK
-	s.SummarizeFail = m.summarizeFail
-	s.RateLimitHits = m.rateLimitHits
-	s.ErrorCounts = make(map[string]int64, len(m.errorCounts))
-	for k, v := range m.errorCounts {
-		s.ErrorCounts[k] = v
-	}
-
 	filled := m.errorRingFilled
 	start := (m.errorRingPos - filled + ringSize) % ringSize
-	s.RecentErrors = make([]ErrorEntry, filled)
+	result := make([]ErrorEntry, filled)
 	for i := 0; i < filled; i++ {
-		s.RecentErrors[i] = m.errorRing[(start+i)%ringSize]
+		result[i] = m.errorRing[(start+i)%ringSize]
 	}
-
-	return s
+	return result
 }
 
-// PersistableSnapshot returns a consistent copy of all persistable state.
-func (m *Metrics) PersistableSnapshot() PersistableSnapshot {
+// Reset clears the in-memory error ring and latency cache.
+func (m *Metrics) Reset() {
 	m.mu.Lock()
-	s := PersistableSnapshot{
-		MessagesStored: m.messagesStored,
-		SummarizeOK:    m.summarizeOK,
-		SummarizeFail:  m.summarizeFail,
-		RateLimitHits:  m.rateLimitHits,
-		ErrorCounts:    make(map[string]int64, len(m.errorCounts)),
-	}
-	for k, v := range m.errorCounts {
-		s.ErrorCounts[k] = v
-	}
-	filled := m.errorRingFilled
-	start := (m.errorRingPos - filled + ringSize) % ringSize
-	s.RecentErrors = make([]ErrorEntry, filled)
-	for i := 0; i < filled; i++ {
-		s.RecentErrors[i] = m.errorRing[(start+i)%ringSize]
-	}
+	m.errorRing = [ringSize]ErrorEntry{}
+	m.errorRingPos = 0
+	m.errorRingFilled = 0
 	m.mu.Unlock()
 
-	s.TelegramSend = m.TelegramSend.rawState()
-	s.TelegramEdit = m.TelegramEdit.rawState()
-	s.LLMCluster = m.LLMCluster.rawState()
-	s.LLMSummarize = m.LLMSummarize.rawState()
-	s.DBAdd = m.DBAdd.rawState()
-	s.DBGet = m.DBGet.rawState()
-	return s
+	m.cacheMu.Lock()
+	m.latencyCache = make(map[string]LatencyDetailSnapshot)
+	m.counters = CachedCounters{ErrorCounts: make(map[string]int64)}
+	m.cacheMu.Unlock()
 }
 
-// LoadFromPersistable initializes all persistable fields from a stored snapshot.
-// Does not modify StartTime.
-func (m *Metrics) LoadFromPersistable(s PersistableSnapshot) {
-	m.mu.Lock()
-	m.messagesStored = s.MessagesStored
-	m.summarizeOK = s.SummarizeOK
-	m.summarizeFail = s.SummarizeFail
-	m.rateLimitHits = s.RateLimitHits
-	m.errorCounts = make(map[string]int64, len(s.ErrorCounts))
-	for k, v := range s.ErrorCounts {
-		m.errorCounts[k] = v
+// Snapshot returns a consistent point-in-time copy of all metrics.
+func (m *Metrics) Snapshot() MetricsSnapshot {
+	c := m.cachedCounters()
+	return MetricsSnapshot{
+		Uptime:         time.Since(m.StartTime),
+		TelegramSend:   m.cachedSnapshot("telegram_send"),
+		TelegramEdit:   m.cachedSnapshot("telegram_edit"),
+		LLMCluster:     m.cachedSnapshot("llm_cluster"),
+		LLMSummarize:   m.cachedSnapshot("llm_summarize"),
+		DBAdd:          m.cachedSnapshot("db_add"),
+		DBGet:          m.cachedSnapshot("db_get"),
+		MessagesStored: c.MessagesStored,
+		SummarizeOK:    c.SummarizeOK,
+		SummarizeFail:  c.SummarizeFail,
+		RateLimitHits:  c.RateLimitHits,
+		ErrorCounts:    c.ErrorCounts,
+		RecentErrors:   m.recentErrors(),
 	}
-	// Restore error ring in insertion order.
-	n := len(s.RecentErrors)
-	if n > ringSize {
-		n = ringSize
-	}
-	for i := 0; i < n; i++ {
-		m.errorRing[i] = s.RecentErrors[i]
-	}
-	m.errorRingPos = n % ringSize
-	m.errorRingFilled = n
-	m.mu.Unlock()
-
-	m.TelegramSend.loadRawState(s.TelegramSend)
-	m.TelegramEdit.loadRawState(s.TelegramEdit)
-	m.LLMCluster.loadRawState(s.LLMCluster)
-	m.LLMSummarize.loadRawState(s.LLMSummarize)
-	m.DBAdd.loadRawState(s.DBAdd)
-	m.DBGet.loadRawState(s.DBGet)
 }
 
 // FormatStatusReport generates a human-readable status report in Russian.
 func (m *Metrics) FormatStatusReport(model string) string {
 	return formatSnapshot(m.Snapshot(), model)
+}
+
+// ComputeDetailSnapshot computes a LatencyDetailSnapshot from raw event data.
+func ComputeDetailSnapshot(timestamps []time.Time, durations []time.Duration) LatencyDetailSnapshot {
+	ds := LatencyDetailSnapshot{}
+	if len(durations) == 0 {
+		return ds
+	}
+
+	// Build timed samples (newest-first for display).
+	ds.Durations = durations
+	for i := len(durations) - 1; i >= 0; i-- {
+		ds.Samples = append(ds.Samples, TimedSample{
+			At:       timestamps[i],
+			Duration: durations[i],
+		})
+	}
+
+	sorted := make([]time.Duration, len(durations))
+	copy(sorted, durations)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i] < sorted[j] })
+
+	var sum time.Duration
+	for _, s := range sorted {
+		sum += s
+	}
+
+	n := len(sorted)
+	ds.Count = n
+	ds.Min = sorted[0]
+	ds.Mean = sum / time.Duration(n)
+	ds.P50 = sorted[int(float64(n-1)*0.50)]
+	ds.P95 = sorted[int(float64(n-1)*0.95)]
+	ds.Max = sorted[n-1]
+
+	return ds
 }
 
 func trafficLight(p95, threshold time.Duration) string {
@@ -639,6 +423,86 @@ func formatSnapshot(snap MetricsSnapshot, model string) string {
 		for i := len(snap.RecentErrors) - 1; i >= 0; i-- {
 			e := snap.RecentErrors[i]
 			fmt.Fprintf(&sb, "[%s] %s: %s\n", e.Ts.Format("2006-01-02 15:04:05 MST"), e.Key, e.Msg)
+		}
+	}
+
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+// FormatLatencyDeepDive formats a detailed latency report for a single metric.
+func FormatLatencyDeepDive(name string, d LatencyDetailSnapshot) string {
+	var sb strings.Builder
+
+	fmt.Fprintf(&sb, "📊 Детализация: %s\n", name)
+
+	if d.Count == 0 {
+		sb.WriteString("\nНет данных")
+		return sb.String()
+	}
+
+	fmt.Fprintf(&sb, "\n📈 Статистика (%d замеров):\n", d.Count)
+	fmt.Fprintf(&sb, "  Min:  %s\n", formatDur(d.Min))
+	fmt.Fprintf(&sb, "  Mean: %s\n", formatDur(d.Mean))
+	fmt.Fprintf(&sb, "  P50:  %s\n", formatDur(d.P50))
+	fmt.Fprintf(&sb, "  P95:  %s\n", formatDur(d.P95))
+	fmt.Fprintf(&sb, "  Max:  %s\n", formatDur(d.Max))
+
+	// Distribution histogram with fixed buckets.
+	type bucket struct {
+		label string
+		lo    time.Duration
+		hi    time.Duration // exclusive; 0 means +∞
+	}
+	buckets := []bucket{
+		{"<100мс", 0, 100 * time.Millisecond},
+		{"100-500мс", 100 * time.Millisecond, 500 * time.Millisecond},
+		{"0.5-1с", 500 * time.Millisecond, time.Second},
+		{"1-5с", time.Second, 5 * time.Second},
+		{"5-30с", 5 * time.Second, 30 * time.Second},
+		{">30с", 30 * time.Second, 0},
+	}
+
+	counts := make([]int, len(buckets))
+	for _, dur := range d.Durations {
+		for bi, b := range buckets {
+			if dur >= b.lo && (b.hi == 0 || dur < b.hi) {
+				counts[bi]++
+				break
+			}
+		}
+	}
+
+	maxCount := 0
+	for _, c := range counts {
+		if c > maxCount {
+			maxCount = c
+		}
+	}
+
+	sb.WriteString("\n📉 Распределение:\n")
+	const maxBar = 15
+	for i, b := range buckets {
+		c := counts[i]
+		barLen := 0
+		if maxCount > 0 {
+			barLen = c * maxBar / maxCount
+		}
+		if c > 0 && barLen == 0 {
+			barLen = 1
+		}
+		bar := strings.Repeat("█", barLen)
+		fmt.Fprintf(&sb, "  %-10s %s %d\n", b.label, bar, c)
+	}
+
+	// Recent timestamped samples.
+	if len(d.Samples) > 0 {
+		show := d.Samples
+		if len(show) > deepDiveMaxSamples {
+			show = show[:deepDiveMaxSamples]
+		}
+		fmt.Fprintf(&sb, "\n🕐 Последние %d замеров:\n", len(show))
+		for _, s := range show {
+			fmt.Fprintf(&sb, "  %s  %s\n", s.At.Format("15:04:05"), formatDur(s.Duration))
 		}
 	}
 
