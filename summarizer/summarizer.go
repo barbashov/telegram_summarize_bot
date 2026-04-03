@@ -3,6 +3,7 @@ package summarizer
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sort"
@@ -28,11 +29,14 @@ type chatCompletionClient interface {
 	CreateChatCompletion(ctx context.Context, request openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error)
 }
 
+const defaultRetryBaseDelay = 2 * time.Second
+
 type Summarizer struct {
-	client       chatCompletionClient
-	model        string
-	metrics      *metrics.Metrics
-	replyThreads bool
+	client         chatCompletionClient
+	model          string
+	metrics        *metrics.Metrics
+	replyThreads   bool
+	retryBaseDelay time.Duration
 }
 
 type TopicCluster struct {
@@ -72,10 +76,38 @@ func New(apiKey, baseURL, model string, m *metrics.Metrics, replyThreads bool) (
 
 func NewWithClient(client chatCompletionClient, model string, m *metrics.Metrics, replyThreads bool) *Summarizer {
 	return &Summarizer{
-		client:       client,
-		model:        model,
-		metrics:      m,
-		replyThreads: replyThreads,
+		client:         client,
+		model:          model,
+		metrics:        m,
+		replyThreads:   replyThreads,
+		retryBaseDelay: defaultRetryBaseDelay,
+	}
+}
+
+func isRetryableError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	var apiErr *openai.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.HTTPStatusCode >= 500 || apiErr.HTTPStatusCode == 429
+	}
+	return true
+}
+
+func (s *Summarizer) retrySleep(ctx context.Context, attempt int) error {
+	delay := s.retryBaseDelay << uint(attempt) // 2s, 4s, 8s with default base
+	if delay > 10*time.Second {
+		delay = 10 * time.Second
+	}
+	select {
+	case <-time.After(delay):
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
@@ -127,9 +159,18 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 	for attempt := range maxLLMRetries {
 		resp, err := s.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			logger.Error().Err(err).Msg("failed to create topic clustering completion")
+			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to create topic clustering completion")
 			s.metrics.RecordError("llm_cluster", err.Error())
-			return nil, fmt.Errorf("failed to cluster topics: %w", err)
+			if !isRetryableError(err) {
+				return nil, fmt.Errorf("failed to cluster topics: %w", err)
+			}
+			lastErr = fmt.Errorf("failed to cluster topics: %w", err)
+			if attempt < maxLLMRetries-1 {
+				if sleepErr := s.retrySleep(ctx, attempt); sleepErr != nil {
+					return nil, lastErr
+				}
+			}
+			continue
 		}
 
 		content, err := firstChoiceContent(resp)
@@ -187,9 +228,18 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 	for attempt := range maxLLMRetries {
 		resp, err := s.client.CreateChatCompletion(ctx, req)
 		if err != nil {
-			logger.Error().Err(err).Msg("failed to create topic summary completion")
+			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to create topic summary completion")
 			s.metrics.RecordError("llm_summarize", err.Error())
-			return nil, fmt.Errorf("failed to summarize topics: %w", err)
+			if !isRetryableError(err) {
+				return nil, fmt.Errorf("failed to summarize topics: %w", err)
+			}
+			lastErr = fmt.Errorf("failed to summarize topics: %w", err)
+			if attempt < maxLLMRetries-1 {
+				if sleepErr := s.retrySleep(ctx, attempt); sleepErr != nil {
+					return nil, lastErr
+				}
+			}
+			continue
 		}
 
 		content, err := firstChoiceContent(resp)
@@ -215,7 +265,7 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content string) 
 
 	userPrompt := fmt.Sprintf("URL: %s\n\n<page_content>\n%s\n</page_content>", pageURL, content)
 
-	resp, err := s.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
+	req := openai.ChatCompletionRequest{
 		Model: s.model,
 		Messages: []openai.ChatCompletionMessage{
 			{
@@ -230,19 +280,33 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content string) 
 		},
 		MaxTokens:   urlMaxTokens,
 		Temperature: 0.3,
-	})
-	if err != nil {
-		logger.Error().Err(err).Msg("failed to summarize URL content")
-		s.metrics.RecordError("llm_url_summarize", err.Error())
-		return "", fmt.Errorf("failed to summarize URL: %w", err)
 	}
 
-	text, err := firstChoiceContent(resp)
-	if err != nil {
-		return "", err
-	}
+	var lastErr error
+	for attempt := range maxLLMRetries {
+		resp, err := s.client.CreateChatCompletion(ctx, req)
+		if err != nil {
+			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to summarize URL content")
+			s.metrics.RecordError("llm_url_summarize", err.Error())
+			if !isRetryableError(err) {
+				return "", fmt.Errorf("failed to summarize URL: %w", err)
+			}
+			lastErr = fmt.Errorf("failed to summarize URL: %w", err)
+			if attempt < maxLLMRetries-1 {
+				if sleepErr := s.retrySleep(ctx, attempt); sleepErr != nil {
+					return "", lastErr
+				}
+			}
+			continue
+		}
 
-	return text, nil
+		text, err := firstChoiceContent(resp)
+		if err != nil {
+			return "", err
+		}
+		return text, nil
+	}
+	return "", lastErr
 }
 
 func FormatTelegramSummary(summary *StructuredSummary, groupID int64) string {

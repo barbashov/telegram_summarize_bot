@@ -3,6 +3,8 @@ package summarizer
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"strings"
 	"testing"
 	"time"
@@ -339,5 +341,154 @@ func TestFormatTelegramSummaryNoLinkWhenMsgIDZero(t *testing.T) {
 	}
 	if !strings.Contains(formatted, "*1\\. Тема*") {
 		t.Fatalf("expected plain bold title, got: %q", formatted)
+	}
+}
+
+// sequenceChatClient returns different responses/errors for each successive call.
+type sequenceChatClient struct {
+	calls []sequenceCall
+	idx   int
+}
+
+type sequenceCall struct {
+	resp string
+	err  error
+}
+
+func (s *sequenceChatClient) CreateChatCompletion(_ context.Context, _ openai.ChatCompletionRequest) (openai.ChatCompletionResponse, error) {
+	if s.idx >= len(s.calls) {
+		return openai.ChatCompletionResponse{}, fmt.Errorf("sequenceChatClient: unexpected call #%d", s.idx+1)
+	}
+	c := s.calls[s.idx]
+	s.idx++
+	if c.err != nil {
+		return openai.ChatCompletionResponse{}, c.err
+	}
+	return openai.ChatCompletionResponse{
+		Choices: []openai.ChatCompletionChoice{
+			{Message: openai.ChatCompletionMessage{Content: c.resp}},
+		},
+	}, nil
+}
+
+func TestClusterTopicsRetriesOnNetworkError(t *testing.T) {
+	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
+	client := &sequenceChatClient{
+		calls: []sequenceCall{
+			{err: netErr},
+			{err: netErr},
+			{resp: `{"topics":[{"title":"Тема","message_indexes":[0],"message_count":1}]}`},
+		},
+	}
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum.retryBaseDelay = 0
+
+	clusters, err := sum.ClusterTopics(context.Background(), []db.Message{
+		{Text: "msg", Timestamp: time.Unix(0, 0)},
+	}, 5)
+	if err != nil {
+		t.Fatalf("expected success after retries, got: %v", err)
+	}
+	if len(clusters) != 1 {
+		t.Fatalf("expected 1 cluster, got %d", len(clusters))
+	}
+	if client.idx != 3 {
+		t.Fatalf("expected 3 calls, got %d", client.idx)
+	}
+}
+
+func TestClusterTopicsNoRetryOnContextCanceled(t *testing.T) {
+	client := &sequenceChatClient{
+		calls: []sequenceCall{
+			{err: context.Canceled},
+			{resp: `{"topics":[]}`}, // should never be reached
+		},
+	}
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum.retryBaseDelay = 0
+
+	_, err := sum.ClusterTopics(context.Background(), []db.Message{
+		{Text: "msg", Timestamp: time.Unix(0, 0)},
+	}, 5)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if client.idx != 1 {
+		t.Fatalf("expected 1 call (no retry), got %d", client.idx)
+	}
+}
+
+func TestSummarizeTopicsRetriesOnNetworkError(t *testing.T) {
+	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
+	client := &sequenceChatClient{
+		calls: []sequenceCall{
+			{err: netErr},
+			{resp: `{"tldr":"Итог","topics":[{"title":"Тема","summary":"Ок","message_count":1}]}`},
+		},
+	}
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum.retryBaseDelay = 0
+
+	messages := []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}
+	clusters := []TopicCluster{{Title: "Тема", MessageIndexes: []int{0}}}
+
+	result, err := sum.SummarizeTopics(context.Background(), messages, clusters)
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if result.TLDR != "Итог" {
+		t.Fatalf("unexpected TLDR: %q", result.TLDR)
+	}
+	if client.idx != 2 {
+		t.Fatalf("expected 2 calls, got %d", client.idx)
+	}
+}
+
+func TestSummarizeURLRetriesOnNetworkError(t *testing.T) {
+	netErr := &net.OpError{Op: "dial", Err: fmt.Errorf("connection refused")}
+	client := &sequenceChatClient{
+		calls: []sequenceCall{
+			{err: netErr},
+			{resp: "Краткое содержание."},
+		},
+	}
+	sum := NewWithClient(client, "test-model", metrics.New(), true)
+	sum.retryBaseDelay = 0
+
+	result, err := sum.SummarizeURL(context.Background(), "https://example.com", "content")
+	if err != nil {
+		t.Fatalf("expected success after retry, got: %v", err)
+	}
+	if result != "Краткое содержание." {
+		t.Fatalf("unexpected result: %q", result)
+	}
+	if client.idx != 2 {
+		t.Fatalf("expected 2 calls, got %d", client.idx)
+	}
+}
+
+func TestIsRetryableError(t *testing.T) {
+	tests := []struct {
+		name      string
+		err       error
+		retryable bool
+	}{
+		{"nil", nil, false},
+		{"context.Canceled", context.Canceled, false},
+		{"context.DeadlineExceeded", context.DeadlineExceeded, true},
+		{"network error", &net.OpError{Op: "dial", Err: fmt.Errorf("timeout")}, true},
+		{"generic error", errors.New("boom"), true},
+		{"API 500", &openai.APIError{HTTPStatusCode: 500, Message: "internal"}, true},
+		{"API 429", &openai.APIError{HTTPStatusCode: 429, Message: "rate limit"}, true},
+		{"API 400", &openai.APIError{HTTPStatusCode: 400, Message: "bad request"}, false},
+		{"API 401", &openai.APIError{HTTPStatusCode: 401, Message: "unauthorized"}, false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isRetryableError(tc.err)
+			if got != tc.retryable {
+				t.Fatalf("isRetryableError(%v) = %v, want %v", tc.err, got, tc.retryable)
+			}
+		})
 	}
 }

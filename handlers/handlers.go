@@ -14,6 +14,7 @@ import (
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
+	tu "github.com/mymmrac/telego/telegoutil"
 )
 
 const (
@@ -96,7 +97,7 @@ func (b *Bot) Start(ctx context.Context) error {
 			{Command: "groups", Description: "Управление группами"},
 			{Command: "help", Description: "Справка"},
 		},
-		Scope: &telego.BotCommandScopeAllPrivateChats{},
+		Scope: tu.ScopeAllPrivateChats(),
 	}); err != nil {
 		logger.Warn().Err(err).Msg("failed to register bot commands")
 	}
