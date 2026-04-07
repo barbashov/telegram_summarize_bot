@@ -88,6 +88,19 @@ func (b *Bot) editFormattedWithRetry(chatID, msgID int64, text string) {
 	}
 }
 
+// editFormattedFinal is like editFormattedWithRetry but returns the last error
+// so the caller can decide whether the delivery succeeded.
+func (b *Bot) editFormattedFinal(chatID, msgID int64, text string) error {
+	var lastErr error
+	for range editRetries {
+		if lastErr = b.editFormatted(chatID, msgID, text); lastErr == nil {
+			return nil
+		}
+		time.Sleep(editRetryDelay)
+	}
+	return lastErr
+}
+
 func (b *Bot) NotifyUsers(ctx context.Context, text string) (sent, failed int) {
 	attempted := len(b.cfg.AdminUserIDs)
 	if attempted == 0 {

@@ -83,25 +83,31 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		return
 	}
 
+	if !b.sendSummary(groupID, statusMsgID, summary) {
+		return
+	}
+
 	committed = true
 
 	if err := b.db.SetLastSummarizeTime(ctx, groupID, upperBound); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
 	}
-
-	b.sendSummary(groupID, statusMsgID, summary)
 }
 
-func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) {
+func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, chatID), telegramMessageLimit)
 	if len(chunks) == 0 {
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации\\."}
 	}
 
-	b.editFormattedWithRetry(chatID, statusMsgID, chunks[0])
+	if err := b.editFormattedFinal(chatID, statusMsgID, chunks[0]); err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send summary to Telegram")
+		return false
+	}
 	for _, chunk := range chunks[1:] {
 		b.sendFormatted(chatID, chunk)
 	}
+	return true
 }
 
 func splitTelegramMessage(text string, limit int) []string {

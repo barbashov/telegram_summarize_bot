@@ -66,8 +66,9 @@ type CompletionRequest struct {
 
 // CompletionResponse is an API-agnostic response from the LLM.
 type CompletionResponse struct {
-	Content      string
-	FinishReason string // "stop", "length", etc.
+	Content        string
+	FinishReason   string // "stop", "length", etc.
+	HTTPStatusCode int
 }
 
 // APIError represents an LLM API error with HTTP status code.

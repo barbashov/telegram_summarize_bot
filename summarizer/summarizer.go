@@ -105,9 +105,14 @@ func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt stri
 		Temperature: temperature,
 	})
 	if err != nil {
-		logger.Debug().Err(err).Str("model", s.model).Msg("LLM request failed")
+		logEvt := logger.Debug().Err(err).Str("model", s.model)
+		var apiErr *provider.APIError
+		if errors.As(err, &apiErr) {
+			logEvt = logEvt.Int("status_code", apiErr.HTTPStatusCode)
+		}
+		logEvt.Msg("LLM request failed")
 	} else {
-		logger.Debug().Str("model", s.model).Str("finish_reason", resp.FinishReason).Int("response_len", len(resp.Content)).Msg("LLM request completed")
+		logger.Debug().Str("model", s.model).Int("status_code", resp.HTTPStatusCode).Str("finish_reason", resp.FinishReason).Int("response_len", len(resp.Content)).Msg("LLM request completed")
 	}
 	return resp, err
 }

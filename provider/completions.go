@@ -48,8 +48,9 @@ func (c *completionsClient) Complete(ctx context.Context, req CompletionRequest)
 	}
 
 	return CompletionResponse{
-		Content:      resp.Choices[0].Message.Content,
-		FinishReason: string(resp.Choices[0].FinishReason),
+		Content:        resp.Choices[0].Message.Content,
+		FinishReason:   string(resp.Choices[0].FinishReason),
+		HTTPStatusCode: 200,
 	}, nil
 }
 

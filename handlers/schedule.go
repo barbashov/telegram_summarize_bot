@@ -161,7 +161,10 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if len(chunks) == 0 {
 		return
 	}
-	b.editFormattedWithRetry(groupID, statusMsgID, preamble+"\n\n"+chunks[0])
+	if err := b.editFormattedFinal(groupID, statusMsgID, preamble+"\n\n"+chunks[0]); err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to send to Telegram")
+		return
+	}
 	for _, chunk := range chunks[1:] {
 		b.sendFormatted(groupID, chunk)
 	}

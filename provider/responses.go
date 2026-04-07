@@ -136,8 +136,9 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 	}
 
 	return CompletionResponse{
-		Content:      text,
-		FinishReason: finishReason,
+		Content:        text,
+		FinishReason:   finishReason,
+		HTTPStatusCode: 200,
 	}, nil
 }
 
