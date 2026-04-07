@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"telegram_summarize_bot/config"
+	"telegram_summarize_bot/httputil"
 	"telegram_summarize_bot/logger"
 )
 
@@ -32,21 +33,14 @@ func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 
 // HTTPClient creates an HTTP client with proxy support and the given timeout.
 func HTTPClient(timeout time.Duration) *http.Client {
-	return &http.Client{
-		Timeout: timeout,
-		Transport: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		},
-	}
+	return httputil.NewClient(timeout)
 }
 
 // DebugHTTPClient creates an HTTP client that logs all requests and responses.
 func DebugHTTPClient(timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: timeout,
-		Transport: &debugTransport{inner: &http.Transport{
-			Proxy: http.ProxyFromEnvironment,
-		}},
+		Timeout:   timeout,
+		Transport: &debugTransport{inner: httputil.NewTransport()},
 	}
 }
 

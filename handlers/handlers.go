@@ -9,6 +9,7 @@ import (
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/handlers/admin"
+	"telegram_summarize_bot/httputil"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
 	"telegram_summarize_bot/summarizer"
@@ -53,7 +54,7 @@ type Bot struct {
 }
 
 func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
-	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(buildHTTPClient(60*time.Second)))
+	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(httputil.NewClient(60*time.Second)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
