@@ -32,7 +32,7 @@ func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 		return nil, err
 	}
 
-	inner, err := newResponsesClient(token, ChatGPTCodexBaseURL, false)
+	inner, err := NewResponsesClient(token, ChatGPTCodexBaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("create responses client: %w", err)
 	}

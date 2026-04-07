@@ -4,11 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/responses"
+	"github.com/openai/openai-go/shared"
+	"telegram_summarize_bot/logger"
 )
 
 type responsesClient struct {
@@ -19,14 +22,7 @@ type responsesClient struct {
 
 // NewResponsesClient creates an LLMClient using the OpenAI Responses API.
 func NewResponsesClient(token, endpoint string) (LLMClient, error) {
-	return newResponsesClient(token, endpoint, false)
-}
-
-func newResponsesClient(token, endpoint string, debug bool) (LLMClient, error) {
-	httpClient := HTTPClient(120 * time.Second)
-	if debug {
-		httpClient = DebugHTTPClient(120 * time.Second)
-	}
+	httpClient := DebugHTTPClient(120 * time.Second)
 	client := openai.NewClient(
 		option.WithAPIKey(token),
 		option.WithBaseURL(endpoint),
@@ -70,6 +66,11 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: responses.ResponseInputParam(inputItems),
 		},
+		Text: responses.ResponseTextConfigParam{
+			Format: responses.ResponseFormatTextConfigUnionParam{
+				OfText: openai.Ptr(shared.NewResponseFormatTextParam()),
+			},
+		},
 	}
 
 	// Build per-request options: token + optional account ID header for OAuth mode.
@@ -101,9 +102,15 @@ func (c *responsesClient) completeStreaming(ctx context.Context, params response
 	defer func() { _ = stream.Close() }()
 
 	var finalResp *responses.Response
+	var accumulated strings.Builder
 	for stream.Next() {
 		event := stream.Current()
-		if event.Type == "response.completed" {
+		logger.Debug().Str("event_type", event.Type).Msg("streaming event")
+		switch event.Type {
+		case "response.output_text.delta":
+			delta := event.AsResponseOutputTextDelta()
+			accumulated.WriteString(delta.Delta)
+		case "response.completed":
 			completed := event.AsResponseCompleted()
 			finalResp = &completed.Response
 		}
@@ -118,7 +125,16 @@ func (c *responsesClient) completeStreaming(ctx context.Context, params response
 		}
 	}
 
-	return buildResponse(finalResp)
+	resp, err := buildResponse(finalResp)
+	if err != nil {
+		return CompletionResponse{}, err
+	}
+
+	if resp.Content == "" && accumulated.Len() > 0 {
+		resp.Content = accumulated.String()
+	}
+
+	return resp, nil
 }
 
 func buildResponse(resp *responses.Response) (CompletionResponse, error) {
@@ -128,6 +144,8 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 			Message:        fmt.Sprintf("%s: %s", resp.Error.Code, resp.Error.Message),
 		}
 	}
+
+	logger.Debug().RawJSON("raw_response", []byte(resp.RawJSON())).Msg("API response")
 
 	text := resp.OutputText()
 	finishReason := "stop"

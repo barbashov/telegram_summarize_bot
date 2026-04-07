@@ -18,7 +18,10 @@ import (
 	"telegram_summarize_bot/summarizer"
 )
 
-var cfg *config.Config
+var (
+	cfg       *config.Config
+	debugFlag bool
+)
 
 var rootCmd = &cobra.Command{
 	Use:          "bot",
@@ -34,8 +37,12 @@ var rootCmd = &cobra.Command{
 	},
 }
 
+func init() {
+	cobra.OnInitialize(func() { logger.Init(debugFlag) })
+	rootCmd.PersistentFlags().BoolVar(&debugFlag, "debug", false, "enable debug logging")
+}
+
 func Execute() {
-	logger.Init(true)
 	if err := rootCmd.Execute(); err != nil {
 		os.Exit(1)
 	}
