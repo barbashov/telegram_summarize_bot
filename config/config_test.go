@@ -30,6 +30,7 @@ var allEnvKeys = []string{
 	"URL_MAX_CHARS",
 	"OAUTH_TOKEN_DIR",
 	"OAUTH_CLIENT_ID",
+	"OAUTH_CODEX_VERSION",
 }
 
 func clearEnv(t *testing.T) {
@@ -138,6 +139,7 @@ func TestLoad_Defaults(t *testing.T) {
 		{"URLMaxChars", cfg.URLMaxChars, 64000},
 		{"OAuthTokenDir", cfg.OAuthTokenDir, "./data"},
 		{"OAuthClientID", cfg.OAuthClientID, defaultOAuthClientID},
+		{"OAuthCodexVersion", cfg.OAuthCodexVersion, defaultOAuthCodexVersion},
 	}
 	for _, c := range checks {
 		if c.got != c.want {
@@ -170,6 +172,7 @@ func TestLoad_CustomValues(t *testing.T) {
 	t.Setenv("DAILY_SUMMARY_HOUR", "15")
 	t.Setenv("REPLY_THREADS", "false")
 	t.Setenv("URL_MAX_CHARS", "32000")
+	t.Setenv("OAUTH_CODEX_VERSION", "0.130.0")
 
 	cfg, err := Load()
 	if err != nil {
@@ -214,6 +217,9 @@ func TestLoad_CustomValues(t *testing.T) {
 	}
 	if cfg.URLMaxChars != 32000 {
 		t.Errorf("URLMaxChars = %d", cfg.URLMaxChars)
+	}
+	if cfg.OAuthCodexVersion != "0.130.0" {
+		t.Errorf("OAuthCodexVersion = %s", cfg.OAuthCodexVersion)
 	}
 
 	wantGroups := []int64{-100123, -100456}
@@ -272,6 +278,9 @@ func TestLoad_OAuthMode(t *testing.T) {
 	}
 	if cfg.OAuthClientID != defaultOAuthClientID {
 		t.Errorf("OAuthClientID = %s, want default", cfg.OAuthClientID)
+	}
+	if cfg.OAuthCodexVersion != defaultOAuthCodexVersion {
+		t.Errorf("OAuthCodexVersion = %s, want %s", cfg.OAuthCodexVersion, defaultOAuthCodexVersion)
 	}
 }
 

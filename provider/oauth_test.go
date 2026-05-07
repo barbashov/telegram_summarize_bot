@@ -111,3 +111,23 @@ func TestOAuthClientInjectsTokenToInner(t *testing.T) {
 		t.Errorf("inner model = %q, want %q", inner.lastReq.Model, "gpt-4o")
 	}
 }
+
+func TestResolveCodexClientVersion(t *testing.T) {
+	t.Run("default when empty", func(t *testing.T) {
+		if got := resolveCodexClientVersion(""); got != CodexClientVersion {
+			t.Fatalf("resolveCodexClientVersion(\"\") = %q, want %q", got, CodexClientVersion)
+		}
+	})
+
+	t.Run("default when whitespace", func(t *testing.T) {
+		if got := resolveCodexClientVersion("  "); got != CodexClientVersion {
+			t.Fatalf("resolveCodexClientVersion(\"  \") = %q, want %q", got, CodexClientVersion)
+		}
+	})
+
+	t.Run("preserves explicit version", func(t *testing.T) {
+		if got := resolveCodexClientVersion("0.130.0"); got != "0.130.0" {
+			t.Fatalf("resolveCodexClientVersion(\"0.130.0\") = %q, want %q", got, "0.130.0")
+		}
+	})
+}

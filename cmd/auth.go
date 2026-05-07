@@ -122,6 +122,7 @@ func RunAuth(clientID, tokenDir string) error {
 	fmt.Printf("\nAdd to your .env:\n")
 	fmt.Printf("  LLM_MODE=oauth\n")
 	fmt.Printf("  MODEL=gpt-4o\n")
+	fmt.Printf("  OAUTH_CODEX_VERSION=%s\n", provider.CodexClientVersion)
 
 	return nil
 }
@@ -165,7 +166,7 @@ func RunModels(clientID, tokenDir string) error {
 
 // RunTest sends a test prompt to the given model via OAuth and prints the response.
 func RunTest(clientID, tokenDir, model string) error {
-	client, err := provider.NewOAuthClient(tokenDir, clientID)
+	client, err := provider.NewOAuthClient(tokenDir, clientID, os.Getenv("OAUTH_CODEX_VERSION"))
 	if err != nil {
 		return err
 	}

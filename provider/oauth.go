@@ -4,11 +4,12 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 )
 
 const (
 	ChatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
-	CodexClientVersion  = "0.118.0"
+	CodexClientVersion  = "0.124.0"
 	CodexOriginator     = "codex-tui"
 	HeaderAccountID     = "ChatGPT-Account-ID"
 )
@@ -19,12 +20,15 @@ type oauthClient struct {
 }
 
 // NewOAuthClient creates an LLM client that authenticates via OAuth tokens.
-// Uses the ChatGPT backend Codex API with the OAuth access_token and ChatGPT-Account-ID header.
-func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
+// Uses the ChatGPT backend Codex API with the OAuth access_token,
+// ChatGPT-Account-ID header, and a Codex client version header.
+func NewOAuthClient(tokenDir, clientID, codexVersion string) (LLMClient, error) {
 	store := NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("load OAuth tokens: %w (run '%s openai auth' first)", err, os.Args[0])
 	}
+
+	codexVersion = resolveCodexClientVersion(codexVersion)
 
 	// Get initial token to verify it's valid
 	token, err := store.GetValidToken()
@@ -38,6 +42,7 @@ func NewOAuthClient(tokenDir, clientID string) (LLMClient, error) {
 	}
 	if rc, ok := inner.(*responsesClient); ok {
 		rc.accountID = store.GetAccountID()
+		rc.codexClientVersion = codexVersion
 	}
 
 	return &oauthClient{
@@ -60,4 +65,12 @@ func (c *oauthClient) Complete(ctx context.Context, req CompletionRequest) (Comp
 	}
 
 	return c.inner.Complete(ctx, req)
+}
+
+func resolveCodexClientVersion(version string) string {
+	version = strings.TrimSpace(version)
+	if version == "" {
+		return CodexClientVersion
+	}
+	return version
 }

@@ -69,9 +69,12 @@ Uses an OpenAI Codex subscription with OAuth authentication. No API key needed â
 # Follow the browser prompts, then add to .env:
 LLM_MODE=oauth
 MODEL=gpt-4o
+# Optional: override Codex client version header if a model requires newer client.
+# OAUTH_CODEX_VERSION=0.124.0
 ```
 
 The `openai auth` command opens your browser for OAuth login, saves tokens locally, and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
+If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.124.0`).
 
 ## Running
 
@@ -179,6 +182,7 @@ All configuration is via environment variables (`.env` file):
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
 | `OAUTH_TOKEN_DIR` | `./data` | Directory for OAuth token storage |
 | `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
+| `OAUTH_CODEX_VERSION` | `0.124.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
 | `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
 | `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts + `/groups` management). Falls back to `ALERT_USER_IDS` for backward compatibility. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |

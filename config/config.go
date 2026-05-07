@@ -21,26 +21,28 @@ const (
 )
 
 const defaultOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI well-known client ID
+const defaultOAuthCodexVersion = "0.124.0"
 
 type Config struct {
-	BotToken         string
-	LLMMode          LLMMode
-	LLMToken         string
-	LLMEndpoint      string
-	Model            string
-	SummaryHours     int
-	RetentionDays    int
-	MaxMessages      int
-	TopicMax         int
-	RateLimitSec     int
-	DBPath           string
-	AllowedGroups    []int64
-	AdminUserIDs     []int64
-	DailySummaryHour int
-	ReplyThreads     bool
-	URLMaxChars      int
-	OAuthTokenDir    string
-	OAuthClientID    string
+	BotToken          string
+	LLMMode           LLMMode
+	LLMToken          string
+	LLMEndpoint       string
+	Model             string
+	SummaryHours      int
+	RetentionDays     int
+	MaxMessages       int
+	TopicMax          int
+	RateLimitSec      int
+	DBPath            string
+	AllowedGroups     []int64
+	AdminUserIDs      []int64
+	DailySummaryHour  int
+	ReplyThreads      bool
+	URLMaxChars       int
+	OAuthTokenDir     string
+	OAuthClientID     string
+	OAuthCodexVersion string
 }
 
 func Load() (*Config, error) {
@@ -118,6 +120,11 @@ func Load() (*Config, error) {
 		oauthClientID = defaultOAuthClientID
 	}
 
+	oauthCodexVersion := strings.TrimSpace(os.Getenv("OAUTH_CODEX_VERSION"))
+	if oauthCodexVersion == "" {
+		oauthCodexVersion = defaultOAuthCodexVersion
+	}
+
 	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
 	adminUserIDsRaw := os.Getenv("ADMIN_USER_IDS")
 	if adminUserIDsRaw == "" {
@@ -138,24 +145,25 @@ func Load() (*Config, error) {
 	}
 
 	return &Config{
-		BotToken:         botToken,
-		LLMMode:          llmMode,
-		LLMToken:         llmToken,
-		LLMEndpoint:      llmEndpoint,
-		Model:            model,
-		SummaryHours:     envIntOr("SUMMARY_HOURS", 24),
-		RetentionDays:    envIntOr("RETENTION_DAYS", 7),
-		MaxMessages:      envIntOr("MAX_MESSAGES", 250),
-		TopicMax:         envIntOr("TOPIC_MAX", 5),
-		RateLimitSec:     envIntOr("RATE_LIMIT_SEC", 60),
-		DBPath:           dbPath,
-		AllowedGroups:    allowedGroups,
-		AdminUserIDs:     adminUserIDs,
-		DailySummaryHour: dailySummaryHour,
-		ReplyThreads:     replyThreads,
-		URLMaxChars:      envIntOr("URL_MAX_CHARS", 64000),
-		OAuthTokenDir:    oauthTokenDir,
-		OAuthClientID:    oauthClientID,
+		BotToken:          botToken,
+		LLMMode:           llmMode,
+		LLMToken:          llmToken,
+		LLMEndpoint:       llmEndpoint,
+		Model:             model,
+		SummaryHours:      envIntOr("SUMMARY_HOURS", 24),
+		RetentionDays:     envIntOr("RETENTION_DAYS", 7),
+		MaxMessages:       envIntOr("MAX_MESSAGES", 250),
+		TopicMax:          envIntOr("TOPIC_MAX", 5),
+		RateLimitSec:      envIntOr("RATE_LIMIT_SEC", 60),
+		DBPath:            dbPath,
+		AllowedGroups:     allowedGroups,
+		AdminUserIDs:      adminUserIDs,
+		DailySummaryHour:  dailySummaryHour,
+		ReplyThreads:      replyThreads,
+		URLMaxChars:       envIntOr("URL_MAX_CHARS", 64000),
+		OAuthTokenDir:     oauthTokenDir,
+		OAuthClientID:     oauthClientID,
+		OAuthCodexVersion: oauthCodexVersion,
 	}, nil
 }
 

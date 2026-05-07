@@ -88,7 +88,7 @@ func New(cfg *config.Config) (LLMClient, error) {
 	case config.LLMModeResponses:
 		return NewResponsesClient(cfg.LLMToken, cfg.LLMEndpoint)
 	case config.LLMModeOAuth:
-		return NewOAuthClient(cfg.OAuthTokenDir, cfg.OAuthClientID)
+		return NewOAuthClient(cfg.OAuthTokenDir, cfg.OAuthClientID, cfg.OAuthCodexVersion)
 	default:
 		return nil, fmt.Errorf("unknown LLM mode: %q", cfg.LLMMode)
 	}

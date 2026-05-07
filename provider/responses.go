@@ -15,9 +15,10 @@ import (
 )
 
 type responsesClient struct {
-	client    *openai.Client
-	token     string // mutable for OAuth token injection
-	accountID string // ChatGPT-Account-ID header, set for OAuth mode
+	client             *openai.Client
+	token              string // mutable for OAuth token injection
+	accountID          string // ChatGPT-Account-ID header, set for OAuth mode
+	codexClientVersion string // optional OAuth override for the "version" header
 }
 
 // NewResponsesClient creates an LLMClient using the OpenAI Responses API.
@@ -78,8 +79,12 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 	if c.accountID != "" {
 		// ChatGPT backend requires store=false; rejects max_output_tokens and temperature.
 		params.Store = openai.Bool(false)
+		version := c.codexClientVersion
+		if version == "" {
+			version = CodexClientVersion
+		}
 		reqOpts = append(reqOpts, option.WithHeader(HeaderAccountID, c.accountID))
-		reqOpts = append(reqOpts, option.WithHeader("version", CodexClientVersion))
+		reqOpts = append(reqOpts, option.WithHeader("version", version))
 		reqOpts = append(reqOpts, option.WithHeader("originator", CodexOriginator))
 		return c.completeStreaming(ctx, params, reqOpts)
 	}
