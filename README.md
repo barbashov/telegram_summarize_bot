@@ -9,6 +9,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Optional per-request override: `@bot summarize 12`
 - **Multiple LLM backends**: OpenAI-compatible Completions API (OpenRouter, LiteLLM, etc.), OpenAI Responses API, or OpenAI Codex subscription via OAuth
 - **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
+- Per-group additional summary instructions, managed from admin private DMs with `/instructions`
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
@@ -17,7 +18,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
-- Admin private commands (`/status`, `/groups`): runtime metrics and dynamic group management
+- Admin private commands (`/status`, `/groups`, `/instructions`): runtime metrics, dynamic group management, and per-group summary instructions
 - SQLite persistence
 - Graceful shutdown
 
@@ -30,7 +31,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 2. Get your **Telegram Bot Token** from [@BotFather](https://t.me/BotFather).
 3. Configure your LLM provider (see [LLM Modes](#llm-modes) below).
 4. Set `ALLOWED_GROUPS` to seed the initial group allowlist (stored in DB; can be managed at runtime via `/groups`).
-5. If you want admin users (lifecycle alerts + group management), set `ADMIN_USER_IDS` to Telegram user IDs that already started a private chat with the bot.
+5. If you want admin users (lifecycle alerts, group management, per-group summary instructions), set `ADMIN_USER_IDS` to Telegram user IDs that already started a private chat with the bot.
 
 ### LLM Modes
 
@@ -145,6 +146,12 @@ Groups become "known" when the bot is added to them or when a message is receive
 
 The allowed-group list is stored in the database and is authoritative at runtime. `ALLOWED_GROUPS` in `.env` is used only to seed the database on first run (or after an upgrade from a version without this table).
 
+#### `/instructions` — per-group summary instructions
+
+Opens an interactive private-DM flow for configuring additional instructions for a group summary. Pick an allowed group, then choose `Edit` or `Clear`.
+
+The saved text is appended to the final summary prompt only. It can change emphasis or style, but it cannot override the bot's mandatory Russian JSON output rules. Only users listed in `ADMIN_USER_IDS` can use this command.
+
 #### URL summarization
 
 Send a URL in a private message — the bot fetches the page, extracts the article text (using readability), and replies with a summary. Only admin users can use this feature; non-admins are ignored.
@@ -184,7 +191,7 @@ All configuration is via environment variables (`.env` file):
 | `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
 | `OAUTH_CODEX_VERSION` | `0.124.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
 | `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
-| `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts + `/groups` management). Falls back to `ALERT_USER_IDS` for backward compatibility. |
+| `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts, `/groups`, `/instructions`). Falls back to `ALERT_USER_IDS` for backward compatibility. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |

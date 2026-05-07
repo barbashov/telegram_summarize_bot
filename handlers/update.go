@@ -49,7 +49,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	if update.CallbackQuery != nil {
-		b.admin.HandleCallbackQuery(update.CallbackQuery)
+		b.admin.HandleCallbackQuery(ctx, update.CallbackQuery)
 		return
 	}
 

@@ -296,7 +296,7 @@ func TestHandleCallbackQuery_ValidMetric(t *testing.T) {
 		},
 	}
 
-	a.HandleCallbackQuery(cq)
+	a.HandleCallbackQuery(context.Background(), cq)
 
 	if len(deps.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(deps.sentTexts))
@@ -313,7 +313,7 @@ func TestHandleCallbackQuery_InvalidMetric(t *testing.T) {
 		Data: "lat:invalid_metric",
 	}
 
-	a.HandleCallbackQuery(cq)
+	a.HandleCallbackQuery(context.Background(), cq)
 
 	if len(deps.sentTexts) != 0 {
 		t.Fatalf("expected no messages for invalid metric, got: %v", deps.sentTexts)
@@ -330,7 +330,7 @@ func TestHandleCallbackQuery_NonAdmin(t *testing.T) {
 		Data: "lat:llm_cluster",
 	}
 
-	a.HandleCallbackQuery(cq)
+	a.HandleCallbackQuery(context.Background(), cq)
 
 	if len(deps.sentTexts) != 0 {
 		t.Fatalf("expected no messages for non-admin, got: %v", deps.sentTexts)
@@ -409,6 +409,121 @@ func TestHandle_GroupsAddMissingID(t *testing.T) {
 
 	if len(deps.formattedText) != 1 || !strings.Contains(deps.formattedText[0], "Использование") {
 		t.Fatalf("expected usage message, got: %v", deps.formattedText)
+	}
+}
+
+func TestHandle_InstructionsListsAllowedGroups(t *testing.T) {
+	a, database, _ := newTestAdmin(t)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	if err := database.UpsertKnownGroup(ctx, -100123, "Test Group", "testgroup"); err != nil {
+		t.Fatalf("UpsertKnownGroup error: %v", err)
+	}
+	if err := database.AddAllowedGroup(ctx, -100123, 999); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+
+	update := telego.Update{
+		Message: &telego.Message{
+			Text: "/instructions",
+			Chat: telego.Chat{ID: 999, Type: "private"},
+			From: &telego.User{ID: 999},
+		},
+	}
+	a.Handle(ctx, update)
+
+	tg := a.telegram.(*fakeTelegram)
+	if len(tg.sentTexts) != 1 || !strings.Contains(tg.sentTexts[0], "Выберите группу") {
+		t.Fatalf("expected instructions group selector, got: %v", tg.sentTexts)
+	}
+}
+
+func TestHandle_InstructionsPendingSaveAndClear(t *testing.T) {
+	a, database, deps := newTestAdmin(t)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	chat := telego.Chat{ID: 999, Type: "private"}
+	user := &telego.User{ID: 999}
+	if err := database.AddAllowedGroup(ctx, -100123, 999); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+
+	a.HandleCallbackQuery(ctx, &telego.CallbackQuery{
+		ID:   "edit",
+		From: telego.User{ID: 999},
+		Data: "inst:edit:-100123",
+		Message: &telego.InaccessibleMessage{
+			Chat: chat,
+		},
+	})
+	if len(deps.sentTexts) != 1 || !strings.Contains(deps.sentTexts[0], "Отправьте новые") {
+		t.Fatalf("expected edit prompt, got: %v", deps.sentTexts)
+	}
+
+	a.Handle(ctx, telego.Update{Message: &telego.Message{
+		Text: "выделяй решения",
+		Chat: chat,
+		From: user,
+	}})
+	got, err := database.GetGroupSummaryInstructions(ctx, -100123)
+	if err != nil {
+		t.Fatalf("GetGroupSummaryInstructions error: %v", err)
+	}
+	if got == nil || got.Instructions != "выделяй решения" {
+		t.Fatalf("unexpected saved instructions: %+v", got)
+	}
+
+	a.HandleCallbackQuery(ctx, &telego.CallbackQuery{
+		ID:   "clear",
+		From: telego.User{ID: 999},
+		Data: "inst:clear:-100123",
+		Message: &telego.InaccessibleMessage{
+			Chat: chat,
+		},
+	})
+	got, err = database.GetGroupSummaryInstructions(ctx, -100123)
+	if err != nil {
+		t.Fatalf("GetGroupSummaryInstructions after clear error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("expected instructions to be cleared, got %+v", got)
+	}
+}
+
+func TestHandle_InstructionsCancelAndSlashCommandDoesNotSave(t *testing.T) {
+	a, database, deps := newTestAdmin(t)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	chat := telego.Chat{ID: 999, Type: "private"}
+	user := &telego.User{ID: 999}
+
+	a.setPendingInstructions(999, -100123)
+	a.Handle(ctx, telego.Update{Message: &telego.Message{
+		Text: "/help",
+		Chat: chat,
+		From: user,
+	}})
+	got, err := database.GetGroupSummaryInstructions(ctx, -100123)
+	if err != nil {
+		t.Fatalf("GetGroupSummaryInstructions error: %v", err)
+	}
+	if got != nil {
+		t.Fatalf("slash command should not save instructions, got %+v", got)
+	}
+	if len(deps.formattedText) == 0 || !strings.Contains(deps.formattedText[0], "Команды администратора") {
+		t.Fatalf("expected help command to run, got: %v", deps.formattedText)
+	}
+
+	a.Handle(ctx, telego.Update{Message: &telego.Message{
+		Text: "/cancel",
+		Chat: chat,
+		From: user,
+	}})
+	if _, ok := a.pendingInstructionsGroup(999); ok {
+		t.Fatal("expected pending instructions to be canceled")
 	}
 }
 

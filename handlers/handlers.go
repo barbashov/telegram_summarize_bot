@@ -37,7 +37,7 @@ type telegramClient interface {
 }
 
 type summaryService interface {
-	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*summarizer.StructuredSummary, error)
+	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error)
 	SummarizeURL(ctx context.Context, pageURL string, content string) (string, error)
 }
 
@@ -96,6 +96,7 @@ func (b *Bot) Start(ctx context.Context) error {
 			{Command: "status", Description: "Статус бота и метрики"},
 			{Command: "reset", Description: "Сбросить все метрики"},
 			{Command: "groups", Description: "Управление группами"},
+			{Command: "instructions", Description: "Инструкции суммаризации"},
 			{Command: "help", Description: "Справка"},
 		},
 		Scope: tu.ScopeAllPrivateChats(),

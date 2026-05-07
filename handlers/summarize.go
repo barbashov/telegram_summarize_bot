@@ -76,7 +76,8 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	statusMsgID := b.sendMessage(groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
 
-	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
+	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
+	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax, instructions)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
 		b.editWithRetry(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
@@ -92,6 +93,18 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if err := b.db.SetLastSummarizeTime(ctx, groupID, upperBound); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
 	}
+}
+
+func (b *Bot) loadGroupSummaryInstructions(ctx context.Context, groupID int64) string {
+	item, err := b.db.GetGroupSummaryInstructions(ctx, groupID)
+	if err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to get group summary instructions")
+		return ""
+	}
+	if item == nil {
+		return ""
+	}
+	return item.Instructions
 }
 
 func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {

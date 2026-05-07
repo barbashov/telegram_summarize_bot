@@ -1,6 +1,7 @@
 package admin
 
 import (
+	"context"
 	"strings"
 
 	"telegram_summarize_bot/logger"
@@ -37,7 +38,7 @@ func (a *Admin) handleStatus(chatID int64) {
 }
 
 // HandleCallbackQuery processes inline button presses for metric deep-dives.
-func (a *Admin) HandleCallbackQuery(cq *telego.CallbackQuery) {
+func (a *Admin) HandleCallbackQuery(ctx context.Context, cq *telego.CallbackQuery) {
 	_ = a.telegram.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
 		CallbackQueryID: cq.ID,
 	})
@@ -47,6 +48,11 @@ func (a *Admin) HandleCallbackQuery(cq *telego.CallbackQuery) {
 	}
 
 	data := cq.Data
+	if strings.HasPrefix(data, "inst:") {
+		a.handleInstructionsCallback(ctx, cq)
+		return
+	}
+
 	if !strings.HasPrefix(data, "lat:") {
 		return
 	}

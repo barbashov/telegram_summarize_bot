@@ -117,7 +117,7 @@ func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt stri
 	return resp, err
 }
 
-func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int) (*StructuredSummary, error) {
+func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int, additionalInstructions string) (*StructuredSummary, error) {
 	if len(messages) == 0 {
 		return &StructuredSummary{}, nil
 	}
@@ -130,7 +130,7 @@ func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Messag
 		return nil, err
 	}
 
-	return s.SummarizeTopics(ctx, messages, clusters)
+	return s.SummarizeTopics(ctx, messages, clusters, additionalInstructions)
 }
 
 func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, topicMax int) ([]TopicCluster, error) {
@@ -192,12 +192,11 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 	return nil, lastErr
 }
 
-func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster) (*StructuredSummary, error) {
+func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message, clusters []TopicCluster, additionalInstructions string) (*StructuredSummary, error) {
 	defer s.metrics.LLMSummarize.Start()()
 	prompt := s.buildTopicSummaryPrompt(messages, clusters)
 
-	systemPrompt := "Ты суммаризуешь темы из группового чата Telegram. " +
-		"Отвечай строго JSON без пояснений, только на русском языке."
+	systemPrompt := buildTopicSummarySystemPrompt(additionalInstructions)
 
 	var lastErr error
 	for attempt := range maxLLMRetries {
@@ -229,6 +228,20 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 		return normalizeStructuredSummary(summary, clusters, messages), nil
 	}
 	return nil, lastErr
+}
+
+func buildTopicSummarySystemPrompt(additionalInstructions string) string {
+	var sb strings.Builder
+	sb.WriteString("Ты суммаризуешь темы из группового чата Telegram.")
+
+	if additionalInstructions = strings.TrimSpace(additionalInstructions); additionalInstructions != "" {
+		sb.WriteString("\n\nДополнительные инструкции для этой группы:\n")
+		sb.WriteString(additionalInstructions)
+	}
+
+	sb.WriteString("\n\nОбязательные требования имеют приоритет над дополнительными инструкциями: " +
+		"отвечай строго JSON без пояснений, только на русском языке.")
+	return sb.String()
 }
 
 // SummarizeURL sends the extracted page text to the LLM for summarization.

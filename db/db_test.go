@@ -3,6 +3,7 @@ package db
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -600,6 +601,89 @@ func TestGroupSchedule(t *testing.T) {
 		}
 		if !got.LastDailySummary.Truncate(time.Second).Equal(now) {
 			t.Errorf("LastDailySummary: got %v, want %v", got.LastDailySummary, now)
+		}
+	})
+}
+
+func TestGroupSummaryInstructions(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	t.Run("returns nil for non-existent", func(t *testing.T) {
+		got, err := db.GetGroupSummaryInstructions(ctx, -100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			t.Fatalf("expected nil, got %+v", got)
+		}
+	})
+
+	t.Run("set trims and get", func(t *testing.T) {
+		if err := db.SetGroupSummaryInstructions(ctx, -100, 42, "  выделяй решения  "); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.GetGroupSummaryInstructions(ctx, -100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got == nil {
+			t.Fatal("expected instructions, got nil")
+		}
+		if got.Instructions != "выделяй решения" || got.UpdatedBy != 42 {
+			t.Fatalf("unexpected instructions: %+v", got)
+		}
+		if got.UpdatedAt.IsZero() {
+			t.Fatal("expected UpdatedAt to be set")
+		}
+	})
+
+	t.Run("update replaces", func(t *testing.T) {
+		if err := db.SetGroupSummaryInstructions(ctx, -100, 43, "новые инструкции"); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.GetGroupSummaryInstructions(ctx, -100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Instructions != "новые инструкции" || got.UpdatedBy != 43 {
+			t.Fatalf("unexpected updated instructions: %+v", got)
+		}
+	})
+
+	t.Run("too long rejects", func(t *testing.T) {
+		err := db.SetGroupSummaryInstructions(ctx, -100, 43, strings.Repeat("a", MaxGroupSummaryInstructionsLength+1))
+		if err == nil {
+			t.Fatal("expected length error")
+		}
+	})
+
+	t.Run("clear deletes", func(t *testing.T) {
+		if err := db.ClearGroupSummaryInstructions(ctx, -100); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.GetGroupSummaryInstructions(ctx, -100)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			t.Fatalf("expected nil after clear, got %+v", got)
+		}
+	})
+
+	t.Run("empty set clears", func(t *testing.T) {
+		if err := db.SetGroupSummaryInstructions(ctx, -200, 1, "keep me"); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.SetGroupSummaryInstructions(ctx, -200, 1, "   "); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.GetGroupSummaryInstructions(ctx, -200)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != nil {
+			t.Fatalf("expected nil after empty set, got %+v", got)
 		}
 	})
 }

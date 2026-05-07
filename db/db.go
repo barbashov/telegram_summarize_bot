@@ -96,6 +96,15 @@ type GroupSchedule struct {
 	LastDailySummary *time.Time
 }
 
+const MaxGroupSummaryInstructionsLength = 2000
+
+type GroupSummaryInstructions struct {
+	GroupID      int64
+	Instructions string
+	UpdatedAt    time.Time
+	UpdatedBy    int64
+}
+
 func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
@@ -173,6 +182,12 @@ func (db *DB) migrate() error {
 		`CREATE TABLE IF NOT EXISTS bot_config (
 			key   TEXT PRIMARY KEY,
 			value TEXT NOT NULL
+		)`,
+		`CREATE TABLE IF NOT EXISTS group_summary_instructions (
+			group_id     INTEGER PRIMARY KEY,
+			instructions TEXT NOT NULL,
+			updated_at   DATETIME NOT NULL,
+			updated_by   INTEGER NOT NULL
 		)`,
 	}
 
@@ -421,6 +436,50 @@ func (db *DB) UpdateLastDailySummary(ctx context.Context, groupID int64, t time.
 	_, err := db.conn.ExecContext(ctx,
 		`UPDATE group_schedules SET last_daily_summary = ? WHERE group_id = ?`,
 		t, groupID,
+	)
+	return err
+}
+
+func (db *DB) GetGroupSummaryInstructions(ctx context.Context, groupID int64) (*GroupSummaryInstructions, error) {
+	var item GroupSummaryInstructions
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT group_id, instructions, updated_at, updated_by FROM group_summary_instructions WHERE group_id = ?`,
+		groupID,
+	).Scan(&item.GroupID, &item.Instructions, &item.UpdatedAt, &item.UpdatedBy)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &item, nil
+}
+
+func (db *DB) SetGroupSummaryInstructions(ctx context.Context, groupID, updatedBy int64, instructions string) error {
+	instructions = strings.TrimSpace(instructions)
+	if instructions == "" {
+		return db.ClearGroupSummaryInstructions(ctx, groupID)
+	}
+	if len([]rune(instructions)) > MaxGroupSummaryInstructionsLength {
+		return fmt.Errorf("summary instructions exceed %d characters", MaxGroupSummaryInstructionsLength)
+	}
+
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO group_summary_instructions (group_id, instructions, updated_at, updated_by)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(group_id) DO UPDATE SET
+			instructions = excluded.instructions,
+			updated_at = excluded.updated_at,
+			updated_by = excluded.updated_by`,
+		groupID, instructions, time.Now(), updatedBy,
+	)
+	return err
+}
+
+func (db *DB) ClearGroupSummaryInstructions(ctx context.Context, groupID int64) error {
+	_, err := db.conn.ExecContext(ctx,
+		`DELETE FROM group_summary_instructions WHERE group_id = ?`,
+		groupID,
 	)
 	return err
 }

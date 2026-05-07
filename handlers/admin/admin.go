@@ -3,6 +3,7 @@ package admin
 import (
 	"context"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram_summarize_bot/config"
@@ -48,18 +49,22 @@ type Admin struct {
 	summarizer  SummaryService
 	rateLimiter RateLimiterIface
 	telegram    TelegramSender
+
+	mu                         sync.Mutex
+	pendingSummaryInstructions map[int64]int64
 }
 
 // New creates a new Admin handler.
 func New(deps Deps, database *db.DB, m *metrics.Metrics, cfg *config.Config, sum SummaryService, rl RateLimiterIface, tg TelegramSender) *Admin {
 	return &Admin{
-		deps:        deps,
-		db:          database,
-		metrics:     m,
-		cfg:         cfg,
-		summarizer:  sum,
-		rateLimiter: rl,
-		telegram:    tg,
+		deps:                       deps,
+		db:                         database,
+		metrics:                    m,
+		cfg:                        cfg,
+		summarizer:                 sum,
+		rateLimiter:                rl,
+		telegram:                   tg,
+		pendingSummaryInstructions: make(map[int64]int64),
 	}
 }
 
@@ -82,6 +87,10 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 		cmd = cmd[:atIdx]
 	}
 
+	if a.handlePendingSummaryInstructions(ctx, msg, cmd) {
+		return true
+	}
+
 	switch cmd {
 	case "/status":
 		a.handleStatus(msg.Chat.ID)
@@ -89,6 +98,8 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 		a.handleReset(ctx, msg.Chat.ID)
 	case "/groups":
 		a.handleGroups(ctx, msg.Chat.ID, msg.From.ID, fields[1:])
+	case "/instructions":
+		a.handleInstructions(ctx, msg.Chat.ID)
 	case "/help":
 		a.handleHelp(msg.Chat.ID)
 	default:

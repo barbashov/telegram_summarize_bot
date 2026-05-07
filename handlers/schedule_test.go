@@ -4,6 +4,10 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
+
+	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
 )
@@ -81,5 +85,35 @@ func TestHandleScheduleInvalidTime(t *testing.T) {
 	}
 	if !strings.Contains(tg.sentTexts[0], "Неверное время") {
 		t.Fatalf("expected invalid time error, got: %v", tg.sentTexts)
+	}
+}
+
+func TestRunScheduledSummaryPassesGroupSummaryInstructions(t *testing.T) {
+	sum := &fakeSummarizer{
+		summary: &summarizer.StructuredSummary{
+			TLDR: "Итог",
+		},
+	}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	now := time.Now()
+	if err := database.SetGroupSummaryInstructions(ctx, 42, 7, "фокусируйся на решениях"); err != nil {
+		t.Fatalf("SetGroupSummaryInstructions error: %v", err)
+	}
+	if err := database.AddMessage(ctx, &db.Message{
+		GroupID:   42,
+		UserHash:  "abc123",
+		Text:      "решили катить",
+		Timestamp: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	b.runScheduledSummary(ctx, 42, now)
+
+	if sum.additionalInstructions != "фокусируйся на решениях" {
+		t.Fatalf("additionalInstructions = %q, want %q", sum.additionalInstructions, "фокусируйся на решениях")
 	}
 }

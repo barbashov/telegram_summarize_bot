@@ -71,6 +71,35 @@ func TestHandleSummarizeUpdatesLastSummarizeOnSuccess(t *testing.T) {
 	}
 }
 
+func TestHandleSummarizePassesGroupSummaryInstructions(t *testing.T) {
+	sum := &fakeSummarizer{
+		summary: &summarizer.StructuredSummary{
+			TLDR: "Итог",
+		},
+	}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	if err := database.SetGroupSummaryInstructions(ctx, 42, 7, "выделяй риски"); err != nil {
+		t.Fatalf("SetGroupSummaryInstructions error: %v", err)
+	}
+	if err := database.AddMessage(ctx, &db.Message{
+		GroupID:   42,
+		UserHash:  "a3f2b1c4",
+		Text:      "Надо катить сегодня",
+		Timestamp: time.Now().Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	b.handleSummarize(ctx, summarizeUpdate(), nil)
+
+	if sum.additionalInstructions != "выделяй риски" {
+		t.Fatalf("additionalInstructions = %q, want %q", sum.additionalInstructions, "выделяй риски")
+	}
+}
+
 func TestHandleSummarizeDoesNotUpdateLastSummarizeOnFailure(t *testing.T) {
 	sum := &fakeSummarizer{err: context.DeadlineExceeded}
 	b, database, tg := newTestBot(t, sum)

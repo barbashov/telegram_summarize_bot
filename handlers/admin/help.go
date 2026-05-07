@@ -7,7 +7,8 @@ func (a *Admin) handleHelp(chatID int64) {
 		"`/reset` — сбросить все метрики\n" +
 		"`/groups` — список разрешённых групп\n" +
 		"`/groups add <group_id>` — добавить группу\n" +
-		"`/groups remove <group_id>` — удалить группу\n\n" +
+		"`/groups remove <group_id>` — удалить группу\n" +
+		"`/instructions` — настроить дополнительные инструкции суммаризации для группы\n\n" +
 		"*Суммаризация URL:*\nОтправьте ссылку — бот загрузит страницу и вернёт краткое содержание\\."
 	a.deps.SendFormatted(chatID, helpText)
 }

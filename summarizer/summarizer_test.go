@@ -99,7 +99,7 @@ func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
 	summary, err := sum.SummarizeByTopics(context.Background(), []db.Message{
 		{Text: "катим релиз", Timestamp: time.Unix(0, 0)},
 		{Text: "ок", Timestamp: time.Unix(60, 0)},
-	}, 5)
+	}, 5, "")
 	if err != nil {
 		t.Fatalf("SummarizeByTopics returned error: %v", err)
 	}
@@ -115,10 +115,40 @@ func TestSummarizeByTopicsUsesConfiguredTokenBudget(t *testing.T) {
 	}
 }
 
+func TestSummarizeByTopicsAppliesAdditionalInstructionsOnlyToFinalSummary(t *testing.T) {
+	client := &fakeLLMClient{
+		responses: []string{
+			`{"topics":[{"title":"Релиз","message_indexes":[0],"message_count":1}]}`,
+			`{"tldr":"Итог.","topics":[{"title":"Релиз","summary":"Кратко.","message_count":1}]}`,
+		},
+	}
+	sum := New(client, "test-model", metrics.New(), true)
+
+	_, err := sum.SummarizeByTopics(context.Background(), []db.Message{
+		{Text: "катим релиз", Timestamp: time.Unix(0, 0)},
+	}, 5, "Выделяй риски отдельным предложением.")
+	if err != nil {
+		t.Fatalf("SummarizeByTopics returned error: %v", err)
+	}
+	if len(client.requests) != 2 {
+		t.Fatalf("request count = %d, want 2", len(client.requests))
+	}
+	if strings.Contains(client.requests[0].Messages[0].Content, "Выделяй риски") {
+		t.Fatal("additional instructions leaked into clustering system prompt")
+	}
+	finalPrompt := client.requests[1].Messages[0].Content
+	if !strings.Contains(finalPrompt, "Выделяй риски отдельным предложением.") {
+		t.Fatalf("final system prompt missing additional instructions: %q", finalPrompt)
+	}
+	if !strings.Contains(finalPrompt, "строго JSON") || !strings.Contains(finalPrompt, "только на русском языке") {
+		t.Fatalf("final system prompt missing mandatory constraints: %q", finalPrompt)
+	}
+}
+
 func TestSummarizeByTopicsPropagatesClientError(t *testing.T) {
 	sum := New(&fakeLLMClient{err: errors.New("boom")}, "test-model", metrics.New(), true)
 
-	_, err := sum.SummarizeByTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
+	_, err := sum.SummarizeByTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5, "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -426,7 +456,7 @@ func TestSummarizeTopicsRetriesOnNetworkError(t *testing.T) {
 	messages := []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}
 	clusters := []TopicCluster{{Title: "Тема", MessageIndexes: []int{0}}}
 
-	result, err := sum.SummarizeTopics(context.Background(), messages, clusters)
+	result, err := sum.SummarizeTopics(context.Background(), messages, clusters, "")
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}

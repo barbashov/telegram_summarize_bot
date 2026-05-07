@@ -149,7 +149,8 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 
 	statusMsgID := b.sendMessage(groupID, "Готовлю утреннюю сводку...")
 
-	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax)
+	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
+	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax, instructions)
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to summarize")
 		b.editWithRetry(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")

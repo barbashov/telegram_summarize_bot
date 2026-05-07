@@ -53,18 +53,20 @@ func (f *fakeTelegram) SetMyCommands(_ *telego.SetMyCommandsParams) error { retu
 func (f *fakeTelegram) AnswerCallbackQuery(_ *telego.AnswerCallbackQueryParams) error { return nil }
 
 type fakeSummarizer struct {
-	summary    *summarizer.StructuredSummary
-	err        error
-	calls      int
-	topicMax   int
-	urlSummary string
-	urlErr     error
-	urlCalls   int
+	summary                *summarizer.StructuredSummary
+	err                    error
+	calls                  int
+	topicMax               int
+	additionalInstructions string
+	urlSummary             string
+	urlErr                 error
+	urlCalls               int
 }
 
-func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int) (*summarizer.StructuredSummary, error) {
+func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error) {
 	f.calls++
 	f.topicMax = topicMax
+	f.additionalInstructions = additionalInstructions
 	if f.err != nil {
 		return nil, f.err
 	}
