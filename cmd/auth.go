@@ -171,13 +171,18 @@ func RunTest(clientID, tokenDir, model string) error {
 		return err
 	}
 
+	systemPrompt := "You are a helpful assistant. Keep your answer to 2-3 sentences."
+	userPrompt := "Explain why cats always land on their feet, but in the style of a dramatic movie trailer narrator."
+
 	fmt.Printf("Sending test prompt to %s...\n", model)
+	fmt.Printf("\nSystem prompt:\n%s\n", systemPrompt)
+	fmt.Printf("\nUser prompt:\n%s\n", userPrompt)
 
 	resp, err := client.Complete(context.Background(), provider.CompletionRequest{
 		Model: model,
 		Messages: []provider.Message{
-			{Role: "system", Content: "You are a helpful assistant. Keep your answer to 2-3 sentences."},
-			{Role: "user", Content: "Explain why cats always land on their feet, but in the style of a dramatic movie trailer narrator."},
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
 		},
 		MaxTokens:   256,
 		Temperature: 0.8,
