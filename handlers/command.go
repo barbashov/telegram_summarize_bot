@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf16"
 
 	"github.com/mymmrac/telego"
 )
@@ -16,7 +17,7 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 
 	parts := strings.Fields(command)
 	if len(parts) == 0 {
-		b.handleHelp(update)
+		b.handleHelp(ctx, update)
 		return
 	}
 
@@ -28,9 +29,9 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	case "schedule":
 		b.handleSchedule(ctx, update, parts[1:])
 	case "help":
-		b.handleHelp(update)
+		b.handleHelp(ctx, update)
 	default:
-		b.handleHelp(update)
+		b.handleHelp(ctx, update)
 	}
 }
 
@@ -38,27 +39,45 @@ func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEn
 	mention := "@" + b.username
 
 	if strings.HasPrefix(strings.ToLower(text), mention) {
-		cmd := text[len(mention):]
-		cmd = strings.TrimSpace(cmd)
-		return cmd, nil
+		rest := text[len(mention):]
+		if rest == "" || !isUsernameChar(rest[0]) {
+			return strings.TrimSpace(rest), nil
+		}
 	}
 
-	runes := []rune(text)
+	units := utf16.Encode([]rune(text))
 	for _, entity := range entities {
 		entityType := entity.Type
-		if entityType == "mention" || entityType == "text_mention" {
-			start := entity.Offset
-			end := start + entity.Length
-			if end > len(runes) {
-				continue
-			}
-			entityText := string(runes[start:end])
-			if strings.ToLower(entityText) == mention {
-				cmd := strings.TrimSpace(string(runes[end:]))
-				return cmd, nil
-			}
+		if entityType != "mention" && entityType != "text_mention" {
+			continue
+		}
+		start := entity.Offset
+		end := start + entity.Length
+		if start < 0 || end > len(units) {
+			continue
+		}
+		entityText := string(utf16.Decode(units[start:end]))
+		if strings.ToLower(entityText) == mention {
+			return strings.TrimSpace(string(utf16.Decode(units[end:]))), nil
 		}
 	}
 
 	return "", fmt.Errorf("no bot mention found")
+}
+
+// isUsernameChar reports whether b is a valid Telegram username character
+// (ASCII letter, digit, or underscore). Used to detect a real word boundary
+// after a bot-mention prefix.
+func isUsernameChar(b byte) bool {
+	switch {
+	case b >= 'a' && b <= 'z':
+		return true
+	case b >= 'A' && b <= 'Z':
+		return true
+	case b >= '0' && b <= '9':
+		return true
+	case b == '_':
+		return true
+	}
+	return false
 }

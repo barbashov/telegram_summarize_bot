@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -19,7 +20,7 @@ func TestHandleHelp(t *testing.T) {
 		},
 	}
 
-	b.handleHelp(update)
+	b.handleHelp(context.Background(), update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))

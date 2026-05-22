@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"fmt"
-	"strings"
 	"time"
 
 	"telegram_summarize_bot/db"
@@ -12,32 +11,26 @@ import (
 	"github.com/mymmrac/telego"
 )
 
-// originUsername returns a display name for the original author of a forwarded message.
-func originUsername(origin telego.MessageOrigin) string {
+// forwardOriginHandle returns a pseudonymized "<kind>:<8 hex>" identifier for
+// the original author of a forwarded message. The handle is stable per
+// (origin, groupID) so the summarizer can still cluster repeat forwards from
+// the same source without storing the underlying username, real name, or
+// channel title. Returns "" when no stable identifier is available.
+func forwardOriginHandle(origin telego.MessageOrigin, groupID int64, salt []byte) string {
 	switch o := origin.(type) {
 	case *telego.MessageOriginUser:
-		if o.SenderUser.Username != "" {
-			return o.SenderUser.Username
-		}
-		name := strings.TrimSpace(o.SenderUser.FirstName + " " + o.SenderUser.LastName)
-		if name != "" {
-			return name
-		}
-		return fmt.Sprintf("User%d", o.SenderUser.ID)
+		return "user:" + db.UserHash(o.SenderUser.ID, groupID, salt)
 	case *telego.MessageOriginHiddenUser:
-		return o.SenderUserName
+		if o.SenderUserName == "" {
+			return ""
+		}
+		return "hidden:" + db.HashString(o.SenderUserName, groupID, salt)
 	case *telego.MessageOriginChat:
-		if o.AuthorSignature != "" {
-			return o.AuthorSignature
-		}
-		return o.SenderChat.Title
+		return "chat:" + db.UserHash(o.SenderChat.ID, groupID, salt)
 	case *telego.MessageOriginChannel:
-		if o.AuthorSignature != "" {
-			return o.AuthorSignature
-		}
-		return o.Chat.Title
+		return "channel:" + db.UserHash(o.Chat.ID, groupID, salt)
 	default:
-		return "unknown"
+		return ""
 	}
 }
 
@@ -104,7 +97,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	// Forwarded messages are stored with original author attribution but never
 	// treated as commands — the forwarder didn't intend to issue one.
 	if msg.ForwardOrigin != nil {
-		forwardedFrom := originUsername(msg.ForwardOrigin)
+		forwardedFrom := forwardOriginHandle(msg.ForwardOrigin, groupID, b.userHashSalt)
 		if err := b.db.AddMessage(ctx, &db.Message{
 			GroupID:       groupID,
 			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
@@ -175,5 +168,5 @@ func (b *Bot) handlePrivateCommand(ctx context.Context, update telego.Update) {
 		}
 	}
 
-	b.handlePrivateChatInfo(update)
+	b.handlePrivateChatInfo(ctx, update)
 }

@@ -15,9 +15,9 @@ const (
 	editRetryDelay = 2 * time.Second
 )
 
-func (b *Bot) sendMessage(chatID int64, text string) int64 {
+func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 {
 	defer b.metrics.TelegramSend.Start()()
-	msg, err := b.telegram.SendMessage(tu.Message(
+	msg, err := b.telegram.SendMessage(ctx, tu.Message(
 		tu.ID(chatID),
 		text,
 	))
@@ -29,18 +29,20 @@ func (b *Bot) sendMessage(chatID int64, text string) int64 {
 	return int64(msg.MessageID)
 }
 
-func (b *Bot) editWithRetry(chatID, msgID int64, text string) {
+func (b *Bot) editWithRetry(ctx context.Context, chatID, msgID int64, text string) {
 	for range editRetries {
-		if err := b.editMessage(chatID, msgID, text); err == nil {
+		if err := b.editMessage(ctx, chatID, msgID, text); err == nil {
 			return
 		}
-		time.Sleep(editRetryDelay)
+		if !sleepCtx(ctx, editRetryDelay) {
+			return
+		}
 	}
 }
 
-func (b *Bot) editMessage(chatID, messageID int64, text string) error {
+func (b *Bot) editMessage(ctx context.Context, chatID, messageID int64, text string) error {
 	defer b.metrics.TelegramEdit.Start()()
-	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
+	_, err := b.telegram.EditMessageText(ctx, &telego.EditMessageTextParams{
 		ChatID:    tu.ID(chatID),
 		MessageID: int(messageID),
 		Text:      text,
@@ -52,9 +54,9 @@ func (b *Bot) editMessage(chatID, messageID int64, text string) error {
 	return err
 }
 
-func (b *Bot) sendFormatted(chatID int64, text string) {
+func (b *Bot) sendFormatted(ctx context.Context, chatID int64, text string) {
 	defer b.metrics.TelegramSend.Start()()
-	_, err := b.telegram.SendMessage(tu.Message(
+	_, err := b.telegram.SendMessage(ctx, tu.Message(
 		tu.ID(chatID),
 		text,
 	).WithParseMode("MarkdownV2"))
@@ -64,9 +66,9 @@ func (b *Bot) sendFormatted(chatID int64, text string) {
 	}
 }
 
-func (b *Bot) editFormatted(chatID, messageID int64, text string) error {
+func (b *Bot) editFormatted(ctx context.Context, chatID, messageID int64, text string) error {
 	defer b.metrics.TelegramEdit.Start()()
-	_, err := b.telegram.EditMessageText(&telego.EditMessageTextParams{
+	_, err := b.telegram.EditMessageText(ctx, &telego.EditMessageTextParams{
 		ChatID:    tu.ID(chatID),
 		MessageID: int(messageID),
 		Text:      text,
@@ -79,26 +81,46 @@ func (b *Bot) editFormatted(chatID, messageID int64, text string) error {
 	return err
 }
 
-func (b *Bot) editFormattedWithRetry(chatID, msgID int64, text string) {
+func (b *Bot) editFormattedWithRetry(ctx context.Context, chatID, msgID int64, text string) {
 	for range editRetries {
-		if err := b.editFormatted(chatID, msgID, text); err == nil {
+		if err := b.editFormatted(ctx, chatID, msgID, text); err == nil {
 			return
 		}
-		time.Sleep(editRetryDelay)
+		if !sleepCtx(ctx, editRetryDelay) {
+			return
+		}
 	}
 }
 
 // editFormattedFinal is like editFormattedWithRetry but returns the last error
 // so the caller can decide whether the delivery succeeded.
-func (b *Bot) editFormattedFinal(chatID, msgID int64, text string) error {
+func (b *Bot) editFormattedFinal(ctx context.Context, chatID, msgID int64, text string) error {
 	var lastErr error
 	for range editRetries {
-		if lastErr = b.editFormatted(chatID, msgID, text); lastErr == nil {
+		if lastErr = b.editFormatted(ctx, chatID, msgID, text); lastErr == nil {
 			return nil
 		}
-		time.Sleep(editRetryDelay)
+		if !sleepCtx(ctx, editRetryDelay) {
+			if lastErr == nil {
+				return ctx.Err()
+			}
+			return lastErr
+		}
 	}
 	return lastErr
+}
+
+// sleepCtx waits for d to elapse or ctx to be cancelled. Returns true on
+// timer completion, false on cancellation.
+func sleepCtx(ctx context.Context, d time.Duration) bool {
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
 }
 
 func (b *Bot) NotifyUsers(ctx context.Context, text string) (sent, failed int) {
@@ -108,7 +130,7 @@ func (b *Bot) NotifyUsers(ctx context.Context, text string) (sent, failed int) {
 	}
 
 	for _, userID := range b.cfg.AdminUserIDs {
-		if b.sendMessage(userID, text) == 0 {
+		if b.sendMessage(ctx, userID, text) == 0 {
 			failed++
 			continue
 		}

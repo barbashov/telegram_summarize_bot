@@ -45,6 +45,15 @@ func UserHash(userID, groupID int64, salt []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))[:8]
 }
 
+// HashString returns an 8-char hex digest derived from HMAC-SHA256(s‖groupID, salt).
+// Used for forwarded-message origins that have no stable numeric ID (hidden senders).
+func HashString(s string, groupID int64, salt []byte) string {
+	mac := hmac.New(sha256.New, salt)
+	mac.Write([]byte(s))
+	_ = binary.Write(mac, binary.LittleEndian, groupID)
+	return hex.EncodeToString(mac.Sum(nil))[:8]
+}
+
 // GetUserHashSalt loads the HMAC salt from bot_config, generating and persisting one on first call.
 func (db *DB) GetUserHashSalt(ctx context.Context) ([]byte, error) {
 	hexSalt, err := db.getOrCreateConfig(ctx, "user_hash_salt", func() string {
@@ -227,6 +236,39 @@ func (db *DB) migrate() error {
 		return err
 	}
 
+	// One-shot purge of plaintext forwarded_from values written before the
+	// pseudonymization change. New rows use the "kind:hash" form which always
+	// contains a colon, so we clear any legacy row without one.
+	if err := db.purgeLegacyForwardedFromOnce(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (db *DB) purgeLegacyForwardedFromOnce() error {
+	const flagKey = "forwarded_from_pseudonymized"
+	var existing string
+	err := db.conn.QueryRow(`SELECT value FROM bot_config WHERE key = ?`, flagKey).Scan(&existing)
+	if err == nil {
+		return nil
+	}
+	if err != sql.ErrNoRows {
+		return fmt.Errorf("failed to read %s flag: %w", flagKey, err)
+	}
+	if _, err := db.conn.Exec(
+		`UPDATE messages SET forwarded_from = NULL
+		 WHERE forwarded_from IS NOT NULL
+		   AND forwarded_from <> ''
+		   AND instr(forwarded_from, ':') = 0`,
+	); err != nil {
+		return fmt.Errorf("failed to purge legacy forwarded_from: %w", err)
+	}
+	if _, err := db.conn.Exec(
+		`INSERT OR IGNORE INTO bot_config (key, value) VALUES (?, ?)`, flagKey, "1",
+	); err != nil {
+		return fmt.Errorf("failed to record %s flag: %w", flagKey, err)
+	}
 	return nil
 }
 

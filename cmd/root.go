@@ -33,7 +33,7 @@ var rootCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-		return runBot(cfg)
+		return runBot(cmd.Context(), cfg)
 	},
 }
 
@@ -43,12 +43,15 @@ func init() {
 }
 
 func Execute() {
-	if err := rootCmd.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	err := rootCmd.ExecuteContext(ctx)
+	stop()
+	if err != nil {
 		os.Exit(1)
 	}
 }
 
-func runBot(cfg *config.Config) error {
+func runBot(ctx context.Context, cfg *config.Config) error {
 	m := metrics.New()
 
 	database, err := db.New(cfg.DBPath, m)
@@ -59,7 +62,7 @@ func runBot(cfg *config.Config) error {
 	defer func() { _ = database.Close() }()
 
 	{
-		seedCtx, seedCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		seedCtx, seedCancel := context.WithTimeout(ctx, 10*time.Second)
 		seedErr := database.SeedAllowedGroupsIfEmpty(seedCtx, cfg.AllowedGroups)
 		seedCancel()
 		if seedErr != nil {
@@ -85,35 +88,32 @@ func runBot(cfg *config.Config) error {
 
 	sum := summarizer.New(llmClient, cfg.Model, m, cfg.ReplyThreads)
 
-	tgBot, err := handlers.NewBot(cfg, database, sum, m)
+	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
+	tgBot, err := handlers.NewBot(initCtx, cfg, database, sum, m)
+	initCancel()
 	if err != nil {
 		return fmt.Errorf("failed to initialize bot: %w", err)
 	}
 
-	startupCtx, startupCancel := context.WithTimeout(context.Background(), 10*time.Second)
+	startupCtx, startupCancel := context.WithTimeout(ctx, 10*time.Second)
 	tgBot.NotifyUsers(startupCtx, "Бот запущен и в сети ✅")
 	startupCancel()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	logger.Info().Msg("Starting bot...")
+	startErr := tgBot.Start(ctx)
 
-	sigChan := make(chan os.Signal, 1)
-	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigChan
+	// If shutdown was triggered by signal (vs. an internal error), notify
+	// admins. Use a fresh background context with timeout since ctx is now
+	// cancelled.
+	if ctx.Err() != nil {
 		logger.Info().Msg("Received shutdown signal")
-
 		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 		tgBot.NotifyUsers(shutdownCtx, "Бот остановлен ⛔")
 		shutdownCancel()
+	}
 
-		cancel()
-	}()
-
-	logger.Info().Msg("Starting bot...")
-	if err := tgBot.Start(ctx); err != nil {
-		logger.Error().Err(err).Msg("Bot stopped with error")
+	if startErr != nil {
+		logger.Error().Err(startErr).Msg("Bot stopped with error")
 	}
 
 	logger.Info().Msg("Bot shutdown complete")

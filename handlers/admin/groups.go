@@ -21,12 +21,12 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 	switch subCmd {
 	case "add":
 		if len(args) < 2 {
-			a.deps.SendFormatted(chatID, "Использование: `/groups add <group_id>`")
+			a.deps.SendFormatted(ctx, chatID, "Использование: `/groups add <group_id>`")
 			return
 		}
 		groupID, err := strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
-			a.deps.SendMessage(chatID, "Неверный ID группы.")
+			a.deps.SendMessage(ctx, chatID, "Неверный ID группы.")
 			return
 		}
 		// Best-effort title lookup; don't block add if group is unknown.
@@ -44,24 +44,24 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 		}
 		if err := a.db.AddAllowedGroup(ctx, groupID, userID); err != nil {
 			logger.Error().Err(err).Msg("failed to add allowed group")
-			a.deps.SendMessage(chatID, "Ошибка добавления группы.")
+			a.deps.SendMessage(ctx, chatID, "Ошибка добавления группы.")
 			return
 		}
-		a.deps.SendMessage(chatID, fmt.Sprintf("✅ %s добавлена.", title))
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("✅ %s добавлена.", title))
 	case "remove":
 		if len(args) < 2 {
-			a.deps.SendFormatted(chatID, "Использование: `/groups remove <group_id>`")
+			a.deps.SendFormatted(ctx, chatID, "Использование: `/groups remove <group_id>`")
 			return
 		}
 		groupID, err := strconv.ParseInt(args[1], 10, 64)
 		if err != nil {
-			a.deps.SendMessage(chatID, "Неверный ID группы.")
+			a.deps.SendMessage(ctx, chatID, "Неверный ID группы.")
 			return
 		}
 		groups, err := a.db.GetKnownGroups(ctx)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get known groups")
-			a.deps.SendMessage(chatID, "Ошибка получения списка групп.")
+			a.deps.SendMessage(ctx, chatID, "Ошибка получения списка групп.")
 			return
 		}
 		var foundTitle string
@@ -72,18 +72,18 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 			}
 		}
 		if foundTitle == "" {
-			a.deps.SendMessage(chatID, fmt.Sprintf("Группа %d не найдена в списке известных групп.", groupID))
+			a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Группа %d не найдена в списке известных групп.", groupID))
 			a.sendGroupsList(ctx, chatID)
 			return
 		}
 		if err := a.db.RemoveAllowedGroup(ctx, groupID); err != nil {
 			logger.Error().Err(err).Msg("failed to remove allowed group")
-			a.deps.SendMessage(chatID, "Ошибка удаления группы.")
+			a.deps.SendMessage(ctx, chatID, "Ошибка удаления группы.")
 			return
 		}
-		a.deps.SendMessage(chatID, fmt.Sprintf("❌ %s удалена.", foundTitle))
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("❌ %s удалена.", foundTitle))
 	default:
-		a.deps.SendFormatted(chatID, "Неизвестная подкоманда\\. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
+		a.deps.SendFormatted(ctx, chatID, "Неизвестная подкоманда\\. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
 	}
 }
 
@@ -91,11 +91,11 @@ func (a *Admin) sendGroupsList(ctx context.Context, chatID int64) {
 	groups, err := a.db.GetKnownGroups(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get known groups")
-		a.deps.SendMessage(chatID, "Ошибка получения списка групп.")
+		a.deps.SendMessage(ctx, chatID, "Ошибка получения списка групп.")
 		return
 	}
 	if len(groups) == 0 {
-		a.deps.SendMessage(chatID, "Нет известных групп.")
+		a.deps.SendMessage(ctx, chatID, "Нет известных групп.")
 		return
 	}
 
@@ -120,5 +120,5 @@ func (a *Admin) sendGroupsList(ctx context.Context, chatID int64) {
 		fmt.Fprintf(&sb, "%s %s \\(%s\\)\n", status, title, summarizer.EscapeMarkdown(fmt.Sprintf("%d", g.GroupID)))
 	}
 	sb.WriteString("\nДля управления:\n• `/groups add <group_id>`\n• `/groups remove <group_id>`")
-	a.deps.SendFormatted(chatID, sb.String())
+	a.deps.SendFormatted(ctx, chatID, sb.String())
 }

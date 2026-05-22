@@ -22,7 +22,7 @@ func (a *Admin) handleInstructions(ctx context.Context, chatID int64) {
 	groups, err := a.db.GetKnownGroups(ctx)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get known groups for instructions")
-		a.deps.SendMessage(chatID, "Ошибка получения списка групп.")
+		a.deps.SendMessage(ctx, chatID, "Ошибка получения списка групп.")
 		return
 	}
 
@@ -41,7 +41,7 @@ func (a *Admin) handleInstructions(ctx context.Context, chatID int64) {
 		})
 	}
 	if len(rows) == 0 {
-		a.deps.SendMessage(chatID, "Нет разрешённых групп.")
+		a.deps.SendMessage(ctx, chatID, "Нет разрешённых групп.")
 		return
 	}
 
@@ -49,7 +49,7 @@ func (a *Admin) handleInstructions(ctx context.Context, chatID int64) {
 	for _, row := range rows {
 		keyboardRows = append(keyboardRows, []telego.InlineKeyboardButton{row})
 	}
-	a.sendInstructionsKeyboard(chatID, "Выберите группу для настройки инструкций суммаризации:", keyboardRows)
+	a.sendInstructionsKeyboard(ctx, chatID, "Выберите группу для настройки инструкций суммаризации:", keyboardRows)
 }
 
 func (a *Admin) handleInstructionsCallback(ctx context.Context, cq *telego.CallbackQuery) {
@@ -62,7 +62,7 @@ func (a *Admin) handleInstructionsCallback(ctx context.Context, cq *telego.Callb
 	switch {
 	case data == "cancel":
 		a.clearPendingInstructions(chatID)
-		a.deps.SendMessage(chatID, "Настройка инструкций отменена.")
+		a.deps.SendMessage(ctx, chatID, "Настройка инструкций отменена.")
 	case strings.HasPrefix(data, "grp:"):
 		groupID, ok := parseInstructionGroupID(strings.TrimPrefix(data, "grp:"))
 		if !ok {
@@ -81,7 +81,7 @@ func (a *Admin) handleInstructionsCallback(ctx context.Context, cq *telego.Callb
 			return
 		}
 		a.setPendingInstructions(chatID, groupID)
-		a.deps.SendMessage(chatID, fmt.Sprintf(
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf(
 			"Отправьте новые дополнительные инструкции для группы %d одним сообщением. Максимум %d символов. Для отмены: /cancel",
 			groupID, db.MaxGroupSummaryInstructionsLength,
 		))
@@ -95,11 +95,11 @@ func (a *Admin) handleInstructionsCallback(ctx context.Context, cq *telego.Callb
 		}
 		if err := a.db.ClearGroupSummaryInstructions(ctx, groupID); err != nil {
 			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to clear group summary instructions")
-			a.deps.SendMessage(chatID, "Ошибка удаления инструкций.")
+			a.deps.SendMessage(ctx, chatID, "Ошибка удаления инструкций.")
 			return
 		}
 		a.clearPendingInstructions(chatID)
-		a.deps.SendMessage(chatID, fmt.Sprintf("Инструкции для группы %d очищены.", groupID))
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Инструкции для группы %d очищены.", groupID))
 	}
 }
 
@@ -107,11 +107,11 @@ func (a *Admin) ensureInstructionsGroupAllowed(ctx context.Context, chatID, grou
 	allowed, err := a.db.IsGroupAllowed(ctx, groupID)
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to check group allowlist for instructions")
-		a.deps.SendMessage(chatID, "Ошибка проверки группы.")
+		a.deps.SendMessage(ctx, chatID, "Ошибка проверки группы.")
 		return false
 	}
 	if !allowed {
-		a.deps.SendMessage(chatID, fmt.Sprintf("Группа %d не разрешена для бота.", groupID))
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Группа %d не разрешена для бота.", groupID))
 		return false
 	}
 	return true
@@ -121,7 +121,7 @@ func (a *Admin) showInstructionsGroup(ctx context.Context, chatID, groupID int64
 	item, err := a.db.GetGroupSummaryInstructions(ctx, groupID)
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to get group summary instructions")
-		a.deps.SendMessage(chatID, "Ошибка получения инструкций.")
+		a.deps.SendMessage(ctx, chatID, "Ошибка получения инструкций.")
 		return
 	}
 
@@ -141,7 +141,7 @@ func (a *Admin) showInstructionsGroup(ctx context.Context, chatID, groupID int64
 			{Text: "Cancel", CallbackData: "inst:cancel"},
 		},
 	}
-	a.sendInstructionsKeyboard(chatID, text, keyboard)
+	a.sendInstructionsKeyboard(ctx, chatID, text, keyboard)
 }
 
 func (a *Admin) handlePendingSummaryInstructions(ctx context.Context, msg *telego.Message, cmd string) bool {
@@ -152,7 +152,7 @@ func (a *Admin) handlePendingSummaryInstructions(ctx context.Context, msg *teleg
 
 	if cmd == "/cancel" {
 		a.clearPendingInstructions(msg.Chat.ID)
-		a.deps.SendMessage(msg.Chat.ID, "Настройка инструкций отменена.")
+		a.deps.SendMessage(ctx, msg.Chat.ID, "Настройка инструкций отменена.")
 		return true
 	}
 	if strings.HasPrefix(cmd, "/") {
@@ -161,19 +161,19 @@ func (a *Admin) handlePendingSummaryInstructions(ctx context.Context, msg *teleg
 
 	if err := a.db.SetGroupSummaryInstructions(ctx, groupID, msg.From.ID, msg.Text); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to save group summary instructions")
-		a.deps.SendMessage(msg.Chat.ID, "Ошибка сохранения инструкций: "+err.Error())
+		a.deps.SendMessage(ctx, msg.Chat.ID, "Ошибка сохранения инструкций: "+err.Error())
 		return true
 	}
 
 	a.clearPendingInstructions(msg.Chat.ID)
-	a.deps.SendMessage(msg.Chat.ID, fmt.Sprintf("Инструкции для группы %d сохранены.", groupID))
+	a.deps.SendMessage(ctx, msg.Chat.ID, fmt.Sprintf("Инструкции для группы %d сохранены.", groupID))
 	return true
 }
 
-func (a *Admin) sendInstructionsKeyboard(chatID int64, text string, rows [][]telego.InlineKeyboardButton) {
+func (a *Admin) sendInstructionsKeyboard(ctx context.Context, chatID int64, text string, rows [][]telego.InlineKeyboardButton) {
 	defer a.metrics.TelegramSend.Start()()
 	keyboard := &telego.InlineKeyboardMarkup{InlineKeyboard: rows}
-	_, err := a.telegram.SendMessage(
+	_, err := a.telegram.SendMessage(ctx,
 		tu.Message(tu.ID(chatID), text).
 			WithParseMode("MarkdownV2").
 			WithReplyMarkup(keyboard),

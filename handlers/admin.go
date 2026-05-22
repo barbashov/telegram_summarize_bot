@@ -1,14 +1,16 @@
 package handlers
 
 import (
+	"context"
+
 	"telegram_summarize_bot/logger"
 
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-func (b *Bot) isGroupAdmin(groupID, userID int64) bool {
-	member, err := b.telegram.GetChatMember(&telego.GetChatMemberParams{
+func (b *Bot) isGroupAdmin(ctx context.Context, groupID, userID int64) bool {
+	member, err := b.telegram.GetChatMember(ctx, &telego.GetChatMemberParams{
 		ChatID: tu.ID(groupID),
 		UserID: userID,
 	})

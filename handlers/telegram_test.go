@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"fmt"
 	"testing"
 
@@ -14,7 +15,7 @@ type editTrackingTelegram struct {
 	editErr   error
 }
 
-func (f *editTrackingTelegram) EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error) {
+func (f *editTrackingTelegram) EditMessageText(_ context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	f.editCalls++
 	if f.editErr != nil {
 		return nil, f.editErr
@@ -27,7 +28,7 @@ func TestEditWithRetrySucceedsFirstAttempt(t *testing.T) {
 	tg := &editTrackingTelegram{}
 	b := &Bot{telegram: tg, metrics: newTestMetrics()}
 
-	b.editWithRetry(1, 1, "hello")
+	b.editWithRetry(context.Background(), 1, 1, "hello")
 
 	if tg.editCalls != 1 {
 		t.Fatalf("expected 1 edit call, got %d", tg.editCalls)
@@ -46,7 +47,7 @@ func TestEditWithRetrySucceedsAfterFailures(t *testing.T) {
 	_ = failCount
 	b := &Bot{telegram: tg, metrics: newTestMetrics()}
 
-	b.editWithRetry(1, 1, "hello")
+	b.editWithRetry(context.Background(), 1, 1, "hello")
 
 	if tg.editCalls != 3 {
 		t.Fatalf("expected 3 edit calls, got %d", tg.editCalls)
@@ -62,7 +63,7 @@ func TestEditWithRetryNoFallbackSend(t *testing.T) {
 	}
 	b := &Bot{telegram: tg, metrics: newTestMetrics()}
 
-	b.editWithRetry(1, 1, "hello")
+	b.editWithRetry(context.Background(), 1, 1, "hello")
 
 	if tg.editCalls != editRetries {
 		t.Fatalf("expected %d edit calls, got %d", editRetries, tg.editCalls)
@@ -78,7 +79,7 @@ func TestEditFormattedWithRetryNoFallbackSend(t *testing.T) {
 	}
 	b := &Bot{telegram: tg, metrics: newTestMetrics()}
 
-	b.editFormattedWithRetry(1, 1, "hello")
+	b.editFormattedWithRetry(context.Background(), 1, 1, "hello")
 
 	if tg.editCalls != editRetries {
 		t.Fatalf("expected %d edit calls, got %d", editRetries, tg.editCalls)
@@ -96,7 +97,7 @@ type countingEditTelegram struct {
 	failErr   error
 }
 
-func (f *countingEditTelegram) EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error) {
+func (f *countingEditTelegram) EditMessageText(_ context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	f.editCalls++
 	if f.editCalls <= f.failUntil {
 		return nil, f.failErr

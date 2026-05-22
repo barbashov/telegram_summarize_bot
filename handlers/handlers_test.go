@@ -19,38 +19,40 @@ type fakeTelegram struct {
 	nextID    int
 }
 
-func (f *fakeTelegram) GetMe() (*telego.User, error) {
+func (f *fakeTelegram) GetMe(_ context.Context) (*telego.User, error) {
 	return &telego.User{Username: "testbot"}, nil
 }
 
-func (f *fakeTelegram) UpdatesViaLongPolling(_ *telego.GetUpdatesParams, _ ...telego.LongPollingOption) (<-chan telego.Update, error) {
+func (f *fakeTelegram) UpdatesViaLongPolling(_ context.Context, _ *telego.GetUpdatesParams, _ ...telego.LongPollingOption) (<-chan telego.Update, error) {
 	return nil, nil
 }
 
-func (f *fakeTelegram) StopLongPolling() {}
-
-func (f *fakeTelegram) SendMessage(params *telego.SendMessageParams) (*telego.Message, error) {
+func (f *fakeTelegram) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
 	f.sentTexts = append(f.sentTexts, params.Text)
 	f.nextID++
 	return &telego.Message{MessageID: f.nextID}, nil
 }
 
-func (f *fakeTelegram) EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error) {
+func (f *fakeTelegram) EditMessageText(_ context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
 	f.editTexts = append(f.editTexts, params.Text)
 	return &telego.Message{MessageID: params.MessageID}, nil
 }
 
-func (f *fakeTelegram) GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error) {
+func (f *fakeTelegram) GetChatMember(_ context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error) {
 	return &telego.ChatMemberAdministrator{Status: "administrator"}, nil
 }
 
-func (f *fakeTelegram) GetChat(_ *telego.GetChatParams) (*telego.ChatFullInfo, error) {
+func (f *fakeTelegram) GetChat(_ context.Context, _ *telego.GetChatParams) (*telego.ChatFullInfo, error) {
 	return &telego.ChatFullInfo{}, nil
 }
 
-func (f *fakeTelegram) SetMyCommands(_ *telego.SetMyCommandsParams) error { return nil }
+func (f *fakeTelegram) SetMyCommands(_ context.Context, _ *telego.SetMyCommandsParams) error {
+	return nil
+}
 
-func (f *fakeTelegram) AnswerCallbackQuery(_ *telego.AnswerCallbackQueryParams) error { return nil }
+func (f *fakeTelegram) AnswerCallbackQuery(_ context.Context, _ *telego.AnswerCallbackQueryParams) error {
+	return nil
+}
 
 type fakeSummarizer struct {
 	summary                *summarizer.StructuredSummary

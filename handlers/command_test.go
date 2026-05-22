@@ -45,6 +45,25 @@ func TestExtractCommandFromMention(t *testing.T) {
 			text: "@testbot",
 			want: "",
 		},
+		{
+			name:    "prefix overlap with longer bot username",
+			text:    "@testbotfriend summarize",
+			wantErr: true,
+		},
+		{
+			name:    "prefix overlap with trailing digit",
+			text:    "@testbot2 summarize",
+			wantErr: true,
+		},
+		{
+			name: "mention entity after non-BMP rune",
+			text: "🚀 @testbot summarize",
+			entities: []telego.MessageEntity{
+				// "🚀" is 2 UTF-16 units; space is 1; "@testbot" starts at offset 3.
+				{Type: "mention", Offset: 3, Length: 8},
+			},
+			want: "summarize",
+		},
 	}
 
 	for _, tt := range tests {

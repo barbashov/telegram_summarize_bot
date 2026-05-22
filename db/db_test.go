@@ -348,6 +348,41 @@ func TestUserHash(t *testing.T) {
 	})
 }
 
+func TestHashString(t *testing.T) {
+	salt := []byte("test-salt-32-bytes-long-00000000")
+
+	t.Run("returns 8-char hex", func(t *testing.T) {
+		h := HashString("alice", -100, salt)
+		if len(h) != 8 {
+			t.Errorf("expected 8-char hash, got %d chars: %q", len(h), h)
+		}
+	})
+
+	t.Run("deterministic", func(t *testing.T) {
+		h1 := HashString("alice", -100, salt)
+		h2 := HashString("alice", -100, salt)
+		if h1 != h2 {
+			t.Errorf("hashes differ: %q vs %q", h1, h2)
+		}
+	})
+
+	t.Run("different strings produce different hashes", func(t *testing.T) {
+		h1 := HashString("alice", -100, salt)
+		h2 := HashString("bob", -100, salt)
+		if h1 == h2 {
+			t.Errorf("different strings produced same hash: %q", h1)
+		}
+	})
+
+	t.Run("different groups produce different hashes", func(t *testing.T) {
+		h1 := HashString("alice", -100, salt)
+		h2 := HashString("alice", -200, salt)
+		if h1 == h2 {
+			t.Errorf("different groups produced same hash: %q", h1)
+		}
+	})
+}
+
 func TestAllowedGroups(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

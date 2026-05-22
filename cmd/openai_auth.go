@@ -8,7 +8,7 @@ var authCmd = &cobra.Command{
 	Use:   "auth",
 	Short: "OAuth PKCE login flow for OpenAI",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		return RunAuth(cfg.OAuthClientID, cfg.OAuthTokenDir)
+		return RunAuth(cmd.Context(), cfg.OAuthClientID, cfg.OAuthTokenDir)
 	},
 }
 

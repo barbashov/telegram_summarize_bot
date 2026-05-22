@@ -25,15 +25,14 @@ const (
 )
 
 type telegramClient interface {
-	GetMe() (*telego.User, error)
-	UpdatesViaLongPolling(params *telego.GetUpdatesParams, options ...telego.LongPollingOption) (<-chan telego.Update, error)
-	StopLongPolling()
-	SendMessage(params *telego.SendMessageParams) (*telego.Message, error)
-	EditMessageText(params *telego.EditMessageTextParams) (*telego.Message, error)
-	GetChatMember(params *telego.GetChatMemberParams) (telego.ChatMember, error)
-	GetChat(params *telego.GetChatParams) (*telego.ChatFullInfo, error)
-	SetMyCommands(params *telego.SetMyCommandsParams) error
-	AnswerCallbackQuery(params *telego.AnswerCallbackQueryParams) error
+	GetMe(ctx context.Context) (*telego.User, error)
+	UpdatesViaLongPolling(ctx context.Context, params *telego.GetUpdatesParams, options ...telego.LongPollingOption) (<-chan telego.Update, error)
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
+	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
+	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
+	SetMyCommands(ctx context.Context, params *telego.SetMyCommandsParams) error
+	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
 }
 
 type summaryService interface {
@@ -53,13 +52,13 @@ type Bot struct {
 	admin        *admin.Admin
 }
 
-func NewBot(cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
+func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
 	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(httputil.NewClient(60*time.Second)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
 	}
 
-	me, err := bot.GetMe()
+	me, err := bot.GetMe(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get bot info: %w", err)
 	}
@@ -91,7 +90,7 @@ func (b *Bot) Start(ctx context.Context) error {
 	}
 	b.userHashSalt = salt
 
-	if err := b.telegram.SetMyCommands(&telego.SetMyCommandsParams{
+	if err := b.telegram.SetMyCommands(ctx, &telego.SetMyCommandsParams{
 		Commands: []telego.BotCommand{
 			{Command: "status", Description: "Статус бота и метрики"},
 			{Command: "reset", Description: "Сбросить все метрики"},
@@ -114,14 +113,17 @@ func (b *Bot) Start(ctx context.Context) error {
 		},
 	}
 
-	updates, err := b.telegram.UpdatesViaLongPolling(u)
+	pollingCtx, cancelPolling := context.WithCancel(ctx)
+	defer cancelPolling()
+
+	updates, err := b.telegram.UpdatesViaLongPolling(pollingCtx, u)
 	if err != nil {
 		return fmt.Errorf("failed to start polling: %w", err)
 	}
 
 	b.scanKnownGroups(ctx)
 
-	b.refreshStatsCache()
+	b.refreshStatsCache(ctx)
 	go b.statsCacheLoop(ctx)
 
 	go b.cleanupLoop(ctx)
@@ -134,7 +136,7 @@ func (b *Bot) Start(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			logger.Info().Msg("Stopping bot...")
-			b.telegram.StopLongPolling()
+			cancelPolling()
 			return nil
 		case update, ok := <-updates:
 			if !ok {
@@ -146,28 +148,28 @@ func (b *Bot) Start(ctx context.Context) error {
 }
 
 // SendMessage sends a plain-text message and returns the message ID.
-func (b *Bot) SendMessage(chatID int64, text string) int64 {
-	return b.sendMessage(chatID, text)
+func (b *Bot) SendMessage(ctx context.Context, chatID int64, text string) int64 {
+	return b.sendMessage(ctx, chatID, text)
 }
 
 // SendFormatted sends a MarkdownV2 message.
-func (b *Bot) SendFormatted(chatID int64, text string) {
-	b.sendFormatted(chatID, text)
+func (b *Bot) SendFormatted(ctx context.Context, chatID int64, text string) {
+	b.sendFormatted(ctx, chatID, text)
 }
 
 // EditMessage edits a plain-text message.
-func (b *Bot) EditMessage(chatID, messageID int64, text string) error {
-	return b.editMessage(chatID, messageID, text)
+func (b *Bot) EditMessage(ctx context.Context, chatID, messageID int64, text string) error {
+	return b.editMessage(ctx, chatID, messageID, text)
 }
 
 // EditWithRetry tries to edit a message, retrying on failure.
-func (b *Bot) EditWithRetry(chatID, msgID int64, text string) {
-	b.editWithRetry(chatID, msgID, text)
+func (b *Bot) EditWithRetry(ctx context.Context, chatID, msgID int64, text string) {
+	b.editWithRetry(ctx, chatID, msgID, text)
 }
 
 // EditFormattedWithRetry tries to edit a MarkdownV2 message, retrying on failure.
-func (b *Bot) EditFormattedWithRetry(chatID, msgID int64, text string) {
-	b.editFormattedWithRetry(chatID, msgID, text)
+func (b *Bot) EditFormattedWithRetry(ctx context.Context, chatID, msgID int64, text string) {
+	b.editFormattedWithRetry(ctx, chatID, msgID, text)
 }
 
 // TelegramClient returns the underlying Telegram client for direct API calls.

@@ -27,7 +27,7 @@ const (
 )
 
 // RunAuth performs the OAuth PKCE flow for OpenAI Codex subscription.
-func RunAuth(clientID, tokenDir string) error {
+func RunAuth(ctx context.Context, clientID, tokenDir string) error {
 	// Generate PKCE values
 	verifier, err := generateCodeVerifier()
 	if err != nil {
@@ -77,8 +77,11 @@ func RunAuth(clientID, tokenDir string) error {
 	server := &http.Server{Handler: mux}
 	go func() { _ = server.Serve(listener) }()
 	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = server.Shutdown(ctx)
+		// Use a fresh background context: the parent ctx may already be
+		// cancelled if the user hit Ctrl+C, and server.Shutdown needs a
+		// short grace window regardless.
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_ = server.Shutdown(shutdownCtx)
 		cancel()
 	}()
 
@@ -97,6 +100,8 @@ func RunAuth(clientID, tokenDir string) error {
 		return err
 	case <-time.After(3 * time.Minute):
 		return fmt.Errorf("authentication timed out after 3 minutes")
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 
 	// Exchange code for tokens
@@ -165,7 +170,7 @@ func RunModels(clientID, tokenDir string) error {
 }
 
 // RunTest sends a test prompt to the given model via OAuth and prints the response.
-func RunTest(clientID, tokenDir, model string) error {
+func RunTest(ctx context.Context, clientID, tokenDir, model string) error {
 	client, err := provider.NewOAuthClient(tokenDir, clientID, os.Getenv("OAUTH_CODEX_VERSION"))
 	if err != nil {
 		return err
@@ -178,7 +183,7 @@ func RunTest(clientID, tokenDir, model string) error {
 	fmt.Printf("\nSystem prompt:\n%s\n", systemPrompt)
 	fmt.Printf("\nUser prompt:\n%s\n", userPrompt)
 
-	resp, err := client.Complete(context.Background(), provider.CompletionRequest{
+	resp, err := client.Complete(ctx, provider.CompletionRequest{
 		Model: model,
 		Messages: []provider.Message{
 			{Role: "system", Content: systemPrompt},

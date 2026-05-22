@@ -16,11 +16,11 @@ import (
 
 // Deps provides messaging primitives that the admin package needs from the parent.
 type Deps interface {
-	SendMessage(chatID int64, text string) int64
-	SendFormatted(chatID int64, text string)
-	EditMessage(chatID, messageID int64, text string) error
-	EditWithRetry(chatID, msgID int64, text string)
-	EditFormattedWithRetry(chatID, msgID int64, text string)
+	SendMessage(ctx context.Context, chatID int64, text string) int64
+	SendFormatted(ctx context.Context, chatID int64, text string)
+	EditMessage(ctx context.Context, chatID, messageID int64, text string) error
+	EditWithRetry(ctx context.Context, chatID, msgID int64, text string)
+	EditFormattedWithRetry(ctx context.Context, chatID, msgID int64, text string)
 }
 
 // SummaryService abstracts the summarizer for URL summarization.
@@ -36,8 +36,8 @@ type RateLimiterIface interface {
 
 // TelegramSender is a subset of the Telegram client needed for direct API calls.
 type TelegramSender interface {
-	SendMessage(params *telego.SendMessageParams) (*telego.Message, error)
-	AnswerCallbackQuery(params *telego.AnswerCallbackQueryParams) error
+	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
+	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
 }
 
 // Admin handles all admin-only private chat commands.
@@ -78,7 +78,7 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 
 	fields := strings.Fields(msg.Text)
 	if len(fields) == 0 {
-		a.handleHelp(msg.Chat.ID)
+		a.handleHelp(ctx, msg.Chat.ID)
 		return true
 	}
 
@@ -93,7 +93,7 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 
 	switch cmd {
 	case "/status":
-		a.handleStatus(msg.Chat.ID)
+		a.handleStatus(ctx, msg.Chat.ID)
 	case "/reset":
 		a.handleReset(ctx, msg.Chat.ID)
 	case "/groups":
@@ -101,13 +101,13 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 	case "/instructions":
 		a.handleInstructions(ctx, msg.Chat.ID)
 	case "/help":
-		a.handleHelp(msg.Chat.ID)
+		a.handleHelp(ctx, msg.Chat.ID)
 	default:
 		if u := extractURL(msg.Text, msg.Entities); u != "" {
 			a.handleURLSummarize(ctx, msg.Chat.ID, u)
 			return true
 		}
-		a.handleHelp(msg.Chat.ID)
+		a.handleHelp(ctx, msg.Chat.ID)
 	}
 	return true
 }
@@ -117,5 +117,5 @@ func (a *Admin) handleReset(ctx context.Context, chatID int64) {
 	if err := a.db.ClearAllMetrics(ctx); err != nil {
 		logger.Error().Err(err).Msg("failed to clear persisted metrics")
 	}
-	a.deps.SendMessage(chatID, "Метрики сброшены.")
+	a.deps.SendMessage(ctx, chatID, "Метрики сброшены.")
 }

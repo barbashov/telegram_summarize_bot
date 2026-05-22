@@ -34,27 +34,27 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	if !a.rateLimiter.Allow(chatID) {
 		a.metrics.RateLimit.Record(0)
 		remaining := a.rateLimiter.RemainingTime(chatID)
-		a.deps.SendMessage(chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
+		a.deps.SendMessage(ctx, chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
 		return
 	}
 
-	statusMsgID := a.deps.SendMessage(chatID, "Загружаю страницу...")
+	statusMsgID := a.deps.SendMessage(ctx, chatID, "Загружаю страницу...")
 
 	content, err := fetcher.Fetch(ctx, rawURL, a.cfg.URLMaxChars)
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to fetch URL")
-		a.deps.EditWithRetry(chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error())
+		a.deps.EditWithRetry(ctx, chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error())
 		return
 	}
 
-	if editErr := a.deps.EditMessage(chatID, statusMsgID, "Суммаризую содержимое..."); editErr != nil {
+	if editErr := a.deps.EditMessage(ctx, chatID, statusMsgID, "Суммаризую содержимое..."); editErr != nil {
 		logger.Warn().Err(editErr).Msg("failed to update status message")
 	}
 
 	summary, err := a.summarizer.SummarizeURL(ctx, rawURL, content)
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to summarize URL")
-		a.deps.EditWithRetry(chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		a.deps.EditWithRetry(ctx, chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
@@ -63,9 +63,9 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	if len(chunks) == 0 {
 		return
 	}
-	a.deps.EditFormattedWithRetry(chatID, statusMsgID, chunks[0])
+	a.deps.EditFormattedWithRetry(ctx, chatID, statusMsgID, chunks[0])
 	for _, chunk := range chunks[1:] {
-		a.deps.SendFormatted(chatID, chunk)
+		a.deps.SendFormatted(ctx, chatID, chunk)
 	}
 }
 

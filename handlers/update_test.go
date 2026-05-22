@@ -62,51 +62,61 @@ func TestPrivateCommandStatus_NonAlertUser(t *testing.T) {
 	}
 }
 
-func TestOriginUsername(t *testing.T) {
-	tests := []struct {
-		name   string
-		origin telego.MessageOrigin
-		want   string
-	}{
-		{
-			name:   "user with username",
-			origin: &telego.MessageOriginUser{SenderUser: telego.User{Username: "alice"}},
-			want:   "alice",
-		},
-		{
-			name:   "user with name only",
-			origin: &telego.MessageOriginUser{SenderUser: telego.User{FirstName: "Bob", LastName: "Smith"}},
-			want:   "Bob Smith",
-		},
-		{
-			name:   "user with ID only",
-			origin: &telego.MessageOriginUser{SenderUser: telego.User{ID: 42}},
-			want:   "User42",
-		},
-		{
-			name:   "hidden user",
-			origin: &telego.MessageOriginHiddenUser{SenderUserName: "hidden_bob"},
-			want:   "hidden_bob",
-		},
-		{
-			name:   "channel with signature",
-			origin: &telego.MessageOriginChannel{AuthorSignature: "Editor", Chat: telego.Chat{Title: "News"}},
-			want:   "Editor",
-		},
-		{
-			name:   "channel without signature",
-			origin: &telego.MessageOriginChannel{Chat: telego.Chat{Title: "News"}},
-			want:   "News",
-		},
-	}
+func TestForwardOriginHandle(t *testing.T) {
+	const groupID int64 = -100
+	salt := []byte("test-salt")
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := originUsername(tt.origin)
-			if got != tt.want {
-				t.Fatalf("got %q, want %q", got, tt.want)
+	userOrigin := &telego.MessageOriginUser{SenderUser: telego.User{ID: 42, Username: "alice", FirstName: "Bob"}}
+	hiddenOrigin := &telego.MessageOriginHiddenUser{SenderUserName: "hidden_bob"}
+	chatOrigin := &telego.MessageOriginChat{SenderChat: telego.Chat{ID: -77, Title: "Editorial"}}
+	channelOrigin := &telego.MessageOriginChannel{Chat: telego.Chat{ID: -123, Title: "News"}, AuthorSignature: "Editor"}
+
+	// Each branch produces a "kind:hash" handle.
+	cases := []struct {
+		name       string
+		origin     telego.MessageOrigin
+		wantPrefix string
+	}{
+		{"user", userOrigin, "user:"},
+		{"hidden user", hiddenOrigin, "hidden:"},
+		{"chat", chatOrigin, "chat:"},
+		{"channel", channelOrigin, "channel:"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := forwardOriginHandle(tc.origin, groupID, salt)
+			if !strings.HasPrefix(got, tc.wantPrefix) {
+				t.Fatalf("got %q, want prefix %q", got, tc.wantPrefix)
+			}
+			rest := strings.TrimPrefix(got, tc.wantPrefix)
+			if len(rest) != 8 {
+				t.Fatalf("hash portion = %q (len %d), want 8 hex chars", rest, len(rest))
+			}
+			// Must NOT contain the raw username, real name, or title.
+			for _, leak := range []string{"alice", "Bob", "hidden_bob", "Editorial", "News", "Editor"} {
+				if strings.Contains(got, leak) {
+					t.Fatalf("handle %q leaked plaintext %q", got, leak)
+				}
 			}
 		})
+	}
+
+	// Stability: same input → same output.
+	a := forwardOriginHandle(userOrigin, groupID, salt)
+	b := forwardOriginHandle(userOrigin, groupID, salt)
+	if a != b {
+		t.Fatalf("expected stable handle, got %q vs %q", a, b)
+	}
+
+	// Group-scoped: different group → different output.
+	other := forwardOriginHandle(userOrigin, groupID+1, salt)
+	if a == other {
+		t.Fatalf("expected group-scoped variation, got identical %q", a)
+	}
+
+	// Empty hidden sender → empty handle (no stable identifier).
+	if h := forwardOriginHandle(&telego.MessageOriginHiddenUser{}, groupID, salt); h != "" {
+		t.Fatalf("empty hidden sender: got %q, want empty", h)
 	}
 }
 
@@ -122,7 +132,7 @@ func TestHandlePrivateChatInfo(t *testing.T) {
 		},
 	}
 
-	b.handlePrivateChatInfo(update)
+	b.handlePrivateChatInfo(context.Background(), update)
 
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("expected 1 message, got %d", len(tg.sentTexts))

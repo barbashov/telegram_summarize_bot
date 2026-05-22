@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
+
 	"github.com/mymmrac/telego"
 )
 
-func (b *Bot) handleHelp(update telego.Update) {
+func (b *Bot) handleHelp(ctx context.Context, update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -16,7 +18,7 @@ func (b *Bot) handleHelp(update telego.Update) {
 		"• `help` — показать это сообщение\n\n" +
 		"_Примеры: @bot summarize, @bot summarize 12_"
 
-	if b.isGroupAdmin(msg.Chat.ID, msg.From.ID) {
+	if b.isGroupAdmin(ctx, msg.Chat.ID, msg.From.ID) {
 		helpText += "\n\n*Команды администратора:*\n" +
 			"• `schedule on` — включить ежедневную сводку\n" +
 			"• `schedule off` — выключить ежедневную сводку\n" +
@@ -25,10 +27,10 @@ func (b *Bot) handleHelp(update telego.Update) {
 			"_Пример: @bot schedule 08:00_"
 	}
 
-	b.sendFormatted(msg.Chat.ID, helpText)
+	b.sendFormatted(ctx, msg.Chat.ID, helpText)
 }
 
-func (b *Bot) handlePrivateChatInfo(update telego.Update) {
+func (b *Bot) handlePrivateChatInfo(ctx context.Context, update telego.Update) {
 	msg := update.Message
 	if msg == nil {
 		return
@@ -37,5 +39,5 @@ func (b *Bot) handlePrivateChatInfo(update telego.Update) {
 	privateInfoText := "Я работаю только в группах и полезен для суммаризации групповых обсуждений\\.\n\n" +
 		"Добавьте меня в группу и используйте `@" + b.username + " summarize`\\."
 
-	b.sendFormatted(msg.Chat.ID, privateInfoText)
+	b.sendFormatted(ctx, msg.Chat.ID, privateInfoText)
 }

@@ -20,26 +20,26 @@ type fakeDeps struct {
 	nextID        int64
 }
 
-func (f *fakeDeps) SendMessage(chatID int64, text string) int64 {
+func (f *fakeDeps) SendMessage(_ context.Context, chatID int64, text string) int64 {
 	f.sentTexts = append(f.sentTexts, text)
 	f.nextID++
 	return f.nextID
 }
 
-func (f *fakeDeps) SendFormatted(chatID int64, text string) {
+func (f *fakeDeps) SendFormatted(_ context.Context, chatID int64, text string) {
 	f.formattedText = append(f.formattedText, text)
 }
 
-func (f *fakeDeps) EditMessage(chatID, messageID int64, text string) error {
+func (f *fakeDeps) EditMessage(_ context.Context, chatID, messageID int64, text string) error {
 	f.editTexts = append(f.editTexts, text)
 	return nil
 }
 
-func (f *fakeDeps) EditWithRetry(chatID, msgID int64, text string) {
+func (f *fakeDeps) EditWithRetry(_ context.Context, chatID, msgID int64, text string) {
 	f.editTexts = append(f.editTexts, text)
 }
 
-func (f *fakeDeps) EditFormattedWithRetry(chatID, msgID int64, text string) {
+func (f *fakeDeps) EditFormattedWithRetry(_ context.Context, chatID, msgID int64, text string) {
 	f.editTexts = append(f.editTexts, text)
 }
 
@@ -48,13 +48,15 @@ type fakeTelegram struct {
 	nextID    int
 }
 
-func (f *fakeTelegram) SendMessage(params *telego.SendMessageParams) (*telego.Message, error) {
+func (f *fakeTelegram) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
 	f.sentTexts = append(f.sentTexts, params.Text)
 	f.nextID++
 	return &telego.Message{MessageID: f.nextID}, nil
 }
 
-func (f *fakeTelegram) AnswerCallbackQuery(_ *telego.AnswerCallbackQueryParams) error { return nil }
+func (f *fakeTelegram) AnswerCallbackQuery(_ context.Context, _ *telego.AnswerCallbackQueryParams) error {
+	return nil
+}
 
 type fakeSummarizer struct {
 	summary string

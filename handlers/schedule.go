@@ -23,20 +23,20 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 		s, err := b.db.GetGroupSchedule(ctx, groupID)
 		if err != nil {
 			logger.Error().Err(err).Msg("failed to get group schedule")
-			b.sendMessage(groupID, "Ошибка получения расписания.")
+			b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
 			return
 		}
 		if s == nil || !s.Enabled {
-			b.sendFormatted(groupID, "⏰ Ежедневная сводка *отключена*\\.")
+			b.sendFormatted(ctx, groupID, "⏰ Ежедневная сводка *отключена*\\.")
 		} else {
-			b.sendFormatted(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
+			b.sendFormatted(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
 		}
 		return
 	}
 
 	// Mutating operations require admin privileges.
-	if !b.isGroupAdmin(groupID, msg.From.ID) {
-		b.sendMessage(groupID, "Только администраторы группы могут изменять расписание.")
+	if !b.isGroupAdmin(ctx, groupID, msg.From.ID) {
+		b.sendMessage(ctx, groupID, "Только администраторы группы могут изменять расписание.")
 		return
 	}
 
@@ -44,7 +44,7 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 
 	// "now" triggers an immediate unscheduled summary.
 	if arg == "now" {
-		b.sendFormatted(groupID, "🔄 Запускаю внеплановую сводку\\.\\.\\.")
+		b.sendFormatted(ctx, groupID, "🔄 Запускаю внеплановую сводку\\.\\.\\.")
 		b.runScheduledSummary(ctx, groupID, time.Now())
 		return
 	}
@@ -55,13 +55,13 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 	if arg != "on" && arg != "off" {
 		parts := strings.SplitN(arg, ":", 2)
 		if len(parts) != 2 {
-			b.sendFormatted(groupID, "Неверный формат\\. Используйте: `schedule on`, `schedule off`, `schedule now` или `schedule ЧЧ:ММ`\\.")
+			b.sendFormatted(ctx, groupID, "Неверный формат\\. Используйте: `schedule on`, `schedule off`, `schedule now` или `schedule ЧЧ:ММ`\\.")
 			return
 		}
 		h, err1 := strconv.Atoi(parts[0])
 		m, err2 := strconv.Atoi(parts[1])
 		if err1 != nil || err2 != nil || h < 0 || h > 23 || m < 0 || m > 59 {
-			b.sendFormatted(groupID, "Неверное время\\. Используйте формат ЧЧ:ММ, например `07:00`\\.")
+			b.sendFormatted(ctx, groupID, "Неверное время\\. Используйте формат ЧЧ:ММ, например `07:00`\\.")
 			return
 		}
 		parsedHour, parsedMinute, isTime = h, m, true
@@ -71,7 +71,7 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 	s, err := b.db.GetGroupSchedule(ctx, groupID)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get group schedule")
-		b.sendMessage(groupID, "Ошибка получения расписания.")
+		b.sendMessage(ctx, groupID, "Ошибка получения расписания.")
 		return
 	}
 	if s == nil {
@@ -92,14 +92,14 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 
 	if err := b.db.SetGroupSchedule(ctx, s); err != nil {
 		logger.Error().Err(err).Msg("failed to set group schedule")
-		b.sendMessage(groupID, "Ошибка сохранения расписания.")
+		b.sendMessage(ctx, groupID, "Ошибка сохранения расписания.")
 		return
 	}
 
 	if s.Enabled {
-		b.sendFormatted(groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
+		b.sendFormatted(ctx, groupID, fmt.Sprintf("⏰ Ежедневная сводка *включена*, время: *%02d:%02d UTC*\\.", s.Hour, s.Minute))
 	} else {
-		b.sendFormatted(groupID, "⏰ Ежедневная сводка *отключена*\\.")
+		b.sendFormatted(ctx, groupID, "⏰ Ежедневная сводка *отключена*\\.")
 	}
 }
 
@@ -147,13 +147,13 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 
 	logger.Info().Int64("group_id", groupID).Int("count", len(messages)).Msg("running scheduled summary")
 
-	statusMsgID := b.sendMessage(groupID, "Готовлю утреннюю сводку...")
+	statusMsgID := b.sendMessage(ctx, groupID, "Готовлю утреннюю сводку...")
 
 	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax, instructions)
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to summarize")
-		b.editWithRetry(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
@@ -162,12 +162,12 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if len(chunks) == 0 {
 		return
 	}
-	if err := b.editFormattedFinal(groupID, statusMsgID, preamble+"\n\n"+chunks[0]); err != nil {
+	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, preamble+"\n\n"+chunks[0]); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to send to Telegram")
 		return
 	}
 	for _, chunk := range chunks[1:] {
-		b.sendFormatted(groupID, chunk)
+		b.sendFormatted(ctx, groupID, chunk)
 	}
 
 	if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {

@@ -21,13 +21,13 @@ func (b *Bot) statsCacheLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			b.refreshStatsCache()
+			b.refreshStatsCache(ctx)
 		}
 	}
 }
 
-func (b *Bot) refreshStatsCache() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (b *Bot) refreshStatsCache(ctx context.Context) {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 
 	since := time.Now().Add(-metricsRetention)
@@ -121,7 +121,7 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 	for _, id := range ids {
 		title := ""
 		username := ""
-		info, err := b.telegram.GetChat(&telego.GetChatParams{ChatID: tu.ID(id)})
+		info, err := b.telegram.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(id)})
 		if err != nil || info == nil {
 			logger.Warn().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to get chat info")
 		} else {

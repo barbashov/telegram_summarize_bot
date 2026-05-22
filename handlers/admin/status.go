@@ -11,7 +11,7 @@ import (
 	tu "github.com/mymmrac/telego/telegoutil"
 )
 
-func (a *Admin) handleStatus(chatID int64) {
+func (a *Admin) handleStatus(ctx context.Context, chatID int64) {
 	defer a.metrics.TelegramSend.Start()()
 	keyboard := tu.InlineKeyboard(
 		tu.InlineKeyboardRow(
@@ -27,7 +27,7 @@ func (a *Admin) handleStatus(chatID int64) {
 			telego.InlineKeyboardButton{Text: "db_get", CallbackData: "lat:db_get"},
 		),
 	)
-	_, err := a.telegram.SendMessage(
+	_, err := a.telegram.SendMessage(ctx,
 		tu.Message(tu.ID(chatID), a.metrics.FormatStatusReport(a.cfg.Model)).
 			WithReplyMarkup(keyboard),
 	)
@@ -39,11 +39,18 @@ func (a *Admin) handleStatus(chatID int64) {
 
 // HandleCallbackQuery processes inline button presses for metric deep-dives.
 func (a *Admin) HandleCallbackQuery(ctx context.Context, cq *telego.CallbackQuery) {
-	_ = a.telegram.AnswerCallbackQuery(&telego.AnswerCallbackQueryParams{
+	_ = a.telegram.AnswerCallbackQuery(ctx, &telego.AnswerCallbackQueryParams{
 		CallbackQueryID: cq.ID,
 	})
 
 	if !a.cfg.IsAdminUser(cq.From.ID) {
+		return
+	}
+	// Defense-in-depth: callback buttons are only ever attached to admin DMs,
+	// so the originating message must live in the admin's private chat
+	// (chat ID == user ID). Reject anything else to keep group chats out of
+	// the admin callback path even if a future change ships a button to one.
+	if cq.Message == nil || cq.Message.GetChat().ID != cq.From.ID {
 		return
 	}
 
@@ -71,6 +78,6 @@ func (a *Admin) HandleCallbackQuery(ctx context.Context, cq *telego.CallbackQuer
 	text := metrics.FormatLatencyDeepDive(metricName, detail)
 
 	if cq.Message != nil {
-		a.deps.SendMessage(cq.Message.GetChat().ID, text)
+		a.deps.SendMessage(ctx, cq.Message.GetChat().ID, text)
 	}
 }

@@ -21,11 +21,11 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if len(args) > 0 {
 		parsed, err := strconv.Atoi(args[0])
 		if err != nil || parsed <= 0 {
-			b.sendMessage(groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
+			b.sendMessage(ctx, groupID, "Неверный формат. Используйте: @bot summarize [часы]\nПример: @bot summarize 12")
 			return
 		}
 		if parsed > b.cfg.SummaryHours {
-			b.sendMessage(groupID, fmt.Sprintf("Максимальный период суммаризации — %d часов.", b.cfg.SummaryHours))
+			b.sendMessage(ctx, groupID, fmt.Sprintf("Максимальный период суммаризации — %d часов.", b.cfg.SummaryHours))
 			return
 		}
 		hours = parsed
@@ -45,15 +45,15 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get messages")
-		b.sendMessage(groupID, "Ошибка получения сообщений.")
+		b.sendMessage(ctx, groupID, "Ошибка получения сообщений.")
 		return
 	}
 
 	if len(messages) == 0 {
 		if lastSummarize != nil {
-			b.sendMessage(groupID, "Нет новых сообщений с последней суммаризации.")
+			b.sendMessage(ctx, groupID, "Нет новых сообщений с последней суммаризации.")
 		} else {
-			b.sendMessage(groupID, "Нет сообщений за последние 24 часа.")
+			b.sendMessage(ctx, groupID, "Нет сообщений за последние 24 часа.")
 		}
 		return
 	}
@@ -61,7 +61,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessage(groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 
@@ -74,17 +74,17 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 
 	logger.Info().Int("count", len(messages)).Msg("Summarizing messages")
 
-	statusMsgID := b.sendMessage(groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
+	statusMsgID := b.sendMessage(ctx, groupID, fmt.Sprintf("Собираю сообщения за последние %d часов...", hours))
 
 	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax, instructions)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to summarize")
-		b.editWithRetry(groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
-	if !b.sendSummary(groupID, statusMsgID, summary) {
+	if !b.sendSummary(ctx, groupID, statusMsgID, summary) {
 		return
 	}
 
@@ -107,18 +107,18 @@ func (b *Bot) loadGroupSummaryInstructions(ctx context.Context, groupID int64) s
 	return item.Instructions
 }
 
-func (b *Bot) sendSummary(chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {
+func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {
 	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, chatID), telegramMessageLimit)
 	if len(chunks) == 0 {
 		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации\\."}
 	}
 
-	if err := b.editFormattedFinal(chatID, statusMsgID, chunks[0]); err != nil {
+	if err := b.editFormattedFinal(ctx, chatID, statusMsgID, chunks[0]); err != nil {
 		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send summary to Telegram")
 		return false
 	}
 	for _, chunk := range chunks[1:] {
-		b.sendFormatted(chatID, chunk)
+		b.sendFormatted(ctx, chatID, chunk)
 	}
 	return true
 }
