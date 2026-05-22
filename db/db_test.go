@@ -383,6 +383,124 @@ func TestHashString(t *testing.T) {
 	})
 }
 
+func TestPurgeLegacyForwardedFromOnce(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	// newTestDB already ran the migration (so the flag is set and the
+	// purge is a no-op). Clear the flag so we can run the purge against
+	// controlled seed data.
+	if _, err := db.conn.ExecContext(ctx,
+		`DELETE FROM bot_config WHERE key = ?`, "forwarded_from_pseudonymized"); err != nil {
+		t.Fatalf("clear flag: %v", err)
+	}
+
+	now := time.Now()
+	seed := []struct {
+		tgID          int64
+		text          string
+		forwardedFrom string
+	}{
+		{1, "plain1", "alice"},             // legacy plaintext — clear
+		{2, "plain2", "Bob Smith"},         // legacy plaintext — clear
+		{3, "pseudo1", "user:abc12345"},    // pseudonymized — keep
+		{4, "pseudo2", "channel:def67890"}, // pseudonymized — keep
+		{5, "empty", ""},                   // empty — leave alone
+	}
+	for _, s := range seed {
+		if err := db.AddMessage(ctx, &Message{
+			GroupID:       -100,
+			UserHash:      "test",
+			Text:          s.text,
+			Timestamp:     now.Add(time.Duration(s.tgID) * time.Second),
+			ForwardedFrom: s.forwardedFrom,
+			TgMessageID:   s.tgID,
+		}); err != nil {
+			t.Fatalf("AddMessage tg=%d: %v", s.tgID, err)
+		}
+	}
+
+	if err := db.purgeLegacyForwardedFromOnce(); err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+
+	t.Run("plaintext rows cleared, pseudonymized kept", func(t *testing.T) {
+		type row struct {
+			tgID int64
+			from string
+		}
+		rows, err := db.conn.QueryContext(ctx,
+			`SELECT tg_message_id, COALESCE(forwarded_from, '') FROM messages ORDER BY tg_message_id`)
+		if err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		defer func() { _ = rows.Close() }()
+		var actual []row
+		for rows.Next() {
+			var r row
+			if err := rows.Scan(&r.tgID, &r.from); err != nil {
+				t.Fatalf("scan: %v", err)
+			}
+			actual = append(actual, r)
+		}
+		want := []row{
+			{1, ""},
+			{2, ""},
+			{3, "user:abc12345"},
+			{4, "channel:def67890"},
+			{5, ""},
+		}
+		if len(actual) != len(want) {
+			t.Fatalf("row count = %d, want %d (got %+v)", len(actual), len(want), actual)
+		}
+		for i, r := range actual {
+			if r != want[i] {
+				t.Errorf("row %d: got %+v, want %+v", i, r, want[i])
+			}
+		}
+	})
+
+	t.Run("flag set after purge", func(t *testing.T) {
+		var flag string
+		if err := db.conn.QueryRowContext(ctx,
+			`SELECT value FROM bot_config WHERE key = ?`, "forwarded_from_pseudonymized",
+		).Scan(&flag); err != nil {
+			t.Fatalf("flag should be set: %v", err)
+		}
+		if flag != "1" {
+			t.Fatalf("flag = %q, want %q", flag, "1")
+		}
+	})
+
+	t.Run("second run is a no-op", func(t *testing.T) {
+		// Insert another plaintext row; with the flag set, the second
+		// call must NOT clear it. (Post-deploy this can't happen via the
+		// pseudonymizing code path, but this verifies the gate works.)
+		if err := db.AddMessage(ctx, &Message{
+			GroupID:       -100,
+			UserHash:      "test",
+			Text:          "after-flag",
+			Timestamp:     now.Add(100 * time.Second),
+			ForwardedFrom: "should-survive",
+			TgMessageID:   100,
+		}); err != nil {
+			t.Fatalf("AddMessage: %v", err)
+		}
+		if err := db.purgeLegacyForwardedFromOnce(); err != nil {
+			t.Fatalf("second purge: %v", err)
+		}
+		var after string
+		if err := db.conn.QueryRowContext(ctx,
+			`SELECT COALESCE(forwarded_from, '') FROM messages WHERE tg_message_id = 100`,
+		).Scan(&after); err != nil {
+			t.Fatalf("query: %v", err)
+		}
+		if after != "should-survive" {
+			t.Fatalf("second purge ran (got %q), expected no-op due to flag", after)
+		}
+	})
+}
+
 func TestAllowedGroups(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

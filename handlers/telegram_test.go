@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	"telegram_summarize_bot/metrics"
@@ -108,4 +109,37 @@ func (f *countingEditTelegram) EditMessageText(_ context.Context, params *telego
 
 func newTestMetrics() *metrics.Metrics {
 	return metrics.New()
+}
+
+func TestSleepCtx(t *testing.T) {
+	t.Run("returns true after timer fires", func(t *testing.T) {
+		if !sleepCtx(context.Background(), 5*time.Millisecond) {
+			t.Fatal("expected true after timer fired")
+		}
+	})
+
+	t.Run("returns false when context already cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		if sleepCtx(ctx, time.Second) {
+			t.Fatal("expected false for cancelled context")
+		}
+	})
+
+	t.Run("returns false when cancelled mid-wait", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			time.Sleep(5 * time.Millisecond)
+			cancel()
+		}()
+		start := time.Now()
+		ok := sleepCtx(ctx, 5*time.Second)
+		elapsed := time.Since(start)
+		if ok {
+			t.Fatal("expected false on mid-wait cancellation")
+		}
+		if elapsed > 500*time.Millisecond {
+			t.Fatalf("waited %v; should bail near 5ms", elapsed)
+		}
+	})
 }
