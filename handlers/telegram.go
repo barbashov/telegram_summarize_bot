@@ -6,9 +6,18 @@ import (
 
 	"telegram_summarize_bot/logger"
 
+	telegramify "github.com/barbashov/telegramify-markdown-go"
 	"github.com/mymmrac/telego"
 	tu "github.com/mymmrac/telego/telegoutil"
 )
+
+// renderMarkdown converts a Markdown string to Telegram MarkdownV2 and splits it
+// into sendable chunks (respecting Telegram's length limit). Used for all
+// LLM/summary output so **bold**, lists and links render instead of leaking as
+// literal markers.
+func renderMarkdown(md string) []string {
+	return telegramify.Split(telegramify.Markdownify(md), telegramMessageLimit)
+}
 
 const (
 	editRetries    = 3

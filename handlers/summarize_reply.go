@@ -12,7 +12,6 @@ import (
 	"telegram_summarize_bot/summarizer"
 	"telegram_summarize_bot/tgutil"
 
-	telegramify "github.com/barbashov/telegramify-markdown-go"
 	"github.com/mymmrac/telego"
 )
 
@@ -157,8 +156,7 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update, st
 	// The LLM result is Markdown; convert it (plus our header) to Telegram
 	// MarkdownV2 so **bold**, lists, links etc. render instead of leaking as
 	// literal markers.
-	rendered := telegramify.Markdownify("📝 **Суммаризация:**\n\n" + result)
-	chunks := telegramify.Split(rendered, telegramMessageLimit)
+	chunks := renderMarkdown("📝 **Суммаризация:**\n\n" + result)
 	if len(chunks) == 0 {
 		b.editWithRetry(ctx, groupID, statusMsgID, "Нет данных для суммаризации.")
 		return

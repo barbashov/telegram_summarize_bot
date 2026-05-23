@@ -477,33 +477,36 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content, instruc
 	return "", lastErr
 }
 
+// FormatTelegramSummary builds the summary as plain Markdown. Callers convert it
+// to Telegram MarkdownV2 (via telegramify) before sending, so the structure here
+// uses ordinary **bold** / [text](url) rather than pre-escaped MarkdownV2.
 func FormatTelegramSummary(summary *StructuredSummary, groupID int64) string {
 	if summary == nil {
-		return "📝 *Суммаризация:*\n\nНет данных для суммаризации\\."
+		return "📝 **Суммаризация:**\n\nНет данных для суммаризации."
 	}
 
 	var sb strings.Builder
-	sb.WriteString("📝 *Суммаризация:*")
+	sb.WriteString("📝 **Суммаризация:**")
 
-	if strings.TrimSpace(summary.TLDR) != "" {
-		sb.WriteString("\n\n*TL;DR:* ")
-		sb.WriteString(escapeMarkdown(summary.TLDR))
+	if tldr := strings.TrimSpace(summary.TLDR); tldr != "" {
+		sb.WriteString("\n\n**TL;DR:** ")
+		sb.WriteString(tldr)
 	}
 
 	for i, topic := range summary.Topics {
 		sb.WriteString("\n\n")
-		link := telegramMsgLink(groupID, topic.FirstTgMessageID)
-		if link != "" {
-			fmt.Fprintf(&sb, "[*%d\\. %s*](%s)", i+1, escapeMarkdown(topic.Title), link)
+		title := fmt.Sprintf("%d. %s", i+1, strings.TrimSpace(topic.Title))
+		if link := telegramMsgLink(groupID, topic.FirstTgMessageID); link != "" {
+			fmt.Fprintf(&sb, "[**%s**](%s)", title, link)
 		} else {
-			fmt.Fprintf(&sb, "*%d\\. %s*", i+1, escapeMarkdown(topic.Title))
+			fmt.Fprintf(&sb, "**%s**", title)
 		}
 		sb.WriteString("\n")
-		sb.WriteString(escapeMarkdown(topic.Summary))
+		sb.WriteString(strings.TrimSpace(topic.Summary))
 	}
 
 	if len(summary.Topics) == 0 && strings.TrimSpace(summary.TLDR) == "" {
-		sb.WriteString("\n\nНет данных для суммаризации\\.")
+		sb.WriteString("\n\nНет данных для суммаризации.")
 	}
 
 	return sb.String()
@@ -787,8 +790,4 @@ var markdownReplacer = strings.NewReplacer(
 
 func EscapeMarkdown(text string) string {
 	return markdownReplacer.Replace(strings.TrimSpace(text))
-}
-
-func escapeMarkdown(text string) string {
-	return EscapeMarkdown(text)
 }

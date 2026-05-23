@@ -419,25 +419,24 @@ func TestSummarizeURLPropagatesError(t *testing.T) {
 	}
 }
 
-func TestFormatTelegramSummaryEscapesMarkdown(t *testing.T) {
+func TestFormatTelegramSummaryRawMarkdown(t *testing.T) {
+	// FormatTelegramSummary now emits plain Markdown (escaping happens later in
+	// telegramify), so structure uses **bold** and the content is verbatim.
 	formatted := FormatTelegramSummary(&StructuredSummary{
-		TLDR: "Итог_1",
+		TLDR: "Итог релиза",
 		Topics: []TopicSummary{
-			{
-				Title:   "Релиз_[v1]",
-				Summary: "Нужен *фикс* сегодня.",
-			},
+			{Title: "Релиз", Summary: "Нужен фикс сегодня."},
 		},
 	}, 0)
 
-	if !strings.Contains(formatted, "*TL;DR:* Итог\\_1") {
-		t.Fatalf("formatted TLDR missing escape: %q", formatted)
+	if !strings.Contains(formatted, "**TL;DR:** Итог релиза") {
+		t.Fatalf("missing TLDR: %q", formatted)
 	}
-	if !strings.Contains(formatted, "*1\\. Релиз\\_\\[v1\\]*") {
-		t.Fatalf("formatted title missing escape: %q", formatted)
+	if !strings.Contains(formatted, "**1. Релиз**") {
+		t.Fatalf("missing bold title: %q", formatted)
 	}
-	if !strings.Contains(formatted, "Нужен \\*фикс\\* сегодня\\.") {
-		t.Fatalf("formatted summary missing escape: %q", formatted)
+	if !strings.Contains(formatted, "Нужен фикс сегодня.") {
+		t.Fatalf("missing verbatim summary: %q", formatted)
 	}
 }
 
@@ -483,7 +482,7 @@ func TestFormatTelegramSummaryNoLinkWhenMsgIDZero(t *testing.T) {
 	if strings.Contains(formatted, "t.me") {
 		t.Fatalf("unexpected link when FirstTgMessageID=0, got: %q", formatted)
 	}
-	if !strings.Contains(formatted, "*1\\. Тема*") {
+	if !strings.Contains(formatted, "**1. Тема**") {
 		t.Fatalf("expected plain bold title, got: %q", formatted)
 	}
 }

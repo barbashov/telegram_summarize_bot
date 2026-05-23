@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strconv"
-	"strings"
 	"time"
 
 	"telegram_summarize_bot/logger"
@@ -108,9 +107,9 @@ func (b *Bot) loadGroupSummaryInstructions(ctx context.Context, groupID int64) s
 }
 
 func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {
-	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, chatID), telegramMessageLimit)
+	chunks := renderMarkdown(summarizer.FormatTelegramSummary(summary, chatID))
 	if len(chunks) == 0 {
-		chunks = []string{"📝 *Суммаризация:*\n\nНет данных для суммаризации\\."}
+		chunks = renderMarkdown("📝 **Суммаризация:**\n\nНет данных для суммаризации.")
 	}
 
 	if err := b.editFormattedFinal(ctx, chatID, statusMsgID, chunks[0]); err != nil {
@@ -121,57 +120,4 @@ func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summar
 		b.sendFormatted(ctx, chatID, chunk)
 	}
 	return true
-}
-
-func splitTelegramMessage(text string, limit int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	if limit <= 0 || len(text) <= limit {
-		return []string{text}
-	}
-
-	lines := strings.Split(text, "\n")
-	var chunks []string
-	var current strings.Builder
-
-	appendChunk := func() {
-		chunk := strings.TrimSpace(current.String())
-		if chunk != "" {
-			chunks = append(chunks, chunk)
-		}
-		current.Reset()
-	}
-
-	for _, line := range lines {
-		line = strings.TrimRight(line, " ")
-		candidateLen := len(line)
-		if current.Len() > 0 {
-			candidateLen = current.Len() + 1 + len(line)
-		}
-
-		if candidateLen <= limit {
-			if current.Len() > 0 {
-				current.WriteString("\n")
-			}
-			current.WriteString(line)
-			continue
-		}
-
-		if current.Len() > 0 {
-			appendChunk()
-		}
-
-		for len(line) > limit {
-			chunks = append(chunks, strings.TrimSpace(line[:limit]))
-			line = line[limit:]
-		}
-		if strings.TrimSpace(line) != "" {
-			current.WriteString(line)
-		}
-	}
-
-	appendChunk()
-	return chunks
 }

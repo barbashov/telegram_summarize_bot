@@ -198,39 +198,5 @@ func TestHandleSummarizeCustomHours(t *testing.T) {
 	}
 }
 
-func TestSplitTelegramMessageSplitsLongOutput(t *testing.T) {
-	text := "📝 *Суммаризация:*\n\n" + strings.Repeat("a", 50) + "\n" + strings.Repeat("b", 50)
-	chunks := splitTelegramMessage(text, 60)
-
-	if len(chunks) < 2 {
-		t.Fatalf("expected multiple chunks, got %d", len(chunks))
-	}
-	for _, chunk := range chunks {
-		if len(chunk) > 60 {
-			t.Fatalf("chunk exceeds limit: %d", len(chunk))
-		}
-	}
-}
-
-func TestSplitTelegramMessageEdgeCases(t *testing.T) {
-	tests := []struct {
-		name   string
-		text   string
-		limit  int
-		chunks int
-	}{
-		{"empty", "", 100, 0},
-		{"within limit", "hello", 100, 1},
-		{"exact limit", strings.Repeat("a", 100), 100, 1},
-		{"just over limit", strings.Repeat("a", 101), 100, 2},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := splitTelegramMessage(tt.text, tt.limit)
-			if len(got) != tt.chunks {
-				t.Fatalf("got %d chunks, want %d", len(got), tt.chunks)
-			}
-		})
-	}
-}
+// Message splitting is now handled by telegramify.Split; see the summarizer and
+// integration tests for end-to-end rendering coverage.

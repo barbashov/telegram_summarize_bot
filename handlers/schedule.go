@@ -157,12 +157,13 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 		return
 	}
 
-	preamble := "🌅 *Утренняя \\#сводка за последние 24 часа:*"
-	chunks := splitTelegramMessage(summarizer.FormatTelegramSummary(summary, groupID), telegramMessageLimit)
+	preamble := "🌅 **Утренняя #сводка за последние 24 часа:**"
+	raw := preamble + "\n\n" + summarizer.FormatTelegramSummary(summary, groupID)
+	chunks := renderMarkdown(raw)
 	if len(chunks) == 0 {
 		return
 	}
-	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, preamble+"\n\n"+chunks[0]); err != nil {
+	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, chunks[0]); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to send to Telegram")
 		return
 	}
