@@ -68,10 +68,26 @@ func isBlockedIP(ip net.IP) bool {
 	return false
 }
 
-// resolveAllValidated resolves host to its IPs and validates them, failing
-// closed. A literal IP must be public; a hostname must resolve to at least one
-// IP and *none* may be blocked — this defends against DNS-rebinding answers that
-// mix public and private addresses. Returns the validated IPs to dial.
+// pickPublicIPs parses addr strings and returns those that are routable public
+// addresses, dropping any blocked (loopback/private/reserved/etc.) ones.
+func pickPublicIPs(addrs []string) []net.IP {
+	var ips []net.IP
+	for _, addr := range addrs {
+		ip := net.ParseIP(addr)
+		if ip == nil || isBlockedIP(ip) {
+			continue
+		}
+		ips = append(ips, ip)
+	}
+	return ips
+}
+
+// resolveAllValidated resolves host and returns only its public IPs. A literal
+// IP must itself be public. For a hostname, blocked addresses are dropped rather
+// than rejecting the whole host (some hosts return a mix of public and
+// special-use/filtered records, e.g. an ISP-injected bogus AAAA); it errors only
+// when no public IP remains. SSRF safety is preserved because the caller dials
+// exactly the validated IPs returned here — never a blocked one.
 func resolveAllValidated(host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		if isBlockedIP(ip) {
@@ -84,19 +100,9 @@ func resolveAllValidated(host string) ([]net.IP, error) {
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
 	}
-	var ips []net.IP
-	for _, addr := range addrs {
-		ip := net.ParseIP(addr)
-		if ip == nil {
-			continue
-		}
-		if isBlockedIP(ip) {
-			return nil, fmt.Errorf("blocked non-public IP %s for host %s", ip, host)
-		}
-		ips = append(ips, ip)
-	}
+	ips := pickPublicIPs(addrs)
 	if len(ips) == 0 {
-		return nil, fmt.Errorf("no valid IP found for host %s", host)
+		return nil, fmt.Errorf("no public IP found for host %s", host)
 	}
 	return ips, nil
 }

@@ -198,6 +198,20 @@ func TestResolveAllValidatedAllowsPublicIP(t *testing.T) {
 	}
 }
 
+func TestPickPublicIPs(t *testing.T) {
+	// A real public IPv4 alongside a bogus/filtered IPv6 (100::/64 discard) and a
+	// loopback: only the public address survives, so one poisoned record can't
+	// take down an otherwise-reachable host.
+	got := pickPublicIPs([]string{"100::1", "5.255.255.50", "127.0.0.1", "not-an-ip"})
+	if len(got) != 1 || got[0].String() != "5.255.255.50" {
+		t.Fatalf("pickPublicIPs = %v, want [5.255.255.50]", got)
+	}
+
+	if got := pickPublicIPs([]string{"100::1", "169.254.169.254"}); len(got) != 0 {
+		t.Fatalf("pickPublicIPs (all blocked) = %v, want empty", got)
+	}
+}
+
 func TestIsAllowedContentType(t *testing.T) {
 	tests := []struct {
 		ct      string
