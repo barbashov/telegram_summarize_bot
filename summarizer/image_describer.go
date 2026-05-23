@@ -107,10 +107,12 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("image cache lookup failed; proceeding without cache")
 	} else if cached != nil {
 		if cached.Error == "" {
+			logger.Info().Str("file_unique_id", photo.FileUniqueID).Msg("DIAG positive cache hit")
 			_ = d.db.TouchImageDescription(ctx, photo.FileUniqueID)
 			return cached.Description, nil
 		}
 		if time.Since(cached.CreatedAt) < negativeCacheTTL {
+			logger.Warn().Str("file_unique_id", photo.FileUniqueID).Str("cached_error", cached.Error).Msg("DIAG negative cache hit; skipping vision call")
 			return "", nil
 		}
 	}
