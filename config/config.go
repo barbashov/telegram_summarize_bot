@@ -48,8 +48,12 @@ type Config struct {
 	AdminUserIDs             []int64
 	DailySummaryHour         int
 	ReplyThreads             bool
+	ReplyThreadContextDepth  int
 	URLMaxChars              int
 	ReplyMinChars            int
+	ReplyChainMaxDepth       int
+	ReplyChainMaxLinks       int
+	ReplyChainMaxImages      int
 	OAuthTokenDir            string
 	OAuthClientID            string
 	OAuthCodexVersion        string
@@ -191,8 +195,12 @@ func Load() (*Config, error) {
 		AdminUserIDs:             adminUserIDs,
 		DailySummaryHour:         dailySummaryHour,
 		ReplyThreads:             replyThreads,
+		ReplyThreadContextDepth:  envIntOr("REPLY_THREAD_CONTEXT_DEPTH", 3),
 		URLMaxChars:              envIntOr("URL_MAX_CHARS", 64000),
 		ReplyMinChars:            envIntOr("REPLY_SUMMARIZE_MIN_CHARS", 1000),
+		ReplyChainMaxDepth:       envIntOr("REPLY_CHAIN_MAX_DEPTH", 25),
+		ReplyChainMaxLinks:       envIntOr("REPLY_CHAIN_MAX_LINKS", 5),
+		ReplyChainMaxImages:      envIntOr("REPLY_CHAIN_MAX_IMAGES", 8),
 		OAuthTokenDir:            oauthTokenDir,
 		OAuthClientID:            oauthClientID,
 		OAuthCodexVersion:        oauthCodexVersion,

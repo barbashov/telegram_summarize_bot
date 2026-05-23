@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/summarizer"
@@ -26,16 +28,46 @@ type replyPart struct {
 	body  string
 }
 
-// handleSummarizeReply handles "@bot summarize" sent as a reply to another
-// message. It acts on that one message — summarizing linked page(s), describing
-// image(s), and/or summarizing the message text — and replies with a single
-// unified summary. When several content kinds are present they are blended into
-// one summary; a lone link or image short-circuits to its own output.
+// handleSummarizeReply handles "@bot summarize" sent as a reply. When reply
+// threading is on and the replied-to message belongs to a stored reply chain, it
+// summarizes the whole branch; otherwise it acts on the single replied-to
+// message (link(s), image(s), and/or text).
 func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update, steering string) {
-	msg := update.Message
-	groupID := msg.Chat.ID
-	reply := msg.ReplyToMessage
+	groupID := update.Message.Chat.ID
+	reply := update.Message.ReplyToMessage
 
+	if chain := b.replyChain(ctx, groupID, reply); len(chain) >= 2 {
+		b.summarizeReplyThread(ctx, groupID, reply, chain, steering)
+		return
+	}
+	b.summarizeSingleReply(ctx, groupID, reply, steering)
+}
+
+// replyChain reconstructs the reply branch ending at the replied-to message,
+// ordered root→target, from the DB. Returns nil (→ single-message handling) when
+// threading is off, the target isn't stored, or it has no resolvable ancestors.
+func (b *Bot) replyChain(ctx context.Context, groupID int64, reply *telego.Message) []db.Message {
+	if !b.cfg.ReplyThreads {
+		return nil
+	}
+	target, err := b.db.GetMessageByTgID(ctx, groupID, int64(reply.MessageID))
+	if err != nil || target == nil {
+		return nil
+	}
+	lookup := func(tgID int64) (*db.Message, error) {
+		return b.db.GetMessageByTgID(ctx, groupID, tgID)
+	}
+	chain, err := summarizer.WalkAncestry(*target, lookup, b.cfg.ReplyChainMaxDepth)
+	if err != nil || len(chain) < 2 {
+		return nil
+	}
+	return chain
+}
+
+// summarizeSingleReply acts on the single replied-to message (no resolvable
+// ancestors): summarize its link(s), describe its image(s), and/or summarize its
+// text, blended into one unified summary; a lone link or image short-circuits.
+func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *telego.Message, steering string) {
 	text, entities := replyTextAndEntities(reply)
 	links := tgutil.ExtractURLs(text, entities, replyMaxLinks)
 	photos := extractPhotoRecords(reply)
@@ -185,6 +217,152 @@ func combineInstructions(group, steering string) string {
 	default:
 		return group + "\n\nЗапрос пользователя (приоритетно): " + steering
 	}
+}
+
+// summarizeReplyThread summarizes a full reply branch (chain ordered root→target)
+// as one conversation: every message gets full treatment (its text, followed
+// links, described images) within chain-wide budgets, then the transcript is
+// summarized — honoring any steering prompt over the whole thread.
+func (b *Bot) summarizeReplyThread(ctx context.Context, groupID int64, reply *telego.Message, chain []db.Message, steering string) {
+	if !b.rateLimiter.Allow(groupID) {
+		b.metrics.RateLimit.Record(0)
+		remaining := b.rateLimiter.RemainingTime(groupID)
+		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		return
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			b.rateLimiter.Release(groupID)
+		}
+	}()
+
+	statusMsgID := b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Собираю ветку обсуждения...")
+	instructions := combineInstructions(b.loadGroupSummaryInstructions(ctx, groupID), steering)
+
+	aliases := summarizer.BuildUserAliasMap(chain)
+	linkBudget := b.cfg.ReplyChainMaxLinks
+	imageBudget := b.cfg.ReplyChainMaxImages
+	seenImg := map[string]string{} // file_unique_id → description, deduped chain-wide
+
+	// Enrich target-first so the most relevant message gets budget priority; keep
+	// the transcript in root→target order.
+	blocks := make([]string, len(chain))
+	for i := len(chain) - 1; i >= 0; i-- {
+		m := chain[i]
+		isTarget := i == len(chain)-1
+
+		var links []string
+		var photos []db.PhotoRecord
+		body := strings.TrimSpace(m.Text)
+		if isTarget {
+			// Target: use the live message (entities + fresh photo handles).
+			t, ents := replyTextAndEntities(reply)
+			links = tgutil.ExtractURLs(t, ents, replyMaxLinks)
+			photos = extractPhotoRecords(reply)
+			if p := strings.TrimSpace(residualText(t, ents)); p != "" {
+				body = p
+			}
+		} else {
+			// Ancestor (stored, no entities): scan plain text + stored photos.
+			links = tgutil.ExtractURLsFromText(m.Text, replyMaxLinks)
+			if recs, perr := b.db.GetPhotosForMessages(ctx, []int64{m.ID}); perr == nil {
+				photos = recs[m.ID]
+			}
+		}
+
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "%s [%s]: %s", aliasOrAnon(aliases, m.UserHash), m.Timestamp.Format("15:04"), body)
+		if m.ForwardedFrom != "" {
+			fmt.Fprintf(&sb, " (переслано от %s)", m.ForwardedFrom)
+		}
+
+		for _, p := range photos {
+			if p.FileUniqueID == "" {
+				continue
+			}
+			desc, known := seenImg[p.FileUniqueID]
+			if !known {
+				if imageBudget <= 0 {
+					continue
+				}
+				d, derr := b.summarizer.DescribeImage(ctx, p, steering)
+				if errors.Is(derr, summarizer.ErrVisionDisabled) {
+					break
+				}
+				desc = ""
+				if derr == nil {
+					desc = strings.TrimSpace(d)
+				}
+				seenImg[p.FileUniqueID] = desc // cache result (incl. empty) for this request
+				if desc != "" {
+					imageBudget--
+				}
+			}
+			if desc != "" {
+				fmt.Fprintf(&sb, "\n  [изображение: %s]", desc)
+			}
+		}
+
+		for _, link := range links {
+			if linkBudget <= 0 {
+				break
+			}
+			content, ferr := b.fetchURL(ctx, link, b.cfg.URLMaxChars)
+			if ferr != nil {
+				continue
+			}
+			summary, serr := b.summarizer.SummarizeURL(ctx, link, content, instructions)
+			if serr != nil || strings.TrimSpace(summary) == "" {
+				continue
+			}
+			linkBudget--
+			fmt.Fprintf(&sb, "\n  [ссылка %s: %s]", link, strings.TrimSpace(summary))
+		}
+
+		blocks[i] = sb.String()
+	}
+
+	var material strings.Builder
+	material.WriteString("Ниже — ветка переписки Telegram, от начала к последнему сообщению, на которое ответили:\n\n")
+	for _, blk := range blocks {
+		material.WriteString(blk)
+		material.WriteString("\n\n")
+	}
+
+	summary, err := b.summarizer.SummarizeText(ctx, strings.TrimSpace(material.String()), instructions)
+	if err != nil {
+		logger.Error().Err(err).Msg("reply-summarize: failed to summarize thread")
+		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		return
+	}
+	result := strings.TrimSpace(summary)
+	if result == "" {
+		b.editWithRetry(ctx, groupID, statusMsgID, "Нет данных для суммаризации.")
+		return
+	}
+
+	chunks := renderMarkdown("📝 **Суммаризация ветки:**\n\n" + result)
+	if len(chunks) == 0 {
+		b.editWithRetry(ctx, groupID, statusMsgID, "Нет данных для суммаризации.")
+		return
+	}
+	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, chunks[0]); err != nil {
+		logger.Error().Err(err).Int64("chat_id", groupID).Msg("reply-summarize: failed to send thread result")
+		return
+	}
+	for _, chunk := range chunks[1:] {
+		b.sendFormatted(ctx, groupID, chunk)
+	}
+	committed = true
+}
+
+// aliasOrAnon returns the alias for a user hash, or "anon" when unknown/empty.
+func aliasOrAnon(aliases map[string]string, hash string) string {
+	if a := aliases[hash]; a != "" {
+		return a
+	}
+	return "anon"
 }
 
 // buildReplyMaterial assembles the labeled blob fed to SummarizeText: each

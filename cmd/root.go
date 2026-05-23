@@ -103,7 +103,8 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 		return fmt.Errorf("failed to initialize LLM provider: %w", err)
 	}
 
-	sum := summarizer.New(llmClient, cfg.Model, m, cfg.ReplyThreads)
+	sum := summarizer.New(llmClient, cfg.Model, m, cfg.ReplyThreads).
+		WithReplyThreadDepth(cfg.ReplyThreadContextDepth)
 
 	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
 	tgBot, err := handlers.NewBot(initCtx, cfg, database, sum, m)

@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -635,6 +636,36 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	}
 
 	return messages, nil
+}
+
+// GetMessageByTgID returns the stored message with the given Telegram message_id
+// in the group, or (nil, nil) when it is absent (e.g. retention-pruned, or never
+// ingested). Uses the idx_messages_dedup index on (group_id, tg_message_id).
+func (db *DB) GetMessageByTgID(ctx context.Context, groupID, tgMessageID int64) (*Message, error) {
+	if tgMessageID == 0 {
+		return nil, nil
+	}
+	defer db.metrics.DBGet.Start()()
+
+	var msg Message
+	var forwardedFrom sql.NullString
+	var dbTgID, replyToTgID sql.NullInt64
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT id, group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
+		 FROM messages
+		 WHERE group_id = ? AND tg_message_id = ?`,
+		groupID, tgMessageID,
+	).Scan(&msg.ID, &msg.GroupID, &msg.UserHash, &msg.Text, &msg.Timestamp, &forwardedFrom, &dbTgID, &replyToTgID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	msg.ForwardedFrom = forwardedFrom.String
+	msg.TgMessageID = dbTgID.Int64
+	msg.ReplyToTgID = replyToTgID.Int64
+	return &msg, nil
 }
 
 func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (int64, error) {

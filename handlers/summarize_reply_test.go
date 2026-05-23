@@ -5,13 +5,52 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
+	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
 )
+
+// seedChain inserts a root→leaf reply chain in group 42 and returns the leaf's
+// TgMessageID. Each spec is {tgID, replyToTgID, text}; photos attach to the
+// message whose tgID == photoOn (0 = none).
+func seedChain(t *testing.T, database *db.DB, photoOn int64) {
+	t.Helper()
+	ctx := context.Background()
+	specs := []struct {
+		tg, replyTo int64
+		text        string
+	}{
+		{10, 0, "первое сообщение про https://a.example/x"},
+		{11, 10, "ответ с картинкой"},
+		{12, 11, "последнее сообщение"},
+	}
+	for i, s := range specs {
+		id, err := database.AddMessageReturningID(ctx, &db.Message{
+			GroupID: 42, UserHash: "h" + string(rune('1'+i)), Text: s.text,
+			Timestamp:   time.Now().Add(-time.Duration(len(specs)-i) * time.Minute),
+			TgMessageID: s.tg, ReplyToTgID: s.replyTo,
+		})
+		if err != nil {
+			t.Fatalf("seed AddMessageReturningID: %v", err)
+		}
+		if s.tg == photoOn {
+			if err := database.AddMessagePhotos(ctx, id, []db.PhotoRecord{{FileUniqueID: "u1", FileID: "f1"}}); err != nil {
+				t.Fatalf("seed AddMessagePhotos: %v", err)
+			}
+		}
+	}
+}
+
+// threadReply builds the "@bot summarize" reply update whose target is the leaf
+// (tg=12) of the seeded chain.
+func threadReply() telego.Update {
+	return replyUpdate(&telego.Message{MessageID: 12, Text: "последнее сообщение"})
+}
 
 // urlReply builds a reply message whose text contains url, with a matching
 // "url" entity. The text is BMP-only, so rune offsets equal UTF-16 offsets.
@@ -391,5 +430,88 @@ func TestHasUnsupportedMedia(t *testing.T) {
 				t.Fatalf("hasUnsupportedMedia = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHandleSummarizeReplyWalksChain(t *testing.T) {
+	sum := &fakeSummarizer{urlSummary: "сводка ссылки", imageDesc: "описание картинки", textSummary: "итог обсуждения"}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyThreads = true
+	b.cfg.ReplyChainMaxLinks = 5
+	b.cfg.ReplyChainMaxImages = 8
+
+	var fetched int
+	b.fetchURL = func(_ context.Context, _ string, _ int) (string, error) {
+		fetched++
+		return "извлечённый текст страницы", nil
+	}
+	seedChain(t, database, 11) // photo on the middle ancestor
+
+	b.handleSummarizeReply(context.Background(), threadReply(), "")
+
+	if sum.textCalls != 1 {
+		t.Fatalf("expected one blend SummarizeText call, got %d", sum.textCalls)
+	}
+	if sum.urlCalls < 1 || fetched < 1 {
+		t.Fatalf("expected the ancestor link to be fetched+summarized (url=%d fetch=%d)", sum.urlCalls, fetched)
+	}
+	if sum.imageCalls < 1 {
+		t.Fatalf("expected the ancestor image to be described, got %d", sum.imageCalls)
+	}
+	mat := sum.textInput
+	for _, want := range []string{"первое сообщение", "ответ с картинкой", "последнее сообщение", "сводка ссылки", "описание картинки"} {
+		if !strings.Contains(mat, want) {
+			t.Fatalf("thread material missing %q:\n%s", want, mat)
+		}
+	}
+	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "итог обсуждения") {
+		t.Fatalf("unexpected result: %#v", tg.editTexts)
+	}
+}
+
+func TestHandleSummarizeReplyChainLinkBudget(t *testing.T) {
+	sum := &fakeSummarizer{urlSummary: "сводка", textSummary: "итог"}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyThreads = true
+	b.cfg.ReplyChainMaxLinks = 1 // only one link across the whole chain
+	b.cfg.ReplyChainMaxImages = 8
+	b.fetchURL = func(_ context.Context, _ string, _ int) (string, error) { return "page", nil }
+
+	// Two ancestors each carry a link; target has none.
+	ctx := context.Background()
+	mustSeed := func(tg, replyTo int64, text string) {
+		if _, err := database.AddMessageReturningID(ctx, &db.Message{
+			GroupID: 42, UserHash: "h", Text: text, Timestamp: time.Now(), TgMessageID: tg, ReplyToTgID: replyTo,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+	mustSeed(10, 0, "ссылка раз https://a.example/1")
+	mustSeed(11, 10, "ссылка два https://b.example/2")
+	mustSeed(12, 11, "последнее")
+
+	b.handleSummarizeReply(ctx, threadReply(), "")
+
+	if sum.urlCalls != 1 {
+		t.Fatalf("link budget = 1 should cap SummarizeURL calls to 1, got %d", sum.urlCalls)
+	}
+}
+
+func TestHandleSummarizeReplyThreadFallbackWhenTargetNotStored(t *testing.T) {
+	// ReplyThreads on, but the target isn't in the DB → single-message path.
+	sum := &fakeSummarizer{imageDesc: "кот"}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyThreads = true
+
+	b.handleSummarizeReply(context.Background(), replyUpdate(photoReply()), "")
+
+	if sum.imageCalls != 1 || sum.textCalls != 0 {
+		t.Fatalf("expected single-message image short-circuit (image=%d text=%d)", sum.imageCalls, sum.textCalls)
+	}
+	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "кот") {
+		t.Fatalf("unexpected result: %#v", tg.editTexts)
 	}
 }

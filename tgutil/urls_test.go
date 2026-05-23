@@ -48,6 +48,25 @@ func TestExtractURLsNone(t *testing.T) {
 	}
 }
 
+func TestExtractURLsFromText(t *testing.T) {
+	text := "смотри https://a.example/x и (https://b.example/y), и снова https://a.example/x. конец https://c.example!"
+	got := ExtractURLsFromText(text, 0)
+	want := []string{"https://a.example/x", "https://b.example/y", "https://c.example"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("ExtractURLsFromText = %v, want %v", got, want)
+	}
+
+	// limit caps the result.
+	if got := ExtractURLsFromText(text, 1); !reflect.DeepEqual(got, []string{"https://a.example/x"}) {
+		t.Fatalf("capped = %v, want one URL", got)
+	}
+
+	// No bare URL → empty (a text_link href is never recoverable from text).
+	if got := ExtractURLsFromText("просто текст без ссылок", 0); len(got) != 0 {
+		t.Fatalf("got %v, want empty", got)
+	}
+}
+
 func TestExtractURLsOutOfRangeOffsetSkipped(t *testing.T) {
 	ents := []telego.MessageEntity{{Type: "url", Offset: 5, Length: 100}}
 	if got := ExtractURLs("short", ents, 0); len(got) != 0 {

@@ -348,6 +348,45 @@ func TestAddMessageFields(t *testing.T) {
 	}
 }
 
+func TestGetMessageByTgID(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	now := time.Now()
+
+	if err := db.AddMessage(ctx, &Message{
+		GroupID: -100, UserHash: "aabb", Text: "hello", Timestamp: now,
+		TgMessageID: 555, ReplyToTgID: 12,
+	}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+	// Same tg_message_id in a different group must not be returned.
+	if err := db.AddMessage(ctx, &Message{
+		GroupID: -200, UserHash: "ccdd", Text: "other group", Timestamp: now, TgMessageID: 555,
+	}); err != nil {
+		t.Fatalf("AddMessage other group: %v", err)
+	}
+
+	got, err := db.GetMessageByTgID(ctx, -100, 555)
+	if err != nil {
+		t.Fatalf("GetMessageByTgID: %v", err)
+	}
+	if got == nil {
+		t.Fatal("expected a message, got nil")
+	}
+	if got.Text != "hello" || got.ReplyToTgID != 12 || got.GroupID != -100 {
+		t.Fatalf("unexpected message: %+v", got)
+	}
+
+	// Absent tg_message_id → (nil, nil).
+	if m, err := db.GetMessageByTgID(ctx, -100, 999); err != nil || m != nil {
+		t.Fatalf("absent: got (%+v, %v), want (nil, nil)", m, err)
+	}
+	// tgMessageID == 0 → (nil, nil) without a query.
+	if m, err := db.GetMessageByTgID(ctx, -100, 0); err != nil || m != nil {
+		t.Fatalf("zero id: got (%+v, %v), want (nil, nil)", m, err)
+	}
+}
+
 func TestAddMessageDeduplication(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

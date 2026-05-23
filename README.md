@@ -168,7 +168,7 @@ Commands are triggered by mentioning the bot in a group message:
 | Command | Description |
 |---------|-------------|
 | `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
-| **Reply** + `@bot` | Reply to a message and mention the bot to act on *that message* — the word `summarize` is optional. It summarizes link(s) in it, describes image(s), and/or summarizes its text (blended into one when several are present). Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
+| **Reply** + `@bot` | Reply to a message and mention the bot to act on *that message* — the word `summarize` is optional. It summarizes link(s) in it, describes image(s), and/or summarizes its text (blended into one when several are present). If the message is part of a **reply chain**, the whole branch (root→target) is summarized: each ancestor's text, links, and images are included (within `REPLY_CHAIN_*` budgets), bounded by message retention. Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
 | **Reply** + `@bot <prompt>` | Add a free-text prompt to steer the result, e.g. `@bot опиши мем`, `@bot how could we use this?`, `@bot read the text`. The prompt is sent to the vision model for images (see `VISION_STEERING`) and steers the text/link summaries; it also lets even a short replied message be answered. |
 | `@bot s [hours]` | Shorthand for `summarize` (works in reply mode too) |
 | `@bot sub [hours]` | Additional shorthand for `summarize` (works in reply mode too) |
@@ -202,7 +202,11 @@ All configuration is via environment variables (`.env` file):
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
-| `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
+| `REPLY_THREADS` | `true` | Follow reply relationships: show ancestry context in 24h summaries and walk the reply chain for `@bot` replies (`true`/`false`) |
+| `REPLY_THREAD_CONTEXT_DEPTH` | `3` | How many ancestor levels appear in the reply breadcrumb inside 24h-summary prompts |
+| `REPLY_CHAIN_MAX_DEPTH` | `25` | Max messages walked up a reply chain when summarizing a replied-to thread (hard ceiling 25) |
+| `REPLY_CHAIN_MAX_LINKS` | `5` | Max links fetched+summarized across a whole reply chain |
+| `REPLY_CHAIN_MAX_IMAGES` | `8` | Max distinct images described across a whole reply chain |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
 | `REPLY_SUMMARIZE_MIN_CHARS` | `1000` | Minimum length (characters) for a replied-to plain-text message to be summarized on its own; shorter messages are reported as too short (ignored when the message also has a link or image) |
 | `VISION_ENABLED` | `auto` | Image recognition: `auto` (detect from model name), `true` (force on), `false` (force off) |

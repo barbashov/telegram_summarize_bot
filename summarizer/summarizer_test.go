@@ -161,7 +161,7 @@ func TestFormatMessageImageAnnotations(t *testing.T) {
 
 	t.Run("appends image description after text", func(t *testing.T) {
 		msg := db.Message{UserHash: "abc", Text: "look", Timestamp: ts}
-		out := formatMessage(msg, nil, aliases, []string{"кот на подоконнике"})
+		out := formatMessage(msg, "", aliases, []string{"кот на подоконнике"})
 		want := "[00:00] У1: look [изображение: кот на подоконнике]"
 		if out != want {
 			t.Errorf("got %q, want %q", out, want)
@@ -170,7 +170,7 @@ func TestFormatMessageImageAnnotations(t *testing.T) {
 
 	t.Run("photo-only message renders annotation alone", func(t *testing.T) {
 		msg := db.Message{UserHash: "abc", Text: "", Timestamp: ts}
-		out := formatMessage(msg, nil, aliases, []string{"скриншот твита"})
+		out := formatMessage(msg, "", aliases, []string{"скриншот твита"})
 		want := "[00:00] У1: [изображение: скриншот твита]"
 		if out != want {
 			t.Errorf("got %q, want %q", out, want)
@@ -179,7 +179,7 @@ func TestFormatMessageImageAnnotations(t *testing.T) {
 
 	t.Run("empty descriptions are skipped silently", func(t *testing.T) {
 		msg := db.Message{UserHash: "abc", Text: "hi", Timestamp: ts}
-		out := formatMessage(msg, nil, aliases, []string{"", "  ", "actual"})
+		out := formatMessage(msg, "", aliases, []string{"", "  ", "actual"})
 		want := "[00:00] У1: hi [изображение: actual]"
 		if out != want {
 			t.Errorf("got %q, want %q", out, want)
@@ -188,7 +188,7 @@ func TestFormatMessageImageAnnotations(t *testing.T) {
 
 	t.Run("nil descriptions leave message unchanged", func(t *testing.T) {
 		msg := db.Message{UserHash: "abc", Text: "hi", Timestamp: ts}
-		out := formatMessage(msg, nil, aliases, nil)
+		out := formatMessage(msg, "", aliases, nil)
 		if out != "[00:00] У1: hi" {
 			t.Errorf("unexpected: %q", out)
 		}
@@ -196,7 +196,7 @@ func TestFormatMessageImageAnnotations(t *testing.T) {
 
 	t.Run("multiple images append in order", func(t *testing.T) {
 		msg := db.Message{UserHash: "abc", Text: "two", Timestamp: ts}
-		out := formatMessage(msg, nil, aliases, []string{"first", "second"})
+		out := formatMessage(msg, "", aliases, []string{"first", "second"})
 		want := "[00:00] У1: two [изображение: first] [изображение: second]"
 		if out != want {
 			t.Errorf("got %q, want %q", out, want)
@@ -273,53 +273,76 @@ func TestResolveImageDescriptions_NilWhenDescriberDisabled(t *testing.T) {
 	}
 }
 
-func TestFormatMessageWithReplyAnnotation(t *testing.T) {
+func TestRenderMessageLineReplyAnnotation(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
+	s := New(&fakeLLMClient{}, "m", metrics.New(), true)
 
-	t.Run("parent annotation included", func(t *testing.T) {
-		parent := db.Message{UserHash: "a3f2b1c4", Text: "hello", Timestamp: ts}
-		msg := db.Message{UserHash: "deadbeef", Text: "world", Timestamp: ts}
-		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases, nil)
-		if !strings.Contains(out, "↩ У1") {
-			t.Fatalf("expected reply annotation with alias, got: %q", out)
+	render := func(messages []db.Message, target db.Message) string {
+		return s.renderMessageLine(messages, buildReplyIndex(messages), BuildUserAliasMap(messages), target)
+	}
+
+	t.Run("immediate parent breadcrumb with alias + snippet", func(t *testing.T) {
+		parent := db.Message{TgMessageID: 1, UserHash: "a3f2b1c4", Text: "hello", Timestamp: ts}
+		msg := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "world", Timestamp: ts}
+		out := render([]db.Message{parent, msg}, msg)
+		if !strings.Contains(out, "↩ [У1]") {
+			t.Fatalf("expected breadcrumb with alias, got: %q", out)
 		}
 		if !strings.Contains(out, `"hello"`) {
-			t.Fatalf("expected parent text in annotation, got: %q", out)
+			t.Fatalf("expected parent snippet, got: %q", out)
+		}
+	})
+
+	t.Run("multi-level lineage root→parent", func(t *testing.T) {
+		root := db.Message{TgMessageID: 1, UserHash: "h1", Text: "root", Timestamp: ts}
+		mid := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "h2", Text: "mid", Timestamp: ts}
+		leaf := db.Message{TgMessageID: 3, ReplyToTgID: 2, UserHash: "h3", Text: "leaf", Timestamp: ts}
+		out := render([]db.Message{root, mid, leaf}, leaf)
+		if !strings.Contains(out, "↩ [У1›У2]") {
+			t.Fatalf("expected root→parent lineage, got: %q", out)
+		}
+		if !strings.Contains(out, `"mid"`) {
+			t.Fatalf("expected immediate-parent snippet, got: %q", out)
 		}
 	})
 
 	t.Run("empty hash falls back to anon", func(t *testing.T) {
-		parent := db.Message{UserHash: "", Text: "hi", Timestamp: ts}
-		msg := db.Message{UserHash: "deadbeef", Text: "yo", Timestamp: ts}
-		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases, nil)
-		if !strings.Contains(out, "↩ anon") {
+		parent := db.Message{TgMessageID: 1, UserHash: "", Text: "hi", Timestamp: ts}
+		msg := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "yo", Timestamp: ts}
+		if out := render([]db.Message{parent, msg}, msg); !strings.Contains(out, "↩ [anon]") {
 			t.Fatalf("expected anon fallback, got: %q", out)
 		}
 	})
 
-	t.Run("parent text truncated at 60 runes", func(t *testing.T) {
-		longText := strings.Repeat("а", 70)
-		parent := db.Message{UserHash: "a3f2b1c4", Text: longText, Timestamp: ts}
-		msg := db.Message{UserHash: "deadbeef", Text: "reply", Timestamp: ts}
-		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases, nil)
-		if !strings.Contains(out, "…") {
+	t.Run("parent snippet truncated at 60 runes", func(t *testing.T) {
+		parent := db.Message{TgMessageID: 1, UserHash: "h1", Text: strings.Repeat("а", 70), Timestamp: ts}
+		msg := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "h2", Text: "reply", Timestamp: ts}
+		if out := render([]db.Message{parent, msg}, msg); !strings.Contains(out, "…") {
 			t.Fatalf("expected truncation ellipsis, got: %q", out)
 		}
 	})
 
-	t.Run("forwarded wins over parent", func(t *testing.T) {
-		parent := db.Message{UserHash: "a3f2b1c4", Text: "original", Timestamp: ts}
-		msg := db.Message{UserHash: "deadbeef", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
-		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases, nil)
+	t.Run("forwarded wins over reply", func(t *testing.T) {
+		parent := db.Message{TgMessageID: 1, UserHash: "h1", Text: "original", Timestamp: ts}
+		msg := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "h2", Text: "fwd", ForwardedFrom: "channel", Timestamp: ts}
+		out := render([]db.Message{parent, msg}, msg)
 		if !strings.Contains(out, "fwd: channel") {
 			t.Fatalf("expected fwd annotation, got: %q", out)
 		}
 		if strings.Contains(out, "↩") {
 			t.Fatalf("unexpected reply annotation when forwarded, got: %q", out)
+		}
+	})
+
+	t.Run("depth cap limits lineage", func(t *testing.T) {
+		s2 := New(&fakeLLMClient{}, "m", metrics.New(), true).WithReplyThreadDepth(1)
+		root := db.Message{TgMessageID: 1, UserHash: "h1", Text: "root", Timestamp: ts}
+		mid := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "h2", Text: "mid", Timestamp: ts}
+		leaf := db.Message{TgMessageID: 3, ReplyToTgID: 2, UserHash: "h3", Text: "leaf", Timestamp: ts}
+		msgs := []db.Message{root, mid, leaf}
+		out := s2.renderMessageLine(msgs, buildReplyIndex(msgs), BuildUserAliasMap(msgs), leaf)
+		if !strings.Contains(out, "↩ [У2]") || strings.Contains(out, "У1›") {
+			t.Fatalf("depth=1 should show only the immediate parent, got: %q", out)
 		}
 	})
 }
