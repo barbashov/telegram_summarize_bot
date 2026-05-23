@@ -49,6 +49,7 @@ type Config struct {
 	DailySummaryHour         int
 	ReplyThreads             bool
 	URLMaxChars              int
+	ReplyMinChars            int
 	OAuthTokenDir            string
 	OAuthClientID            string
 	OAuthCodexVersion        string
@@ -185,6 +186,7 @@ func Load() (*Config, error) {
 		DailySummaryHour:         dailySummaryHour,
 		ReplyThreads:             replyThreads,
 		URLMaxChars:              envIntOr("URL_MAX_CHARS", 64000),
+		ReplyMinChars:            envIntOr("REPLY_SUMMARIZE_MIN_CHARS", 1000),
 		OAuthTokenDir:            oauthTokenDir,
 		OAuthClientID:            oauthClientID,
 		OAuthCodexVersion:        oauthCodexVersion,

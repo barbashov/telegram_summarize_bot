@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"net"
 	"net/http"
@@ -60,7 +61,9 @@ func RunAuth(ctx context.Context, clientID, tokenDir string) error {
 			desc := r.URL.Query().Get("error_description")
 			errCh <- fmt.Errorf("OAuth error: %s: %s", errMsg, desc)
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>", errMsg, desc)
+			// Escape the provider-supplied values before reflecting them into HTML.
+			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>",
+				html.EscapeString(errMsg), html.EscapeString(desc))
 			return
 		}
 		code := r.URL.Query().Get("code")
@@ -74,7 +77,12 @@ func RunAuth(ctx context.Context, clientID, tokenDir string) error {
 		_, _ = fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
 	})
 
-	server := &http.Server{Handler: mux}
+	server := &http.Server{
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       10 * time.Second,
+		WriteTimeout:      10 * time.Second,
+	}
 	go func() { _ = server.Serve(listener) }()
 	defer func() {
 		// Use a fresh background context: the parent ctx may already be

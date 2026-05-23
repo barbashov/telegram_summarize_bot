@@ -63,7 +63,7 @@ type fakeSummarizer struct {
 	err     error
 }
 
-func (f *fakeSummarizer) SummarizeURL(_ context.Context, _, _ string) (string, error) {
+func (f *fakeSummarizer) SummarizeURL(_ context.Context, _, _, _ string) (string, error) {
 	if f.err != nil {
 		return "", f.err
 	}

@@ -384,7 +384,7 @@ func TestSummarizeURLPromptConstruction(t *testing.T) {
 	}
 	sum := New(client, "test-model", metrics.New(), true)
 
-	result, err := sum.SummarizeURL(context.Background(), "https://example.com/article", "Article text here")
+	result, err := sum.SummarizeURL(context.Background(), "https://example.com/article", "Article text here", "")
 	if err != nil {
 		t.Fatalf("SummarizeURL error: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestSummarizeURLPromptConstruction(t *testing.T) {
 func TestSummarizeURLPropagatesError(t *testing.T) {
 	sum := New(&fakeLLMClient{err: errors.New("api error")}, "test-model", metrics.New(), true)
 
-	_, err := sum.SummarizeURL(context.Background(), "https://example.com", "content")
+	_, err := sum.SummarizeURL(context.Background(), "https://example.com", "content", "")
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -598,7 +598,7 @@ func TestSummarizeURLRetriesOnNetworkError(t *testing.T) {
 	sum := New(client, "test-model", metrics.New(), true)
 	sum.retryBaseDelay = 0
 
-	result, err := sum.SummarizeURL(context.Background(), "https://example.com", "content")
+	result, err := sum.SummarizeURL(context.Background(), "https://example.com", "content", "")
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -633,5 +633,51 @@ func TestIsRetryableError(t *testing.T) {
 				t.Fatalf("isRetryableError(%v) = %v, want %v", tc.err, got, tc.retryable)
 			}
 		})
+	}
+}
+
+func TestSummarizeText(t *testing.T) {
+	client := &fakeLLMClient{responses: []string{"Единая выжимка."}}
+	sum := New(client, "test-model", metrics.New(), true)
+
+	got, err := sum.SummarizeText(context.Background(), "материал для выжимки", "выделяй риски")
+	if err != nil {
+		t.Fatalf("SummarizeText error: %v", err)
+	}
+	if got != "Единая выжимка." {
+		t.Fatalf("result = %q, want %q", got, "Единая выжимка.")
+	}
+	if len(client.requests) != 1 {
+		t.Fatalf("expected 1 request, got %d", len(client.requests))
+	}
+	req := client.requests[0]
+	if !strings.Contains(req.Messages[1].Content, "материал для выжимки") {
+		t.Fatalf("user prompt missing material: %q", req.Messages[1].Content)
+	}
+	if !strings.Contains(req.Messages[0].Content, "выделяй риски") {
+		t.Fatalf("system prompt missing group instructions: %q", req.Messages[0].Content)
+	}
+}
+
+func TestDescribeImageVisionDisabled(t *testing.T) {
+	sum := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
+	if _, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"}); !errors.Is(err, ErrVisionDisabled) {
+		t.Fatalf("DescribeImage error = %v, want ErrVisionDisabled", err)
+	}
+}
+
+func TestDescribeImageDelegatesToDescriber(t *testing.T) {
+	desc := &stubImageDescriber{calls: map[string]int{}, resp: map[string]string{"u1": "На фото кот"}}
+	sum := &Summarizer{describer: desc}
+
+	got, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"})
+	if err != nil {
+		t.Fatalf("DescribeImage error: %v", err)
+	}
+	if got != "На фото кот" {
+		t.Fatalf("result = %q, want %q", got, "На фото кот")
+	}
+	if desc.calls["u1"] != 1 {
+		t.Fatalf("describer called %d times, want 1", desc.calls["u1"])
 	}
 }

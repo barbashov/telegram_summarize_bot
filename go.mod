@@ -46,9 +46,9 @@ require (
 	github.com/valyala/fasthttp v1.70.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
 	golang.org/x/arch v0.26.0 // indirect
-	golang.org/x/net v0.53.0 // indirect
-	golang.org/x/sys v0.43.0 // indirect
-	golang.org/x/text v0.36.0 // indirect
+	golang.org/x/net v0.55.0 // indirect
+	golang.org/x/sys v0.45.0 // indirect
+	golang.org/x/text v0.37.0 // indirect
 	gorm.io/gorm v1.31.1 // indirect
 	modernc.org/libc v1.72.0 // indirect
 	modernc.org/mathutil v1.7.1 // indirect

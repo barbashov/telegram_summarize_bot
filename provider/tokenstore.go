@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	tokenFileName  = "openai_tokens.json"
+	tokenFileName  = "openai_tokens.json" // #nosec G101 -- token storage filename, not a credential
 	refreshBuffer  = 5 * time.Minute
-	OpenAITokenURL = "https://auth.openai.com/oauth/token"
+	OpenAITokenURL = "https://auth.openai.com/oauth/token" // #nosec G101 -- OAuth endpoint URL, not a credential
 )
 
 // TokenResponse is the OAuth token endpoint response format.

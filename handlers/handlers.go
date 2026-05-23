@@ -8,6 +8,7 @@ import (
 
 	"telegram_summarize_bot/config"
 	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/handlers/admin"
 	"telegram_summarize_bot/httputil"
 	"telegram_summarize_bot/logger"
@@ -38,7 +39,9 @@ type telegramClient interface {
 
 type summaryService interface {
 	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error)
-	SummarizeURL(ctx context.Context, pageURL string, content string) (string, error)
+	SummarizeURL(ctx context.Context, pageURL string, content string, instructions string) (string, error)
+	SummarizeText(ctx context.Context, content string, instructions string) (string, error)
+	DescribeImage(ctx context.Context, photo db.PhotoRecord) (string, error)
 }
 
 type Bot struct {
@@ -51,6 +54,9 @@ type Bot struct {
 	metrics      *metrics.Metrics
 	userHashSalt []byte
 	admin        *admin.Admin
+	// fetchURL fetches and extracts readable text from a URL. Defaults to
+	// fetcher.Fetch; overridable in tests to avoid real network access.
+	fetchURL func(ctx context.Context, rawURL string, maxChars int) (string, error)
 }
 
 func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
@@ -75,6 +81,7 @@ func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summa
 		cfg:         cfg,
 		username:    strings.ToLower(me.Username),
 		metrics:     m,
+		fetchURL:    fetcher.Fetch,
 	}
 
 	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, bot)

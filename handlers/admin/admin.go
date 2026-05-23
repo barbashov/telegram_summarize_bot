@@ -25,7 +25,7 @@ type Deps interface {
 
 // SummaryService abstracts the summarizer for URL summarization.
 type SummaryService interface {
-	SummarizeURL(ctx context.Context, pageURL string, content string) (string, error)
+	SummarizeURL(ctx context.Context, pageURL string, content string, instructions string) (string, error)
 }
 
 // RateLimiterIface abstracts the rate limiter.

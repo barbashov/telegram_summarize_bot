@@ -29,6 +29,24 @@ func (b *Bot) sendMessage(ctx context.Context, chatID int64, text string) int64 
 	return int64(msg.MessageID)
 }
 
+// sendMessageReply sends a plain-text message as a reply to replyToMsgID and
+// returns the new message's ID (0 on failure). Editing this message later
+// preserves the reply linkage, so a status message sent this way keeps the
+// final summary visually attached to the post it summarizes.
+func (b *Bot) sendMessageReply(ctx context.Context, chatID, replyToMsgID int64, text string) int64 {
+	defer b.metrics.TelegramSend.Start()()
+	msg, err := b.telegram.SendMessage(ctx, tu.Message(
+		tu.ID(chatID),
+		text,
+	).WithReplyParameters(&telego.ReplyParameters{MessageID: int(replyToMsgID)}))
+	if err != nil {
+		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send reply message")
+		b.metrics.RecordError("telegram_send", err.Error())
+		return 0
+	}
+	return int64(msg.MessageID)
+}
+
 func (b *Bot) editWithRetry(ctx context.Context, chatID, msgID int64, text string) {
 	for range editRetries {
 		if err := b.editMessage(ctx, chatID, msgID, text); err == nil {

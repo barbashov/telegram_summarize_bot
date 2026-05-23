@@ -9,25 +9,19 @@ import (
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/summarizer"
+	"telegram_summarize_bot/tgutil"
 
 	"github.com/mymmrac/telego"
 )
 
+// extractURL returns the first URL in the message, or "" if none. It delegates
+// to tgutil.ExtractURLs for UTF-16-correct offset handling.
 func extractURL(text string, entities []telego.MessageEntity) string {
-	for _, e := range entities {
-		if e.Type == "url" {
-			runes := []rune(text)
-			end := e.Offset + e.Length
-			if end > len(runes) {
-				continue
-			}
-			return string(runes[e.Offset:end])
-		}
-		if e.Type == "text_link" && e.URL != "" {
-			return e.URL
-		}
+	urls := tgutil.ExtractURLs(text, entities, 1)
+	if len(urls) == 0 {
+		return ""
 	}
-	return ""
+	return urls[0]
 }
 
 func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL string) {
@@ -51,7 +45,7 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 		logger.Warn().Err(editErr).Msg("failed to update status message")
 	}
 
-	summary, err := a.summarizer.SummarizeURL(ctx, rawURL, content)
+	summary, err := a.summarizer.SummarizeURL(ctx, rawURL, content, "")
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to summarize URL")
 		a.deps.EditWithRetry(ctx, chatID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")

@@ -15,6 +15,14 @@ import (
 
 func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []string) {
 	msg := update.Message
+
+	// Reply mode: "@bot summarize" in reply to a message acts on that single
+	// message (its link(s), image(s), and/or text) instead of the chat history.
+	if msg.ReplyToMessage != nil {
+		b.handleSummarizeReply(ctx, update)
+		return
+	}
+
 	groupID := msg.Chat.ID
 
 	hours := b.cfg.SummaryHours

@@ -152,8 +152,14 @@ type GroupSummaryInstructions struct {
 func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	dir := filepath.Dir(dbPath)
 	if dir != "." {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
+		// The DB holds chat history; keep its directory owner-only. MkdirAll
+		// won't tighten an existing dir, so chmod it explicitly (best-effort).
+		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create db directory: %w", err)
+		}
+		// #nosec G302 -- a directory needs the execute bit (0700) to be traversable
+		if err := os.Chmod(dir, 0o700); err != nil {
+			logger.Warn().Err(err).Str("dir", dir).Msg("failed to chmod db directory to 0700")
 		}
 	}
 
@@ -176,6 +182,13 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	db := &DB{conn: conn, dbPath: dbPath, metrics: m}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
+	}
+
+	// The file now exists (created by Ping/migrate). Restrict it to owner-only
+	// since it stores chat history. Best-effort: don't fail startup if the
+	// filesystem doesn't support chmod.
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		logger.Warn().Err(err).Str("path", dbPath).Msg("failed to chmod db file to 0600")
 	}
 
 	return db, nil
@@ -472,6 +485,7 @@ func (db *DB) GetPhotosForMessages(ctx context.Context, messageIDs []int64) (map
 		placeholders[i] = "?"
 		args[i] = id
 	}
+	// #nosec G201 -- interpolated value is a comma-joined list of "?" placeholders; the ids are passed as bound args
 	q := fmt.Sprintf(
 		`SELECT id, message_id, file_unique_id, file_id, mime_type, file_size, width, height, source
 		 FROM message_photos

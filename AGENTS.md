@@ -38,6 +38,11 @@ make test
 
 # Format code
 make fmt
+
+# Security scans (deps/stdlib CVEs + static analysis)
+make vulncheck   # govulncheck
+make gosec       # gosec static analysis
+make security    # both
 ```
 
 ### OAuth Authentication
@@ -61,6 +66,7 @@ make fmt
 | Command | Description |
 |---------|-------------|
 | `@bot summarize` | Summarize messages from last 24h (any group member) |
+| `@bot summarize` (as a reply) | Summarize the replied-to message: follow link(s), describe image(s), and/or summarize its text, blended into one summary |
 | `@bot help` | Show available commands |
 
 ## Configuration

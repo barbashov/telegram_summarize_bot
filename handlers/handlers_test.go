@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
 
@@ -67,6 +68,15 @@ type fakeSummarizer struct {
 	urlSummary             string
 	urlErr                 error
 	urlCalls               int
+	urlInstr               string
+	textSummary            string
+	textErr                error
+	textCalls              int
+	textInput              string
+	textInstr              string
+	imageDesc              string
+	imageErr               error
+	imageCalls             int
 }
 
 func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error) {
@@ -79,12 +89,31 @@ func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, to
 	return f.summary, nil
 }
 
-func (f *fakeSummarizer) SummarizeURL(_ context.Context, _, _ string) (string, error) {
+func (f *fakeSummarizer) SummarizeURL(_ context.Context, _, _, instructions string) (string, error) {
 	f.urlCalls++
+	f.urlInstr = instructions
 	if f.urlErr != nil {
 		return "", f.urlErr
 	}
 	return f.urlSummary, nil
+}
+
+func (f *fakeSummarizer) SummarizeText(_ context.Context, content, instructions string) (string, error) {
+	f.textCalls++
+	f.textInput = content
+	f.textInstr = instructions
+	if f.textErr != nil {
+		return "", f.textErr
+	}
+	return f.textSummary, nil
+}
+
+func (f *fakeSummarizer) DescribeImage(_ context.Context, _ db.PhotoRecord) (string, error) {
+	f.imageCalls++
+	if f.imageErr != nil {
+		return "", f.imageErr
+	}
+	return f.imageDesc, nil
 }
 
 func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) {
@@ -97,9 +126,10 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 
 	tg := &fakeTelegram{}
 	cfg := &config.Config{
-		SummaryHours: 24,
-		MaxMessages:  250,
-		TopicMax:     5,
+		SummaryHours:  24,
+		MaxMessages:   250,
+		TopicMax:      5,
+		ReplyMinChars: 1000,
 	}
 	m := metrics.New()
 	b := &Bot{
@@ -111,6 +141,10 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 		username:     "testbot",
 		metrics:      m,
 		userHashSalt: []byte("testsalt"),
+		// Default to a stub so tests never hit the network; link tests override.
+		fetchURL: func(_ context.Context, _ string, _ int) (string, error) {
+			return "", errors.New("fetchURL not stubbed in this test")
+		},
 	}
 	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, tg)
 

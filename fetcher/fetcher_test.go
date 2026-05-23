@@ -10,24 +10,33 @@ import (
 	"testing"
 )
 
-func TestIsPrivateIP(t *testing.T) {
+func TestIsBlockedIP(t *testing.T) {
 	tests := []struct {
 		ip      string
-		private bool
+		blocked bool
 	}{
 		{"127.0.0.1", true},
 		{"10.0.0.1", true},
 		{"172.16.0.1", true},
 		{"192.168.1.1", true},
-		{"169.254.169.254", true},
+		{"169.254.169.254", true}, // link-local (cloud metadata)
 		{"::1", true},
+		{"fe80::1", true},          // IPv6 link-local
+		{"0.0.0.0", true},          // unspecified
+		{"100.64.0.1", true},       // CGNAT
+		{"198.18.0.1", true},       // benchmarking
+		{"240.0.0.1", true},        // reserved
+		{"255.255.255.255", true},  // broadcast (within 240/4)
+		{"224.0.0.1", true},        // multicast
+		{"::ffff:127.0.0.1", true}, // IPv4-mapped loopback
 		{"8.8.8.8", false},
 		{"1.1.1.1", false},
+		{"93.184.216.34", false},
 	}
 	for _, tt := range tests {
 		ip := net.ParseIP(tt.ip)
-		if got := isPrivateIP(ip); got != tt.private {
-			t.Errorf("isPrivateIP(%s) = %v, want %v", tt.ip, got, tt.private)
+		if got := isBlockedIP(ip); got != tt.blocked {
+			t.Errorf("isBlockedIP(%s) = %v, want %v", tt.ip, got, tt.blocked)
 		}
 	}
 }
@@ -173,20 +182,19 @@ func TestFetchHTTPError(t *testing.T) {
 	}
 }
 
-func TestResolveAndValidateBlocksPrivateIP(t *testing.T) {
-	_, err := resolveAndValidate("127.0.0.1")
-	if err == nil {
+func TestResolveAllValidatedBlocksPrivateIP(t *testing.T) {
+	if _, err := resolveAllValidated("127.0.0.1"); err == nil {
 		t.Fatal("expected error for 127.0.0.1")
 	}
 }
 
-func TestResolveAndValidateAllowsPublicIP(t *testing.T) {
-	ip, err := resolveAndValidate("8.8.8.8")
+func TestResolveAllValidatedAllowsPublicIP(t *testing.T) {
+	ips, err := resolveAllValidated("8.8.8.8")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if ip.String() != "8.8.8.8" {
-		t.Fatalf("unexpected IP: %s", ip)
+	if len(ips) != 1 || ips[0].String() != "8.8.8.8" {
+		t.Fatalf("unexpected IPs: %v", ips)
 	}
 }
 

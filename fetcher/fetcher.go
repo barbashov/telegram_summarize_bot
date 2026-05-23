@@ -20,27 +20,47 @@ const (
 	totalTimeout    = 10 * time.Second
 )
 
-// privateRanges lists CIDRs that must be blocked to prevent SSRF.
-var privateRanges []*net.IPNet
+// reservedRanges lists extra non-public CIDRs not covered by net.IP's built-in
+// classification helpers (CGNAT, documentation/benchmark ranges, reserved space,
+// NAT64, etc.). Blocking these alongside the built-ins keeps SSRF from reaching
+// internal or special-use addresses.
+var reservedRanges []*net.IPNet
 
 func init() {
 	for _, cidr := range []string{
-		"127.0.0.0/8",
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"169.254.0.0/16",
-		"::1/128",
-		"fc00::/7",
-		"fe80::/10",
+		"100.64.0.0/10",   // CGNAT (RFC 6598)
+		"192.0.0.0/24",    // IETF protocol assignments
+		"192.0.2.0/24",    // TEST-NET-1
+		"198.18.0.0/15",   // benchmarking
+		"198.51.100.0/24", // TEST-NET-2
+		"203.0.113.0/24",  // TEST-NET-3
+		"240.0.0.0/4",     // reserved (incl. 255.255.255.255)
+		"2001:db8::/32",   // IPv6 documentation
+		"64:ff9b::/96",    // NAT64
+		"100::/64",        // IPv6 discard-only
 	} {
-		_, n, _ := net.ParseCIDR(cidr)
-		privateRanges = append(privateRanges, n)
+		if _, n, err := net.ParseCIDR(cidr); err == nil {
+			reservedRanges = append(reservedRanges, n)
+		}
 	}
 }
 
-func isPrivateIP(ip net.IP) bool {
-	for _, n := range privateRanges {
+// isBlockedIP reports whether ip is loopback, private, link-local, multicast,
+// unspecified, or in a reserved/special-use range — i.e. not a routable public
+// address we are willing to fetch from.
+func isBlockedIP(ip net.IP) bool {
+	if ip == nil {
+		return true
+	}
+	if v4 := ip.To4(); v4 != nil {
+		ip = v4
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsUnspecified() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() ||
+		ip.IsMulticast() || ip.IsInterfaceLocalMulticast() {
+		return true
+	}
+	for _, n := range reservedRanges {
 		if n.Contains(ip) {
 			return true
 		}
@@ -48,30 +68,37 @@ func isPrivateIP(ip net.IP) bool {
 	return false
 }
 
-// resolveAndValidate resolves a hostname and returns the first non-private IP.
-func resolveAndValidate(host string) (net.IP, error) {
+// resolveAllValidated resolves host to its IPs and validates them, failing
+// closed. A literal IP must be public; a hostname must resolve to at least one
+// IP and *none* may be blocked — this defends against DNS-rebinding answers that
+// mix public and private addresses. Returns the validated IPs to dial.
+func resolveAllValidated(host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("blocked private/reserved IP: %s", ip)
+		if isBlockedIP(ip) {
+			return nil, fmt.Errorf("blocked non-public IP: %s", ip)
 		}
-		return ip, nil
+		return []net.IP{ip}, nil
 	}
 
 	addrs, err := net.LookupHost(host)
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
 	}
+	var ips []net.IP
 	for _, addr := range addrs {
 		ip := net.ParseIP(addr)
 		if ip == nil {
 			continue
 		}
-		if isPrivateIP(ip) {
-			return nil, fmt.Errorf("blocked private/reserved IP %s for host %s", ip, host)
+		if isBlockedIP(ip) {
+			return nil, fmt.Errorf("blocked non-public IP %s for host %s", ip, host)
 		}
-		return ip, nil
+		ips = append(ips, ip)
 	}
-	return nil, fmt.Errorf("no valid IP found for host %s", host)
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("no valid IP found for host %s", host)
+	}
+	return ips, nil
 }
 
 // Fetch downloads a URL with SSRF protection and extracts the article text.
@@ -102,25 +129,29 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 	var client *http.Client
 
 	if ssrfCheck {
-		resolvedIP, err := resolveAndValidate(host)
-		if err != nil {
-			return "", err
-		}
-
-		port := parsed.Port()
-		if port == "" {
-			if scheme == "https" {
-				port = "443"
-			} else {
-				port = "80"
-			}
-		}
-		pinnedAddr := net.JoinHostPort(resolvedIP.String(), port)
-
+		dialer := &net.Dialer{Timeout: connectTimeout}
 		transport := &http.Transport{
-			DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				d := net.Dialer{Timeout: connectTimeout}
-				return d.DialContext(ctx, network, pinnedAddr)
+			// Validate at dial time so the IP we connect to is exactly the IP we
+			// validated — for the initial request and every redirect hop. This
+			// closes the resolve/dial TOCTOU and re-pins correctly on redirects.
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				h, port, err := net.SplitHostPort(addr)
+				if err != nil {
+					return nil, err
+				}
+				ips, err := resolveAllValidated(h)
+				if err != nil {
+					return nil, err
+				}
+				var lastErr error
+				for _, ip := range ips {
+					conn, derr := dialer.DialContext(ctx, network, net.JoinHostPort(ip.String(), port))
+					if derr == nil {
+						return conn, nil
+					}
+					lastErr = derr
+				}
+				return nil, lastErr
 			},
 			TLSHandshakeTimeout: connectTimeout,
 		}
@@ -128,13 +159,10 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 		client = &http.Client{
 			Transport: transport,
 			Timeout:   totalTimeout,
-			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			// Per-hop IP validation is enforced at dial time; cap the chain here.
+			CheckRedirect: func(_ *http.Request, via []*http.Request) error {
 				if len(via) >= 5 {
 					return fmt.Errorf("too many redirects")
-				}
-				rHost := req.URL.Hostname()
-				if _, err := resolveAndValidate(rHost); err != nil {
-					return fmt.Errorf("redirect blocked: %w", err)
 				}
 				return nil
 			},

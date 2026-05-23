@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -9,6 +10,32 @@ import (
 
 	"telegram_summarize_bot/metrics"
 )
+
+func TestNewSetsRestrictivePermissions(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "data")
+	dbPath := filepath.Join(dir, "bot.db")
+	db, err := New(dbPath, metrics.New())
+	if err != nil {
+		t.Fatalf("New(%q): %v", dbPath, err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	fi, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat db file: %v", err)
+	}
+	if perm := fi.Mode().Perm(); perm != 0o600 {
+		t.Errorf("db file mode = %o, want 600", perm)
+	}
+
+	di, err := os.Stat(dir)
+	if err != nil {
+		t.Fatalf("stat db dir: %v", err)
+	}
+	if perm := di.Mode().Perm(); perm != 0o700 {
+		t.Errorf("db dir mode = %o, want 700", perm)
+	}
+}
 
 // newTestDB creates a fresh DB in a temp directory for testing.
 func newTestDB(t *testing.T) *DB {

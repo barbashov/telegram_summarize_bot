@@ -168,8 +168,9 @@ Commands are triggered by mentioning the bot in a group message:
 | Command | Description |
 |---------|-------------|
 | `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
-| `@bot s [hours]` | Shorthand for `summarize` |
-| `@bot sub [hours]` | Additional shorthand for `summarize` |
+| `@bot summarize` (as a **reply**) | Acts on the replied-to message instead of the chat history: summarizes link(s) in it, describes image(s), and/or summarizes its text. When several are present they're blended into one summary. Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
+| `@bot s [hours]` | Shorthand for `summarize` (works in reply mode too) |
+| `@bot sub [hours]` | Additional shorthand for `summarize` (works in reply mode too) |
 | `@bot schedule` | Show current daily summary schedule |
 | `@bot schedule on` | Enable daily summary at the default time (admins only) |
 | `@bot schedule off` | Disable daily summary (admins only) |
@@ -202,6 +203,7 @@ All configuration is via environment variables (`.env` file):
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 | `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
+| `REPLY_SUMMARIZE_MIN_CHARS` | `1000` | Minimum length (characters) for a replied-to plain-text message to be summarized on its own; shorter messages are reported as too short (ignored when the message also has a link or image) |
 | `VISION_ENABLED` | `auto` | Image recognition: `auto` (detect from model name), `true` (force on), `false` (force off) |
 | `VISION_MODEL` | *(empty)* | Override model for vision calls only; defaults to `MODEL` when empty |
 | `IMAGE_CACHE_DAYS` | `90` | Retention for cached image descriptions; decoupled from `RETENTION_DAYS` because the same image often resurfaces months later |
