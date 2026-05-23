@@ -3,6 +3,7 @@ module telegram_summarize_bot
 go 1.26.3
 
 require (
+	github.com/barbashov/telegramify-markdown-go v0.0.0-20260523215838-429042e06506
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/joho/godotenv v1.5.1
@@ -45,6 +46,7 @@ require (
 	github.com/valyala/bytebufferpool v1.0.0 // indirect
 	github.com/valyala/fasthttp v1.70.0 // indirect
 	github.com/valyala/fastjson v1.6.10 // indirect
+	github.com/yuin/goldmark v1.8.2 // indirect
 	golang.org/x/arch v0.26.0 // indirect
 	golang.org/x/net v0.55.0 // indirect
 	golang.org/x/sys v0.45.0 // indirect

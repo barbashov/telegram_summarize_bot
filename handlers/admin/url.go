@@ -9,9 +9,9 @@ import (
 
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
-	"telegram_summarize_bot/summarizer"
 	"telegram_summarize_bot/tgutil"
 
+	telegramify "github.com/barbashov/telegramify-markdown-go"
 	"github.com/mymmrac/telego"
 )
 
@@ -57,8 +57,10 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 		return
 	}
 
-	result := fmt.Sprintf("🔗 *Суммаризация URL:*\n\n%s", summarizer.EscapeMarkdown(summary))
-	chunks := splitMessage(result, 4096)
+	// The summary is Markdown; convert it (plus our header) to Telegram
+	// MarkdownV2 so formatting renders instead of leaking as literal markers.
+	rendered := telegramify.Markdownify("🔗 **Суммаризация URL:**\n\n" + summary)
+	chunks := telegramify.Split(rendered, 4096)
 	if len(chunks) == 0 {
 		return
 	}

@@ -347,6 +347,29 @@ func TestHandleSummarizeReplySteeringCombinesWithGroupInstructions(t *testing.T)
 	}
 }
 
+func TestHandleSummarizeReplyRendersMarkdown(t *testing.T) {
+	// The LLM emits GitHub-style **bold**; the output must render it (no literal
+	// ** markers leaking through, as in the reported screenshot).
+	sum := &fakeSummarizer{textSummary: "Открыт раздел **Blues Factory** с отзывами"}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyMinChars = 5
+
+	reply := &telego.Message{MessageID: 100, Text: strings.Repeat("я", 50)}
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "")
+
+	if len(tg.editTexts) != 1 {
+		t.Fatalf("expected 1 edit, got %#v", tg.editTexts)
+	}
+	out := tg.editTexts[0]
+	if strings.Contains(out, "**") {
+		t.Fatalf("** markers should be converted to MarkdownV2, not left literal: %q", out)
+	}
+	if !strings.Contains(out, "Blues Factory") {
+		t.Fatalf("content lost during conversion: %q", out)
+	}
+}
+
 func TestHasUnsupportedMedia(t *testing.T) {
 	tests := []struct {
 		name string
