@@ -54,6 +54,7 @@ type Config struct {
 	OAuthClientID            string
 	OAuthCodexVersion        string
 	VisionEnabled            VisionEnabled
+	VisionSteeringEnabled    bool
 	VisionModel              string // empty => use Model
 	ImageCacheDays           int
 	ImageMaxBytes            int
@@ -169,6 +170,11 @@ func Load() (*Config, error) {
 		visionEnabled = VisionEnabledFalse
 	}
 
+	visionSteering := true
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("VISION_STEERING"))); v == "false" || v == "0" || v == "no" || v == "off" {
+		visionSteering = false
+	}
+
 	return &Config{
 		BotToken:                 botToken,
 		LLMMode:                  llmMode,
@@ -191,6 +197,7 @@ func Load() (*Config, error) {
 		OAuthClientID:            oauthClientID,
 		OAuthCodexVersion:        oauthCodexVersion,
 		VisionEnabled:            visionEnabled,
+		VisionSteeringEnabled:    visionSteering,
 		VisionModel:              strings.TrimSpace(os.Getenv("VISION_MODEL")),
 		ImageCacheDays:           envIntOr("IMAGE_CACHE_DAYS", 90),
 		ImageMaxBytes:            envIntOr("IMAGE_MAX_BYTES", 5_000_000),

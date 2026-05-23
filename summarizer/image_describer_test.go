@@ -3,6 +3,7 @@ package summarizer
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -90,8 +91,8 @@ func TestCachedDescriber_CacheHitSkipsFetch(t *testing.T) {
 	fetcher := &stubFetcher{}
 	llm := &stubLLM{}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -119,8 +120,8 @@ func TestCachedDescriber_FreshNegativeCacheSkipsCall(t *testing.T) {
 	fetcher := &stubFetcher{bytes: []byte("x"), mime: "image/jpeg"}
 	llm := &stubLLM{}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -145,8 +146,8 @@ func TestCachedDescriber_StaleNegativeCacheRetries(t *testing.T) {
 	fetcher := &stubFetcher{bytes: []byte("img"), mime: "image/jpeg"}
 	llm := &stubLLM{resp: provider.CompletionResponse{Content: "fresh desc"}}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -160,8 +161,8 @@ func TestCachedDescriber_FileExpiredSkipsNegativeCache(t *testing.T) {
 	fetcher := &stubFetcher{err: ErrFileExpired}
 	llm := &stubLLM{}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -181,8 +182,8 @@ func TestCachedDescriber_VisionErrorWritesNegativeCache(t *testing.T) {
 	fetcher := &stubFetcher{bytes: []byte("img"), mime: "image/jpeg"}
 	llm := &stubLLM{err: errors.New("boom")}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -203,8 +204,8 @@ func TestCachedDescriber_HappyPathPersists(t *testing.T) {
 	fetcher := &stubFetcher{bytes: []byte("img-bytes"), mime: "image/png"}
 	llm := &stubLLM{resp: provider.CompletionResponse{Content: "  cat on a sill  "}}
 
-	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second)
-	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"})
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "")
 	if err != nil {
 		t.Fatalf("Describe: %v", err)
 	}
@@ -233,6 +234,62 @@ func TestCachedDescriber_HappyPathPersists(t *testing.T) {
 	}
 	if entry.Description != "cat on a sill" {
 		t.Errorf("persisted desc = %q", entry.Description)
+	}
+}
+
+func TestCachedDescriber_SteeredUsesCompositeKeyAndPrompt(t *testing.T) {
+	s := newStubDB()
+	fetcher := &stubFetcher{bytes: []byte("img"), mime: "image/jpeg"}
+	llm := &stubLLM{resp: provider.CompletionResponse{Content: "это мем про котов"}}
+
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, true)
+	photo := db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}
+
+	got, err := d.Describe(context.Background(), photo, "опиши мем")
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if got != "это мем про котов" {
+		t.Errorf("got %q", got)
+	}
+	if _, ok := s.entries["k"]; ok {
+		t.Error("steered result must not use the bare file_unique_id key")
+	}
+	wantKey := "k#" + steeringHash("опиши мем")
+	if _, ok := s.entries[wantKey]; !ok {
+		t.Fatalf("expected composite cache key %q to be written", wantKey)
+	}
+	if !strings.Contains(llm.req.Messages[1].Content, "опиши мем") {
+		t.Errorf("steered user prompt missing the request: %q", llm.req.Messages[1].Content)
+	}
+
+	// Repeat identical ask → cache hit, no second vision call.
+	if _, err := d.Describe(context.Background(), photo, "опиши мем"); err != nil {
+		t.Fatalf("Describe (repeat): %v", err)
+	}
+	if atomic.LoadInt32(&llm.calls) != 1 {
+		t.Errorf("expected 1 vision call (repeat served from cache), got %d", llm.calls)
+	}
+}
+
+func TestCachedDescriber_SteeringDisabledUsesStandardCache(t *testing.T) {
+	s := newStubDB()
+	fetcher := &stubFetcher{bytes: []byte("img"), mime: "image/jpeg"}
+	llm := &stubLLM{resp: provider.CompletionResponse{Content: "стандартное описание"}}
+
+	d := NewCachedDescriber(s, llm, fetcher, "gpt-5.5", time.Second, false) // steering off
+	got, err := d.Describe(context.Background(), db.PhotoRecord{FileUniqueID: "k", FileID: "fid"}, "опиши мем")
+	if err != nil {
+		t.Fatalf("Describe: %v", err)
+	}
+	if got != "стандартное описание" {
+		t.Errorf("got %q", got)
+	}
+	if _, ok := s.entries["k"]; !ok {
+		t.Error("with steering disabled, result should be cached under the bare file_unique_id")
+	}
+	if strings.Contains(llm.req.Messages[1].Content, "опиши мем") {
+		t.Errorf("steering must be ignored when disabled: %q", llm.req.Messages[1].Content)
 	}
 }
 

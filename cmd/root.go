@@ -116,7 +116,7 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 	// known to support multimodal input, gated by VISION_ENABLED. The Bot
 	// implements summarizer.PhotoFetcher via its FetchImage method.
 	if visionOn, visionModel := resolveVision(cfg, llmClient); visionOn {
-		describer := summarizer.NewCachedDescriber(database, llmClient, tgBot, visionModel, cfg.ImageDescribeTimeout())
+		describer := summarizer.NewCachedDescriber(database, llmClient, tgBot, visionModel, cfg.ImageDescribeTimeout(), cfg.VisionSteeringEnabled)
 		sum.WithImageDescriber(database, describer, cfg.ImageDescribeConcurrency)
 		logger.Info().Str("vision_model", visionModel).Msg("Image recognition enabled")
 	} else {

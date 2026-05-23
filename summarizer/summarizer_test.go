@@ -212,7 +212,7 @@ type stubImageDescriber struct {
 	resp  map[string]string
 }
 
-func (s *stubImageDescriber) Describe(_ context.Context, photo db.PhotoRecord) (string, error) {
+func (s *stubImageDescriber) Describe(_ context.Context, photo db.PhotoRecord, _ string) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.calls[photo.FileUniqueID]++
@@ -661,7 +661,7 @@ func TestSummarizeText(t *testing.T) {
 
 func TestDescribeImageVisionDisabled(t *testing.T) {
 	sum := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
-	if _, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"}); !errors.Is(err, ErrVisionDisabled) {
+	if _, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"}, ""); !errors.Is(err, ErrVisionDisabled) {
 		t.Fatalf("DescribeImage error = %v, want ErrVisionDisabled", err)
 	}
 }
@@ -670,7 +670,7 @@ func TestDescribeImageDelegatesToDescriber(t *testing.T) {
 	desc := &stubImageDescriber{calls: map[string]int{}, resp: map[string]string{"u1": "На фото кот"}}
 	sum := &Summarizer{describer: desc}
 
-	got, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"})
+	got, err := sum.DescribeImage(context.Background(), db.PhotoRecord{FileUniqueID: "u1"}, "")
 	if err != nil {
 		t.Fatalf("DescribeImage error: %v", err)
 	}

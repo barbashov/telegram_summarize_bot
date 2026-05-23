@@ -31,7 +31,7 @@ type replyPart struct {
 // image(s), and/or summarizing the message text — and replies with a single
 // unified summary. When several content kinds are present they are blended into
 // one summary; a lone link or image short-circuits to its own output.
-func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
+func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update, steering string) {
 	msg := update.Message
 	groupID := msg.Chat.ID
 	reply := msg.ReplyToMessage
@@ -46,8 +46,9 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 
 	hasOther := len(links) > 0 || len(photos) > 0
 	// Plain text is only worth summarizing on its own above a threshold; when
-	// there's also a link or image, the prose is folded in regardless of length.
-	includeText := prose != "" && (utf8.RuneCountInString(prose) >= b.cfg.ReplyMinChars || hasOther)
+	// there's also a link or image — or the user gave an explicit steering
+	// prompt — the prose is folded in regardless of length.
+	includeText := prose != "" && (steering != "" || utf8.RuneCountInString(prose) >= b.cfg.ReplyMinChars || hasOther)
 
 	if len(links) == 0 && len(photos) == 0 && !includeText {
 		switch {
@@ -76,7 +77,7 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 
 	statusMsgID := b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Обрабатываю сообщение...")
 
-	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
+	instructions := combineInstructions(b.loadGroupSummaryInstructions(ctx, groupID), steering)
 
 	// Condense each link and image into compact text. The message text stays
 	// raw and is added at blend time.
@@ -102,7 +103,7 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 
 	visionDisabled := false
 	for _, photo := range photos {
-		desc, derr := b.summarizer.DescribeImage(ctx, photo)
+		desc, derr := b.summarizer.DescribeImage(ctx, photo, steering)
 		if errors.Is(derr, summarizer.ErrVisionDisabled) {
 			visionDisabled = true
 			continue
@@ -161,6 +162,22 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 		b.sendFormatted(ctx, groupID, chunk)
 	}
 	committed = true
+}
+
+// combineInstructions merges a group's saved summarization instructions with a
+// per-message steering prompt, prioritizing the user's immediate ask. Either may
+// be empty.
+func combineInstructions(group, steering string) string {
+	group = strings.TrimSpace(group)
+	steering = strings.TrimSpace(steering)
+	switch {
+	case steering == "":
+		return group
+	case group == "":
+		return "Запрос пользователя (приоритетно): " + steering
+	default:
+		return group + "\n\nЗапрос пользователя (приоритетно): " + steering
+	}
 }
 
 // buildReplyMaterial assembles the labeled blob fed to SummarizeText: each

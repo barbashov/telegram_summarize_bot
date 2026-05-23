@@ -2,6 +2,8 @@ package summarizer
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"time"
@@ -31,6 +33,15 @@ const visionSystemPromptRU = `Опиши кратко (1–3 предложен�
 Если это скриншот соцсети (Twitter/Reddit/HackerNews и т.п.) — приведи автора, тему и суть поста.
 Только факты, без интерпретаций. Только русский. Максимум 60 слов.`
 
+// visionSteerMaxTokens is the budget for a user-steered vision call. Larger than
+// the default since the user may ask to transcribe or explain in more detail.
+const visionSteerMaxTokens = 600
+
+// visionSteeredSystemPromptRU is used when the user supplies a steering prompt;
+// it drops the fixed 60-word cap so the model can answer the actual request.
+const visionSteeredSystemPromptRU = `Ответь на запрос пользователя об изображении.
+Опирайся только на то, что видно на изображении. Только факты, без домыслов. Только русский язык.`
+
 // ErrFileExpired mirrors handlers.ErrFileExpired so the summarizer package
 // doesn't need to import handlers. PhotoFetcher implementations must return
 // this exact value (or wrap it with errors.Is-compatible wrapping) when
@@ -49,7 +60,9 @@ type PhotoFetcher interface {
 // Returning "" with nil error means "no description available, skip" —
 // callers must treat that as a non-fatal degradation.
 type ImageDescriber interface {
-	Describe(ctx context.Context, photo db.PhotoRecord) (string, error)
+	// Describe returns a description of the photo. A non-empty steering prompt
+	// asks the vision model to answer that specific request about the image.
+	Describe(ctx context.Context, photo db.PhotoRecord, steering string) (string, error)
 }
 
 // describerDB is the subset of *db.DB the cached describer needs. Defined
@@ -70,21 +83,26 @@ type CachedDescriber struct {
 	model       string
 	timeout     time.Duration
 	systemPromp string
+	// steerEnabled gates user-steered vision calls; when off, a steering prompt
+	// is ignored for the image and the standard cached description is returned.
+	steerEnabled bool
 }
 
 // NewCachedDescriber wires up a CachedDescriber. timeout caps a single vision
-// call (cache lookup is not subject to it).
-func NewCachedDescriber(database describerDB, client provider.LLMClient, fetcher PhotoFetcher, model string, timeout time.Duration) *CachedDescriber {
+// call (cache lookup is not subject to it). steerEnabled allows user-steered
+// vision calls (see Describe).
+func NewCachedDescriber(database describerDB, client provider.LLMClient, fetcher PhotoFetcher, model string, timeout time.Duration, steerEnabled bool) *CachedDescriber {
 	if timeout <= 0 {
 		timeout = 30 * time.Second
 	}
 	return &CachedDescriber{
-		db:          database,
-		client:      client,
-		fetcher:     fetcher,
-		model:       model,
-		timeout:     timeout,
-		systemPromp: visionSystemPromptRU,
+		db:           database,
+		client:       client,
+		fetcher:      fetcher,
+		model:        model,
+		timeout:      timeout,
+		systemPromp:  visionSystemPromptRU,
+		steerEnabled: steerEnabled,
 	}
 }
 
@@ -97,17 +115,28 @@ func NewCachedDescriber(database describerDB, client provider.LLMClient, fetcher
 // entries (with the file-expired case skipping the negative cache so a fresh
 // re-upload can recover). The caller never receives a hard error — vision is
 // best-effort.
-func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (string, error) {
+func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord, steering string) (string, error) {
 	if photo.FileUniqueID == "" {
 		return "", nil
 	}
 
-	cached, err := d.db.GetImageDescription(ctx, photo.FileUniqueID)
+	// A user-steered call (when enabled) asks the vision model the user's
+	// question and is cached under a composite key so repeats of the same
+	// (image, prompt) are free. When steering is off/empty, behaviour is
+	// identical to before: standard prompt, cache keyed by file_unique_id.
+	steering = strings.TrimSpace(steering)
+	steered := steering != "" && d.steerEnabled
+	cacheKey := photo.FileUniqueID
+	if steered {
+		cacheKey = photo.FileUniqueID + "#" + steeringHash(steering)
+	}
+
+	cached, err := d.db.GetImageDescription(ctx, cacheKey)
 	if err != nil {
-		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("image cache lookup failed; proceeding without cache")
+		logger.Warn().Err(err).Str("cache_key", cacheKey).Msg("image cache lookup failed; proceeding without cache")
 	} else if cached != nil {
 		if cached.Error == "" {
-			_ = d.db.TouchImageDescription(ctx, photo.FileUniqueID)
+			_ = d.db.TouchImageDescription(ctx, cacheKey)
 			return cached.Description, nil
 		}
 		if time.Since(cached.CreatedAt) < negativeCacheTTL {
@@ -122,8 +151,17 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 			return "", nil
 		}
 		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("image fetch failed; negative-caching")
-		d.storeNegative(ctx, photo.FileUniqueID, err.Error())
+		d.storeNegative(ctx, cacheKey, err.Error())
 		return "", nil
+	}
+
+	sysPrompt := d.systemPromp
+	userPrompt := "Опиши это изображение по правилам системного промпта."
+	maxTokens := visionMaxTokens
+	if steered {
+		sysPrompt = visionSteeredSystemPromptRU
+		userPrompt = "Запрос пользователя: " + steering
+		maxTokens = visionSteerMaxTokens
 	}
 
 	callCtx, cancel := context.WithTimeout(ctx, d.timeout)
@@ -132,39 +170,47 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 	resp, err := d.client.Complete(callCtx, provider.CompletionRequest{
 		Model: d.model,
 		Messages: []provider.Message{
-			{Role: "system", Content: d.systemPromp},
+			{Role: "system", Content: sysPrompt},
 			{
 				Role:    "user",
-				Content: "Опиши это изображение по правилам системного промпта.",
+				Content: userPrompt,
 				Images:  []provider.ImageInput{{Bytes: bytes, MIMEType: mime}},
 			},
 		},
-		MaxTokens:   visionMaxTokens,
+		MaxTokens:   maxTokens,
 		Temperature: 0.1,
 	})
 	if err != nil {
-		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("vision call failed")
-		d.storeNegative(ctx, photo.FileUniqueID, err.Error())
+		logger.Warn().Err(err).Str("cache_key", cacheKey).Msg("vision call failed")
+		d.storeNegative(ctx, cacheKey, err.Error())
 		return "", nil
 	}
 
 	desc := truncateRunes(strings.TrimSpace(resp.Content), maxDescriptionRunes)
 	if desc == "" {
-		d.storeNegative(ctx, photo.FileUniqueID, "empty description")
+		d.storeNegative(ctx, cacheKey, "empty description")
 		return "", nil
 	}
 
 	now := time.Now()
 	if err := d.db.PutImageDescription(ctx, db.ImageDescription{
-		FileUniqueID: photo.FileUniqueID,
+		FileUniqueID: cacheKey,
 		Description:  desc,
 		Model:        d.model,
 		CreatedAt:    now,
 		LastUsedAt:   now,
 	}); err != nil {
-		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("failed to persist description; returning anyway")
+		logger.Warn().Err(err).Str("cache_key", cacheKey).Msg("failed to persist description; returning anyway")
 	}
 	return desc, nil
+}
+
+// steeringHash returns a short stable hash of a normalized steering prompt, used
+// to build a per-(image, prompt) cache key.
+func steeringHash(steering string) string {
+	norm := strings.Join(strings.Fields(strings.ToLower(steering)), " ")
+	sum := sha256.Sum256([]byte(norm))
+	return hex.EncodeToString(sum[:])[:8]
 }
 
 func (d *CachedDescriber) storeNegative(ctx context.Context, fileUniqueID, errMsg string) {

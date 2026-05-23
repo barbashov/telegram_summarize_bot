@@ -66,7 +66,8 @@ make security    # both
 | Command | Description |
 |---------|-------------|
 | `@bot summarize` | Summarize messages from last 24h (any group member) |
-| `@bot summarize` (as a reply) | Summarize the replied-to message: follow link(s), describe image(s), and/or summarize its text, blended into one summary |
+| Reply + `@bot` | Act on the replied-to message (link(s)/image(s)/text, blended); `summarize` keyword is optional |
+| Reply + `@bot <prompt>` | Steer the result, e.g. `@bot опиши мем`, `@bot how could we use this?`; the prompt is sent to the vision model for images (gated by `VISION_STEERING`) |
 | `@bot help` | Show available commands |
 
 ## Configuration

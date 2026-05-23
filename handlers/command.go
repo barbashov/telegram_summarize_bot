@@ -9,6 +9,10 @@ import (
 	"github.com/mymmrac/telego"
 )
 
+// maxSteeringChars caps the free-text steering prompt accepted on a reply, to
+// keep prompts (and cost) bounded.
+const maxSteeringChars = 500
+
 func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command string) {
 	msg := update.Message
 	if msg == nil {
@@ -16,23 +20,49 @@ func (b *Bot) handleCommand(ctx context.Context, update telego.Update, command s
 	}
 
 	parts := strings.Fields(command)
-	if len(parts) == 0 {
+	cmd := ""
+	if len(parts) > 0 {
+		cmd = strings.ToLower(parts[0])
+	}
+
+	// help and schedule stay explicit commands, even when replying.
+	switch cmd {
+	case "help":
 		b.handleHelp(ctx, update)
+		return
+	case "schedule":
+		b.handleSchedule(ctx, update, parts[1:])
 		return
 	}
 
-	cmd := parts[0]
+	isSummarizeKeyword := cmd == "summarize" || cmd == "sub" || cmd == "s"
 
-	switch cmd {
-	case "summarize", "sub", "s":
-		b.handleSummarize(ctx, update, parts[1:])
-	case "schedule":
-		b.handleSchedule(ctx, update, parts[1:])
-	case "help":
-		b.handleHelp(ctx, update)
-	default:
-		b.handleHelp(ctx, update)
+	// A reply that mentions the bot always means "act on that message" — the
+	// summarize keyword is optional. Any text beyond an optional leading
+	// summarize keyword steers the result.
+	if msg.ReplyToMessage != nil {
+		steering := strings.TrimSpace(command)
+		if isSummarizeKeyword {
+			steering = strings.TrimSpace(strings.TrimPrefix(steering, parts[0]))
+		}
+		b.handleSummarizeReply(ctx, update, truncateSteering(steering))
+		return
 	}
+
+	// Non-reply: summarize keyword runs the 24h summary; anything else is help.
+	if isSummarizeKeyword {
+		b.handleSummarize(ctx, update, parts[1:])
+		return
+	}
+	b.handleHelp(ctx, update)
+}
+
+// truncateSteering bounds a steering prompt to maxSteeringChars runes.
+func truncateSteering(s string) string {
+	if r := []rune(s); len(r) > maxSteeringChars {
+		return strings.TrimSpace(string(r[:maxSteeringChars]))
+	}
+	return s
 }
 
 func (b *Bot) extractCommandFromMention(text string, entities []telego.MessageEntity) (string, error) {

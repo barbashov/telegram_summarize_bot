@@ -233,7 +233,7 @@ func (s *Summarizer) resolveImageDescriptions(ctx context.Context, messages []db
 		go func() {
 			defer wg.Done()
 			defer func() { <-sem }()
-			desc, derr := s.describer.Describe(ctx, photo)
+			desc, derr := s.describer.Describe(ctx, photo, "")
 			if derr != nil {
 				logger.Warn().Err(derr).Str("file_unique_id", key).Msg("image describe error")
 				return
@@ -386,13 +386,14 @@ func buildTopicSummarySystemPrompt(additionalInstructions string) string {
 var ErrVisionDisabled = errors.New("image description is disabled")
 
 // DescribeImage returns a textual description of a single photo using the
-// configured image describer (its cache and vision model). It returns
-// ErrVisionDisabled when no describer is wired up.
-func (s *Summarizer) DescribeImage(ctx context.Context, photo db.PhotoRecord) (string, error) {
+// configured image describer (its cache and vision model). A non-empty steering
+// prompt asks the vision model to answer that specific request about the image.
+// It returns ErrVisionDisabled when no describer is wired up.
+func (s *Summarizer) DescribeImage(ctx context.Context, photo db.PhotoRecord, steering string) (string, error) {
 	if s.describer == nil {
 		return "", ErrVisionDisabled
 	}
-	return s.describer.Describe(ctx, photo)
+	return s.describer.Describe(ctx, photo, steering)
 }
 
 // appendInstructions appends a group's custom summarization instructions to a

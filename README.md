@@ -168,7 +168,8 @@ Commands are triggered by mentioning the bot in a group message:
 | Command | Description |
 |---------|-------------|
 | `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
-| `@bot summarize` (as a **reply**) | Acts on the replied-to message instead of the chat history: summarizes link(s) in it, describes image(s), and/or summarizes its text. When several are present they're blended into one summary. Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
+| **Reply** + `@bot` | Reply to a message and mention the bot to act on *that message* — the word `summarize` is optional. It summarizes link(s) in it, describes image(s), and/or summarizes its text (blended into one when several are present). Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
+| **Reply** + `@bot <prompt>` | Add a free-text prompt to steer the result, e.g. `@bot опиши мем`, `@bot how could we use this?`, `@bot read the text`. The prompt is sent to the vision model for images (see `VISION_STEERING`) and steers the text/link summaries; it also lets even a short replied message be answered. |
 | `@bot s [hours]` | Shorthand for `summarize` (works in reply mode too) |
 | `@bot sub [hours]` | Additional shorthand for `summarize` (works in reply mode too) |
 | `@bot schedule` | Show current daily summary schedule |
@@ -205,6 +206,7 @@ All configuration is via environment variables (`.env` file):
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
 | `REPLY_SUMMARIZE_MIN_CHARS` | `1000` | Minimum length (characters) for a replied-to plain-text message to be summarized on its own; shorter messages are reported as too short (ignored when the message also has a link or image) |
 | `VISION_ENABLED` | `auto` | Image recognition: `auto` (detect from model name), `true` (force on), `false` (force off) |
+| `VISION_STEERING` | `true` | Allow a reply prompt to be sent to the vision model so it re-examines the image for your ask (e.g. "describe the meme"). Cached per (image, prompt). Set `false` to disable steered vision calls (the prompt then only steers text); useful to cap vision spend |
 | `VISION_MODEL` | *(empty)* | Override model for vision calls only; defaults to `MODEL` when empty |
 | `IMAGE_CACHE_DAYS` | `90` | Retention for cached image descriptions; decoupled from `RETENTION_DAYS` because the same image often resurfaces months later |
 | `IMAGE_MAX_BYTES` | `5000000` | Per-image size cap; larger uploads are skipped |

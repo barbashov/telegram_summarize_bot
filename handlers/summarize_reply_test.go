@@ -40,9 +40,9 @@ func replyUpdate(reply *telego.Message) telego.Update {
 	}
 }
 
-func photoReply(msgID int) *telego.Message {
+func photoReply() *telego.Message {
 	return &telego.Message{
-		MessageID: msgID,
+		MessageID: 100,
 		Photo:     []telego.PhotoSize{{FileID: "fid", FileUniqueID: "uid", Width: 100, Height: 100}},
 	}
 }
@@ -54,7 +54,7 @@ func TestHandleSummarizeReplyTextOnly(t *testing.T) {
 	b.cfg.ReplyMinChars = 10
 
 	reply := &telego.Message{MessageID: 100, Text: strings.Repeat("я", 50)}
-	b.handleSummarize(context.Background(), replyUpdate(reply), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "")
 
 	if sum.textCalls != 1 {
 		t.Fatalf("SummarizeText calls = %d, want 1", sum.textCalls)
@@ -74,7 +74,7 @@ func TestHandleSummarizeReplyTextTooShort(t *testing.T) {
 	b.cfg.ReplyMinChars = 100
 
 	reply := &telego.Message{MessageID: 100, Text: "коротко"}
-	b.handleSummarize(context.Background(), replyUpdate(reply), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "")
 
 	if sum.textCalls != 0 {
 		t.Fatalf("SummarizeText should not be called for short text, got %d", sum.textCalls)
@@ -92,7 +92,7 @@ func TestHandleSummarizeReplyImageOnly(t *testing.T) {
 	b, database, tg := newTestBot(t, sum)
 	defer func() { _ = database.Close() }()
 
-	b.handleSummarize(context.Background(), replyUpdate(photoReply(100)), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(photoReply()), "")
 
 	if sum.imageCalls != 1 {
 		t.Fatalf("DescribeImage calls = %d, want 1", sum.imageCalls)
@@ -110,7 +110,7 @@ func TestHandleSummarizeReplyVisionDisabled(t *testing.T) {
 	b, database, tg := newTestBot(t, sum)
 	defer func() { _ = database.Close() }()
 
-	b.handleSummarize(context.Background(), replyUpdate(photoReply(100)), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(photoReply()), "")
 
 	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "Распознавание изображений отключено") {
 		t.Fatalf("expected vision-disabled message, got %#v", tg.editTexts)
@@ -123,7 +123,7 @@ func TestHandleSummarizeReplyUnsupportedMedia(t *testing.T) {
 	defer func() { _ = database.Close() }()
 
 	reply := &telego.Message{MessageID: 100, Voice: &telego.Voice{FileID: "v", FileUniqueID: "vu", Duration: 3}}
-	b.handleSummarize(context.Background(), replyUpdate(reply), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "")
 
 	if sum.textCalls != 0 || sum.imageCalls != 0 || sum.urlCalls != 0 {
 		t.Fatalf("summarizer should not be called for unsupported media")
@@ -139,9 +139,9 @@ func TestHandleSummarizeReplyMixedBlendsImageAndText(t *testing.T) {
 	defer func() { _ = database.Close() }()
 	b.cfg.ReplyMinChars = 100 // caption is shorter than this on its own
 
-	reply := photoReply(100)
+	reply := photoReply()
 	reply.Caption = "смешная подпись" // short, but folded in because an image is present
-	b.handleSummarize(context.Background(), replyUpdate(reply), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "")
 
 	if sum.imageCalls != 1 {
 		t.Fatalf("DescribeImage calls = %d, want 1", sum.imageCalls)
@@ -172,7 +172,7 @@ func TestHandleSummarizeReplyAppliesGroupInstructions(t *testing.T) {
 	}
 
 	reply := &telego.Message{MessageID: 100, Text: strings.Repeat("я", 50)}
-	b.handleSummarize(ctx, replyUpdate(reply), nil)
+	b.handleSummarizeReply(ctx, replyUpdate(reply), "")
 
 	if sum.textInstr != "выделяй риски" {
 		t.Fatalf("instructions passed to SummarizeText = %q, want %q", sum.textInstr, "выделяй риски")
@@ -200,7 +200,7 @@ func TestHandleSummarizeReplyBareLink(t *testing.T) {
 
 	url := "https://example.com/article"
 	// Bare URL with no surrounding prose → lone link, short-circuits.
-	b.handleSummarize(ctx, replyUpdate(urlReply("", url)), nil)
+	b.handleSummarizeReply(ctx, replyUpdate(urlReply("", url)), "")
 
 	if gotURL != url {
 		t.Fatalf("fetched URL = %q, want %q", gotURL, url)
@@ -232,7 +232,7 @@ func TestHandleSummarizeReplyLinkWithProseBlends(t *testing.T) {
 	}
 
 	// Surrounding prose is short but present → folded in alongside the link.
-	b.handleSummarize(context.Background(), replyUpdate(urlReply("важная мысль про ", "https://example.com/article")), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(urlReply("важная мысль про ", "https://example.com/article")), "")
 
 	if sum.urlCalls != 1 {
 		t.Fatalf("SummarizeURL calls = %d, want 1", sum.urlCalls)
@@ -260,7 +260,7 @@ func TestHandleSummarizeReplyLinkUnreadable(t *testing.T) {
 		return "", fetcher.ErrNoReadableContent
 	}
 
-	b.handleSummarize(context.Background(), replyUpdate(urlReply("", "https://dzen.ru/a/x")), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(urlReply("", "https://dzen.ru/a/x")), "")
 
 	if sum.urlCalls != 0 {
 		t.Fatalf("SummarizeURL should not be called for an unreadable page, got %d", sum.urlCalls)
@@ -280,7 +280,7 @@ func TestHandleSummarizeReplyLinkFetchFails(t *testing.T) {
 	}
 
 	// Bare URL so the only content is the (failing) link.
-	b.handleSummarize(context.Background(), replyUpdate(urlReply("", "https://example.com")), nil)
+	b.handleSummarizeReply(context.Background(), replyUpdate(urlReply("", "https://example.com")), "")
 
 	if sum.urlCalls != 0 {
 		t.Fatalf("SummarizeURL should not be called when fetch fails, got %d", sum.urlCalls)
@@ -308,6 +308,42 @@ func TestResidualText(t *testing.T) {
 	// No url entities → text unchanged.
 	if got := residualText("просто текст", nil); got != "просто текст" {
 		t.Fatalf("residualText = %q, want unchanged", got)
+	}
+}
+
+func TestHandleSummarizeReplyShortTextWithSteering(t *testing.T) {
+	sum := &fakeSummarizer{textSummary: "ответ"}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyMinChars = 1000 // far above the message length
+
+	reply := &telego.Message{MessageID: 100, Text: "кот"}
+	b.handleSummarizeReply(context.Background(), replyUpdate(reply), "что это значит?")
+
+	if sum.textCalls != 1 {
+		t.Fatalf("a steering prompt should force summarization of short text; textCalls=%d", sum.textCalls)
+	}
+	if !strings.Contains(sum.textInstr, "что это значит?") {
+		t.Fatalf("steering missing from instructions: %q", sum.textInstr)
+	}
+}
+
+func TestHandleSummarizeReplySteeringCombinesWithGroupInstructions(t *testing.T) {
+	sum := &fakeSummarizer{textSummary: "ответ"}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.ReplyMinChars = 10
+
+	ctx := context.Background()
+	if err := database.SetGroupSummaryInstructions(ctx, 42, 7, "выделяй риски"); err != nil {
+		t.Fatalf("SetGroupSummaryInstructions: %v", err)
+	}
+
+	reply := &telego.Message{MessageID: 100, Text: strings.Repeat("я", 50)}
+	b.handleSummarizeReply(ctx, replyUpdate(reply), "как использовать?")
+
+	if !strings.Contains(sum.textInstr, "выделяй риски") || !strings.Contains(sum.textInstr, "как использовать?") {
+		t.Fatalf("combined instructions missing a part: %q", sum.textInstr)
 	}
 }
 

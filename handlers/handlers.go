@@ -41,7 +41,7 @@ type summaryService interface {
 	SummarizeByTopics(ctx context.Context, messages []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error)
 	SummarizeURL(ctx context.Context, pageURL string, content string, instructions string) (string, error)
 	SummarizeText(ctx context.Context, content string, instructions string) (string, error)
-	DescribeImage(ctx context.Context, photo db.PhotoRecord) (string, error)
+	DescribeImage(ctx context.Context, photo db.PhotoRecord, steering string) (string, error)
 }
 
 type Bot struct {

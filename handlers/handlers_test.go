@@ -77,6 +77,7 @@ type fakeSummarizer struct {
 	imageDesc              string
 	imageErr               error
 	imageCalls             int
+	imageSteering          string
 }
 
 func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error) {
@@ -108,8 +109,9 @@ func (f *fakeSummarizer) SummarizeText(_ context.Context, content, instructions 
 	return f.textSummary, nil
 }
 
-func (f *fakeSummarizer) DescribeImage(_ context.Context, _ db.PhotoRecord) (string, error) {
+func (f *fakeSummarizer) DescribeImage(_ context.Context, _ db.PhotoRecord, steering string) (string, error) {
 	f.imageCalls++
+	f.imageSteering = steering
 	if f.imageErr != nil {
 		return "", f.imageErr
 	}
