@@ -207,7 +207,8 @@ All configuration is via environment variables (`.env` file):
 | `IMAGE_CACHE_DAYS` | `90` | Retention for cached image descriptions; decoupled from `RETENTION_DAYS` because the same image often resurfaces months later |
 | `IMAGE_MAX_BYTES` | `5000000` | Per-image size cap; larger uploads are skipped |
 | `IMAGE_DESCRIBE_CONCURRENCY` | `4` | Max parallel vision calls per summarize run |
-| `IMAGE_DESCRIBE_TIMEOUT_SEC` | `30` | Per-image vision call timeout (seconds) |
+| `IMAGE_DESCRIBE_TIMEOUT_SEC` | `60` | Per-image vision call timeout (seconds) |
+| `LLM_HTTP_TIMEOUT_SEC` | `180` | HTTP client timeout for all LLM requests (cluster, summary, vision) |
 | `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + LLM traffic (`socks5://host:port`, `http://host:port`) |
 
 > **Migration note:** `OPENROUTER_API_KEY` and `OPENROUTER_URL` still work but are deprecated. Use `LLM_TOKEN` and `LLM_ENDPOINT` instead.

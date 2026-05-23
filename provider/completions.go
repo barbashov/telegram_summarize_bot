@@ -16,10 +16,14 @@ type completionsClient struct {
 
 // NewCompletionsClient creates an LLMClient using the OpenAI Chat Completions API.
 // Works with any OpenAI-compatible endpoint (OpenRouter, LiteLLM, etc.).
-func NewCompletionsClient(token, endpoint string) (LLMClient, error) {
+// A non-positive timeout falls back to defaultLLMHTTPTimeout.
+func NewCompletionsClient(token, endpoint string, timeout time.Duration) (LLMClient, error) {
+	if timeout <= 0 {
+		timeout = defaultLLMHTTPTimeout
+	}
 	cfg := openai.DefaultConfig(token)
 	cfg.BaseURL = endpoint
-	cfg.HTTPClient = HTTPClient(120 * time.Second)
+	cfg.HTTPClient = HTTPClient(timeout)
 	return &completionsClient{client: openai.NewClientWithConfig(cfg)}, nil
 }
 

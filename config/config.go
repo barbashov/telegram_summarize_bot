@@ -58,6 +58,7 @@ type Config struct {
 	ImageMaxBytes            int
 	ImageDescribeConcurrency int
 	ImageDescribeTimeoutSec  int
+	LLMHTTPTimeoutSec        int
 }
 
 func Load() (*Config, error) {
@@ -192,7 +193,8 @@ func Load() (*Config, error) {
 		ImageCacheDays:           envIntOr("IMAGE_CACHE_DAYS", 90),
 		ImageMaxBytes:            envIntOr("IMAGE_MAX_BYTES", 5_000_000),
 		ImageDescribeConcurrency: envIntOr("IMAGE_DESCRIBE_CONCURRENCY", 4),
-		ImageDescribeTimeoutSec:  envIntOr("IMAGE_DESCRIBE_TIMEOUT_SEC", 30),
+		ImageDescribeTimeoutSec:  envIntOr("IMAGE_DESCRIBE_TIMEOUT_SEC", 60),
+		LLMHTTPTimeoutSec:        envIntOr("LLM_HTTP_TIMEOUT_SEC", 180),
 	}, nil
 }
 
@@ -220,6 +222,13 @@ func (c *Config) ImageCacheDuration() time.Duration {
 // ImageDescribeTimeout is the per-image vision-call timeout.
 func (c *Config) ImageDescribeTimeout() time.Duration {
 	return time.Duration(c.ImageDescribeTimeoutSec) * time.Second
+}
+
+// LLMHTTPTimeout is the HTTP client timeout applied to every LLM request
+// (cluster, summary, vision). Bumping it gives slow vision-enriched prompts
+// breathing room before the retry cycle kicks in.
+func (c *Config) LLMHTTPTimeout() time.Duration {
+	return time.Duration(c.LLMHTTPTimeoutSec) * time.Second
 }
 
 // VisionModelOrDefault returns VisionModel if set, otherwise Model.

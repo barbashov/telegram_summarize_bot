@@ -50,7 +50,7 @@ func TestCompletionsClientComplete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewCompletionsClient("test-token", server.URL)
+	client, err := NewCompletionsClient("test-token", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewCompletionsClient: %v", err)
 	}
@@ -83,7 +83,7 @@ func TestCompletionsClientNoChoices(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewCompletionsClient("key", server.URL)
+	client, err := NewCompletionsClient("key", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewCompletionsClient: %v", err)
 	}
@@ -117,7 +117,7 @@ func TestCompletionsClientAPIError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewCompletionsClient("key", server.URL)
+	client, err := NewCompletionsClient("key", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewCompletionsClient: %v", err)
 	}
@@ -160,7 +160,7 @@ func TestCompletionsClientImageContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewCompletionsClient("k", server.URL)
+	client, err := NewCompletionsClient("k", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewCompletionsClient: %v", err)
 	}

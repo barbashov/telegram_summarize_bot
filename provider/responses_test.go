@@ -48,7 +48,7 @@ func TestResponsesClientComplete(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewResponsesClient("test-token", server.URL)
+	client, err := NewResponsesClient("test-token", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewResponsesClient: %v", err)
 	}
@@ -100,7 +100,7 @@ func TestResponsesClientImageContent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewResponsesClient("k", server.URL)
+	client, err := NewResponsesClient("k", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewResponsesClient: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestResponsesClientIncompleteStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewResponsesClient("key", server.URL)
+	client, err := NewResponsesClient("key", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewResponsesClient: %v", err)
 	}
@@ -198,7 +198,7 @@ func TestResponsesClientFailedStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewResponsesClient("key", server.URL)
+	client, err := NewResponsesClient("key", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewResponsesClient: %v", err)
 	}
@@ -232,7 +232,7 @@ func TestResponsesClientHTTPError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewResponsesClient("bad-key", server.URL)
+	client, err := NewResponsesClient("bad-key", server.URL, 0)
 	if err != nil {
 		t.Fatalf("NewResponsesClient: %v", err)
 	}

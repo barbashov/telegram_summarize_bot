@@ -98,15 +98,20 @@ type VisionCapable interface {
 	SupportsVision(model string) bool
 }
 
+// defaultLLMHTTPTimeout is used when a constructor is called with a
+// non-positive timeout (e.g. tests that don't care).
+const defaultLLMHTTPTimeout = 180 * time.Second
+
 // New creates the appropriate LLM client based on config.
 func New(cfg *config.Config) (LLMClient, error) {
+	timeout := cfg.LLMHTTPTimeout()
 	switch cfg.LLMMode {
 	case config.LLMModeCompletions, "":
-		return NewCompletionsClient(cfg.LLMToken, cfg.LLMEndpoint)
+		return NewCompletionsClient(cfg.LLMToken, cfg.LLMEndpoint, timeout)
 	case config.LLMModeResponses:
-		return NewResponsesClient(cfg.LLMToken, cfg.LLMEndpoint)
+		return NewResponsesClient(cfg.LLMToken, cfg.LLMEndpoint, timeout)
 	case config.LLMModeOAuth:
-		return NewOAuthClient(cfg.OAuthTokenDir, cfg.OAuthClientID, cfg.OAuthCodexVersion)
+		return NewOAuthClient(cfg.OAuthTokenDir, cfg.OAuthClientID, cfg.OAuthCodexVersion, timeout)
 	default:
 		return nil, fmt.Errorf("unknown LLM mode: %q", cfg.LLMMode)
 	}

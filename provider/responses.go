@@ -22,8 +22,12 @@ type responsesClient struct {
 }
 
 // NewResponsesClient creates an LLMClient using the OpenAI Responses API.
-func NewResponsesClient(token, endpoint string) (LLMClient, error) {
-	httpClient := DebugHTTPClient(120 * time.Second)
+// A non-positive timeout falls back to defaultLLMHTTPTimeout.
+func NewResponsesClient(token, endpoint string, timeout time.Duration) (LLMClient, error) {
+	if timeout <= 0 {
+		timeout = defaultLLMHTTPTimeout
+	}
+	httpClient := DebugHTTPClient(timeout)
 	client := openai.NewClient(
 		option.WithAPIKey(token),
 		option.WithBaseURL(endpoint),

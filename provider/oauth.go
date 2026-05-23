@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 )
 
 const (
@@ -22,7 +23,7 @@ type oauthClient struct {
 // NewOAuthClient creates an LLM client that authenticates via OAuth tokens.
 // Uses the ChatGPT backend Codex API with the OAuth access_token,
 // ChatGPT-Account-ID header, and a Codex client version header.
-func NewOAuthClient(tokenDir, clientID, codexVersion string) (LLMClient, error) {
+func NewOAuthClient(tokenDir, clientID, codexVersion string, timeout time.Duration) (LLMClient, error) {
 	store := NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("load OAuth tokens: %w (run '%s openai auth' first)", err, os.Args[0])
@@ -36,7 +37,7 @@ func NewOAuthClient(tokenDir, clientID, codexVersion string) (LLMClient, error) 
 		return nil, err
 	}
 
-	inner, err := NewResponsesClient(token, ChatGPTCodexBaseURL)
+	inner, err := NewResponsesClient(token, ChatGPTCodexBaseURL, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("create responses client: %w", err)
 	}

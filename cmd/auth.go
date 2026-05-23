@@ -171,7 +171,7 @@ func RunModels(clientID, tokenDir string) error {
 
 // RunTest sends a test prompt to the given model via OAuth and prints the response.
 func RunTest(ctx context.Context, clientID, tokenDir, model string) error {
-	client, err := provider.NewOAuthClient(tokenDir, clientID, os.Getenv("OAUTH_CODEX_VERSION"))
+	client, err := provider.NewOAuthClient(tokenDir, clientID, os.Getenv("OAUTH_CODEX_VERSION"), 0)
 	if err != nil {
 		return err
 	}
