@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,6 +155,124 @@ func TestSummarizeByTopicsPropagatesClientError(t *testing.T) {
 	}
 }
 
+func TestFormatMessageImageAnnotations(t *testing.T) {
+	ts := time.Unix(0, 0).UTC()
+	aliases := map[string]string{"abc": "У1"}
+
+	t.Run("appends image description after text", func(t *testing.T) {
+		msg := db.Message{UserHash: "abc", Text: "look", Timestamp: ts}
+		out := formatMessage(msg, nil, aliases, []string{"кот на подоконнике"})
+		want := "[00:00] У1: look [изображение: кот на подоконнике]"
+		if out != want {
+			t.Errorf("got %q, want %q", out, want)
+		}
+	})
+
+	t.Run("photo-only message renders annotation alone", func(t *testing.T) {
+		msg := db.Message{UserHash: "abc", Text: "", Timestamp: ts}
+		out := formatMessage(msg, nil, aliases, []string{"скриншот твита"})
+		want := "[00:00] У1: [изображение: скриншот твита]"
+		if out != want {
+			t.Errorf("got %q, want %q", out, want)
+		}
+	})
+
+	t.Run("empty descriptions are skipped silently", func(t *testing.T) {
+		msg := db.Message{UserHash: "abc", Text: "hi", Timestamp: ts}
+		out := formatMessage(msg, nil, aliases, []string{"", "  ", "actual"})
+		want := "[00:00] У1: hi [изображение: actual]"
+		if out != want {
+			t.Errorf("got %q, want %q", out, want)
+		}
+	})
+
+	t.Run("nil descriptions leave message unchanged", func(t *testing.T) {
+		msg := db.Message{UserHash: "abc", Text: "hi", Timestamp: ts}
+		out := formatMessage(msg, nil, aliases, nil)
+		if out != "[00:00] У1: hi" {
+			t.Errorf("unexpected: %q", out)
+		}
+	})
+
+	t.Run("multiple images append in order", func(t *testing.T) {
+		msg := db.Message{UserHash: "abc", Text: "two", Timestamp: ts}
+		out := formatMessage(msg, nil, aliases, []string{"first", "second"})
+		want := "[00:00] У1: two [изображение: first] [изображение: second]"
+		if out != want {
+			t.Errorf("got %q, want %q", out, want)
+		}
+	})
+}
+
+// stubImageDescriber counts Describe calls keyed by file_unique_id to verify
+// dedup at the summarizer level.
+type stubImageDescriber struct {
+	mu    sync.Mutex
+	calls map[string]int
+	resp  map[string]string
+}
+
+func (s *stubImageDescriber) Describe(_ context.Context, photo db.PhotoRecord) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls[photo.FileUniqueID]++
+	return s.resp[photo.FileUniqueID], nil
+}
+
+// stubPhotoLookup returns canned photos for given message IDs.
+type stubPhotoLookup struct {
+	byMessage map[int64][]db.PhotoRecord
+}
+
+func (s *stubPhotoLookup) GetPhotosForMessages(_ context.Context, _ []int64) (map[int64][]db.PhotoRecord, error) {
+	return s.byMessage, nil
+}
+
+func TestResolveImageDescriptions_DedupsByFileUniqueID(t *testing.T) {
+	desc := &stubImageDescriber{
+		calls: map[string]int{},
+		resp:  map[string]string{"u1": "first image", "u2": "second image"},
+	}
+	photos := &stubPhotoLookup{
+		byMessage: map[int64][]db.PhotoRecord{
+			1: {{FileUniqueID: "u1", FileID: "f1"}},
+			2: {{FileUniqueID: "u1", FileID: "f1"}}, // duplicate by unique id
+			3: {{FileUniqueID: "u2", FileID: "f2"}},
+		},
+	}
+	s := &Summarizer{
+		photos:              photos,
+		describer:           desc,
+		describeConcurrency: 2,
+	}
+	msgs := []db.Message{{ID: 1}, {ID: 2}, {ID: 3}}
+	got := s.resolveImageDescriptions(context.Background(), msgs)
+
+	if len(got) != 3 {
+		t.Fatalf("expected descriptions for 3 messages, got %d (%+v)", len(got), got)
+	}
+	if got[1][0] != "first image" || got[2][0] != "first image" {
+		t.Errorf("expected duplicate-image messages to share desc, got %+v", got)
+	}
+	if got[3][0] != "second image" {
+		t.Errorf("expected message 3 to have second image, got %+v", got)
+	}
+	if desc.calls["u1"] != 1 {
+		t.Errorf("expected u1 described exactly once, got %d", desc.calls["u1"])
+	}
+	if desc.calls["u2"] != 1 {
+		t.Errorf("expected u2 described exactly once, got %d", desc.calls["u2"])
+	}
+}
+
+func TestResolveImageDescriptions_NilWhenDescriberDisabled(t *testing.T) {
+	s := &Summarizer{} // no describer/photos
+	got := s.resolveImageDescriptions(context.Background(), []db.Message{{ID: 1}})
+	if got != nil {
+		t.Errorf("expected nil with no describer, got %+v", got)
+	}
+}
+
 func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 	ts := time.Unix(0, 0).UTC()
 
@@ -161,7 +280,7 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		parent := db.Message{UserHash: "a3f2b1c4", Text: "hello", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "world", Timestamp: ts}
 		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases)
+		out := formatMessage(msg, &parent, aliases, nil)
 		if !strings.Contains(out, "↩ У1") {
 			t.Fatalf("expected reply annotation with alias, got: %q", out)
 		}
@@ -174,7 +293,7 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		parent := db.Message{UserHash: "", Text: "hi", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "yo", Timestamp: ts}
 		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases)
+		out := formatMessage(msg, &parent, aliases, nil)
 		if !strings.Contains(out, "↩ anon") {
 			t.Fatalf("expected anon fallback, got: %q", out)
 		}
@@ -185,7 +304,7 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		parent := db.Message{UserHash: "a3f2b1c4", Text: longText, Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "reply", Timestamp: ts}
 		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases)
+		out := formatMessage(msg, &parent, aliases, nil)
 		if !strings.Contains(out, "…") {
 			t.Fatalf("expected truncation ellipsis, got: %q", out)
 		}
@@ -195,7 +314,7 @@ func TestFormatMessageWithReplyAnnotation(t *testing.T) {
 		parent := db.Message{UserHash: "a3f2b1c4", Text: "original", Timestamp: ts}
 		msg := db.Message{UserHash: "deadbeef", Text: "fwd msg", ForwardedFrom: "channel", Timestamp: ts}
 		aliases := buildUserAliasMap([]db.Message{parent, msg})
-		out := formatMessage(msg, &parent, aliases)
+		out := formatMessage(msg, &parent, aliases, nil)
 		if !strings.Contains(out, "fwd: channel") {
 			t.Fatalf("expected fwd annotation, got: %q", out)
 		}

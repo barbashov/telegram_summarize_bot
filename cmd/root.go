@@ -51,6 +51,23 @@ func Execute() {
 	}
 }
 
+// resolveVision returns (enabled, modelName). VISION_ENABLED overrides the
+// auto-detection; "auto" delegates to the provider's capability check.
+func resolveVision(cfg *config.Config, llmClient provider.LLMClient) (enabled bool, model string) {
+	model = cfg.VisionModelOrDefault()
+	switch cfg.VisionEnabled {
+	case config.VisionEnabledFalse:
+		return false, model
+	case config.VisionEnabledTrue:
+		return true, model
+	}
+	vc, ok := llmClient.(provider.VisionCapable)
+	if !ok {
+		return false, model
+	}
+	return vc.SupportsVision(model), model
+}
+
 func runBot(ctx context.Context, cfg *config.Config) error {
 	m := metrics.New()
 
@@ -93,6 +110,17 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 	initCancel()
 	if err != nil {
 		return fmt.Errorf("failed to initialize bot: %w", err)
+	}
+
+	// Image-description support: enabled when the chosen vision model is
+	// known to support multimodal input, gated by VISION_ENABLED. The Bot
+	// implements summarizer.PhotoFetcher via its FetchImage method.
+	if visionOn, visionModel := resolveVision(cfg, llmClient); visionOn {
+		describer := summarizer.NewCachedDescriber(database, llmClient, tgBot, visionModel, cfg.ImageDescribeTimeout())
+		sum.WithImageDescriber(database, describer, cfg.ImageDescribeConcurrency)
+		logger.Info().Str("vision_model", visionModel).Msg("Image recognition enabled")
+	} else {
+		logger.Info().Msg("Image recognition disabled (model is not vision-capable or feature is off)")
 	}
 
 	startupCtx, startupCancel := context.WithTimeout(ctx, 10*time.Second)

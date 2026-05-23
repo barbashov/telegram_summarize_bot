@@ -54,6 +54,10 @@ func (f *fakeTelegram) AnswerCallbackQuery(_ context.Context, _ *telego.AnswerCa
 	return nil
 }
 
+func (f *fakeTelegram) GetFile(_ context.Context, _ *telego.GetFileParams) (*telego.File, error) {
+	return &telego.File{FilePath: "test/file.jpg"}, nil
+}
+
 type fakeSummarizer struct {
 	summary                *summarizer.StructuredSummary
 	err                    error

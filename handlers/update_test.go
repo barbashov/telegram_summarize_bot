@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mymmrac/telego"
 	"telegram_summarize_bot/handlers/admin"
@@ -117,6 +118,79 @@ func TestForwardOriginHandle(t *testing.T) {
 	// Empty hidden sender → empty handle (no stable identifier).
 	if h := forwardOriginHandle(&telego.MessageOriginHiddenUser{}, groupID, salt); h != "" {
 		t.Fatalf("empty hidden sender: got %q, want empty", h)
+	}
+}
+
+// TestHandleUpdatePhotoOnlyMessagePersists exercises the relaxed empty-text
+// guard: a message with no Text but with attached photos must persist a row
+// AND attach photo metadata. Today's bot dropped such messages entirely.
+func TestHandleUpdatePhotoOnlyMessagePersists(t *testing.T) {
+	b, database, _ := newTestBot(t, &fakeSummarizer{})
+	defer func() { _ = database.Close() }()
+
+	const groupID int64 = -1001234567890
+	if err := database.AddAllowedGroup(context.Background(), groupID, 0); err != nil {
+		t.Fatalf("AddAllowedGroup: %v", err)
+	}
+
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 7,
+		Chat:      telego.Chat{ID: groupID, Type: "supergroup", Title: "g"},
+		From:      &telego.User{ID: 42},
+		Photo: []telego.PhotoSize{
+			{FileID: "fid", FileUniqueID: "uniq", Width: 800, Height: 600},
+		},
+	}}
+
+	b.handleUpdate(context.Background(), update)
+
+	msgs, err := database.GetMessages(context.Background(), groupID, time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 stored message, got %d", len(msgs))
+	}
+	if msgs[0].Text != "" {
+		t.Errorf("expected empty text, got %q", msgs[0].Text)
+	}
+
+	photos, err := database.GetPhotosForMessages(context.Background(), []int64{msgs[0].ID})
+	if err != nil {
+		t.Fatalf("GetPhotosForMessages: %v", err)
+	}
+	if got := photos[msgs[0].ID]; len(got) != 1 || got[0].FileUniqueID != "uniq" {
+		t.Errorf("expected photo 'uniq' attached, got %+v", got)
+	}
+}
+
+// TestHandleUpdateCaptionFallback ensures a photo with a caption stores the
+// caption text rather than dropping it on the floor.
+func TestHandleUpdateCaptionFallback(t *testing.T) {
+	b, database, _ := newTestBot(t, &fakeSummarizer{})
+	defer func() { _ = database.Close() }()
+
+	const groupID int64 = -1001111111111
+	if err := database.AddAllowedGroup(context.Background(), groupID, 0); err != nil {
+		t.Fatalf("AddAllowedGroup: %v", err)
+	}
+
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 11,
+		Chat:      telego.Chat{ID: groupID, Type: "supergroup", Title: "g"},
+		From:      &telego.User{ID: 42},
+		Caption:   "look at this 🔥",
+		Photo:     []telego.PhotoSize{{FileID: "f", FileUniqueID: "u", Width: 10, Height: 10}},
+	}}
+
+	b.handleUpdate(context.Background(), update)
+
+	msgs, err := database.GetMessages(context.Background(), groupID, time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 1 || msgs[0].Text != "look at this 🔥" {
+		t.Fatalf("expected caption stored as text, got %+v", msgs)
 	}
 }
 

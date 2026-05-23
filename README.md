@@ -15,6 +15,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ a3f2b1c4: "quoted text"` (configurable via `REPLY_THREADS`)
 - **Privacy-preserving storage** — no Telegram user IDs or usernames are stored; messages are attributed with an 8-char anonymous hash (HMAC-SHA256, group-scoped, non-reversible)
+- **Image recognition** — when the configured model supports vision (e.g. `gpt-5.5` via OAuth, `gpt-4o`, `claude-3*`), photos and image documents (Twitter/Reddit/HN screenshots, cat pictures, etc.) are fed to the model at summarize time and inlined into the summary as short Russian descriptions. Results are cached by Telegram's content-stable `file_unique_id`, so the same image is described only once — even if it's re-forwarded across groups.
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
@@ -201,6 +202,12 @@ All configuration is via environment variables (`.env` file):
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
 | `REPLY_THREADS` | `true` | Show reply context in summaries (`true`/`false`) |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
+| `VISION_ENABLED` | `auto` | Image recognition: `auto` (detect from model name), `true` (force on), `false` (force off) |
+| `VISION_MODEL` | *(empty)* | Override model for vision calls only; defaults to `MODEL` when empty |
+| `IMAGE_CACHE_DAYS` | `90` | Retention for cached image descriptions; decoupled from `RETENTION_DAYS` because the same image often resurfaces months later |
+| `IMAGE_MAX_BYTES` | `5000000` | Per-image size cap; larger uploads are skipped |
+| `IMAGE_DESCRIBE_CONCURRENCY` | `4` | Max parallel vision calls per summarize run |
+| `IMAGE_DESCRIBE_TIMEOUT_SEC` | `30` | Per-image vision call timeout (seconds) |
 | `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + LLM traffic (`socks5://host:port`, `http://host:port`) |
 
 > **Migration note:** `OPENROUTER_API_KEY` and `OPENROUTER_URL` still work but are deprecated. Use `LLM_TOKEN` and `LLM_ENDPOINT` instead.

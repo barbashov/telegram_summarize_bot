@@ -94,6 +94,11 @@ func (b *Bot) cleanupLoop(ctx context.Context) {
 			} else if purged > 0 {
 				logger.Info().Int64("purged", purged).Msg("purged old error log entries")
 			}
+			if purged, err := b.db.CleanupOldImageDescriptions(ctx, b.cfg.ImageCacheDuration()); err != nil {
+				logger.Error().Err(err).Msg("failed to purge old image descriptions")
+			} else if purged > 0 {
+				logger.Info().Int64("purged", purged).Msg("purged old image descriptions")
+			}
 		}
 	}
 }

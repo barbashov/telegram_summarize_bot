@@ -44,10 +44,21 @@ func DebugHTTPClient(timeout time.Duration) *http.Client {
 	}
 }
 
+// ImageInput is an image attached to a Message. Bytes is the raw image
+// payload; MIMEType is the content type (e.g. "image/jpeg"). Providers that
+// don't support vision must ignore Images.
+type ImageInput struct {
+	Bytes    []byte
+	MIMEType string
+}
+
 // Message represents a chat message for the LLM.
 type Message struct {
 	Role    string // "system", "user", "assistant"
 	Content string
+	// Images is the optional list of images attached to this message.
+	// Providers without multimodal support ignore this field.
+	Images []ImageInput
 }
 
 // CompletionRequest is an API-agnostic request to the LLM.
@@ -78,6 +89,13 @@ func (e *APIError) Error() string {
 // LLMClient is the interface that all LLM providers implement.
 type LLMClient interface {
 	Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error)
+}
+
+// VisionCapable is implemented by clients that can describe whether a given
+// model supports multimodal image inputs. Callers (e.g. the image describer)
+// gate vision attempts on this check.
+type VisionCapable interface {
+	SupportsVision(model string) bool
 }
 
 // New creates the appropriate LLM client based on config.

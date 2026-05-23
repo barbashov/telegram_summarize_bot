@@ -36,6 +36,41 @@ type Message struct {
 	ReplyToTgID   int64  // Telegram message_id of parent; 0 = not a reply
 }
 
+// PhotoSource distinguishes between compressed photos and image-MIME documents.
+type PhotoSource string
+
+const (
+	PhotoSourcePhoto    PhotoSource = "photo"
+	PhotoSourceDocument PhotoSource = "document"
+)
+
+// PhotoRecord holds the metadata needed to fetch and describe a photo later.
+// file_id is the per-bot, expiring handle used to download from Telegram;
+// file_unique_id is stable across forwards/groups/users and is the cache key.
+type PhotoRecord struct {
+	ID           int64
+	MessageID    int64
+	FileUniqueID string
+	FileID       string
+	MIMEType     string
+	FileSize     int64
+	Width        int
+	Height       int
+	Source       PhotoSource
+}
+
+// ImageDescription is a cached description of one image, keyed by FileUniqueID.
+// When Error is non-empty, Description is empty and the row is a negative-cache
+// entry with a short TTL (caller must check Error and CreatedAt to decide reuse).
+type ImageDescription struct {
+	FileUniqueID string
+	Description  string
+	Model        string
+	CreatedAt    time.Time
+	LastUsedAt   time.Time
+	Error        string
+}
+
 // UserHash returns an 8-char hex string derived from HMAC-SHA256(userID‖groupID, salt).
 // It is stable across restarts (salt is persisted), non-reversible, and group-scoped.
 func UserHash(userID, groupID int64, salt []byte) string {
@@ -131,6 +166,13 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 		return nil, fmt.Errorf("failed to ping db: %w", err)
 	}
 
+	// Foreign-key enforcement is per-connection in SQLite and the URL-style
+	// query is silently ignored by some drivers. Force it on at the pool
+	// level so ON DELETE CASCADE on message_photos actually fires.
+	if _, err := conn.Exec(`PRAGMA foreign_keys = ON`); err != nil {
+		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
 	db := &DB{conn: conn, dbPath: dbPath, metrics: m}
 	if err := db.migrate(); err != nil {
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
@@ -198,6 +240,28 @@ func (db *DB) migrate() error {
 			updated_at   DATETIME NOT NULL,
 			updated_by   INTEGER NOT NULL
 		)`,
+		`CREATE TABLE IF NOT EXISTS message_photos (
+			id             INTEGER PRIMARY KEY AUTOINCREMENT,
+			message_id     INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+			file_unique_id TEXT    NOT NULL,
+			file_id        TEXT    NOT NULL,
+			mime_type      TEXT,
+			file_size      INTEGER,
+			width          INTEGER,
+			height         INTEGER,
+			source         TEXT    NOT NULL DEFAULT 'photo'
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_photos_msg ON message_photos(message_id)`,
+		`CREATE INDEX IF NOT EXISTS idx_message_photos_unique ON message_photos(file_unique_id)`,
+		`CREATE TABLE IF NOT EXISTS image_descriptions (
+			file_unique_id TEXT PRIMARY KEY,
+			description    TEXT NOT NULL DEFAULT '',
+			model          TEXT NOT NULL DEFAULT '',
+			created_at     DATETIME NOT NULL,
+			last_used_at   DATETIME NOT NULL,
+			error          TEXT NOT NULL DEFAULT ''
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_image_desc_last_used ON image_descriptions(last_used_at)`,
 	}
 
 	for _, q := range queries {
@@ -323,18 +387,198 @@ func (db *DB) Close() error {
 	return db.conn.Close()
 }
 
+// AddMessage inserts a message. Callers must ensure the row has something
+// useful in it (text or attached photos); the message row itself can have
+// empty text — use AddMessageReturningID when you need to link photos.
 func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
-	if msg.Text == "" {
-		return nil
-	}
+	_, err := db.AddMessageReturningID(ctx, msg)
+	return err
+}
 
+// AddMessageReturningID inserts a message and returns its new id. Returns
+// (0, nil) when the row was a duplicate (dedup index on group_id+tg_message_id).
+func (db *DB) AddMessageReturningID(ctx context.Context, msg *Message) (int64, error) {
 	defer db.metrics.DBAdd.Start()()
-	_, err := db.conn.ExecContext(ctx,
+	res, err := db.conn.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		msg.GroupID, msg.UserHash, msg.Text, msg.Timestamp, msg.ForwardedFrom,
 		nullableInt64(msg.TgMessageID), nullableInt64(msg.ReplyToTgID),
 	)
+	if err != nil {
+		return 0, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if affected == 0 {
+		// Duplicate by (group_id, tg_message_id). Fetch the existing id so callers
+		// can still attach photos idempotently.
+		if msg.TgMessageID != 0 {
+			var id int64
+			err := db.conn.QueryRowContext(ctx,
+				`SELECT id FROM messages WHERE group_id = ? AND tg_message_id = ?`,
+				msg.GroupID, msg.TgMessageID,
+			).Scan(&id)
+			if err == nil {
+				return id, nil
+			}
+			if err != sql.ErrNoRows {
+				return 0, err
+			}
+		}
+		return 0, nil
+	}
+	return res.LastInsertId()
+}
+
+// AddMessagePhotos inserts photo metadata linked to a message. Idempotent
+// per (message_id, file_unique_id) — callers don't need to dedup themselves.
+func (db *DB) AddMessagePhotos(ctx context.Context, messageID int64, photos []PhotoRecord) error {
+	if messageID == 0 || len(photos) == 0 {
+		return nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, p := range photos {
+		source := p.Source
+		if source == "" {
+			source = PhotoSourcePhoto
+		}
+		if _, err := tx.ExecContext(ctx,
+			`INSERT INTO message_photos (message_id, file_unique_id, file_id, mime_type, file_size, width, height, source)
+			 SELECT ?, ?, ?, ?, ?, ?, ?, ?
+			 WHERE NOT EXISTS (SELECT 1 FROM message_photos WHERE message_id = ? AND file_unique_id = ?)`,
+			messageID, p.FileUniqueID, p.FileID, p.MIMEType, p.FileSize, p.Width, p.Height, string(source),
+			messageID, p.FileUniqueID,
+		); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// GetPhotosForMessages returns photos grouped by message_id for the given message IDs.
+func (db *DB) GetPhotosForMessages(ctx context.Context, messageIDs []int64) (map[int64][]PhotoRecord, error) {
+	if len(messageIDs) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(messageIDs))
+	args := make([]any, len(messageIDs))
+	for i, id := range messageIDs {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	q := fmt.Sprintf(
+		`SELECT id, message_id, file_unique_id, file_id, mime_type, file_size, width, height, source
+		 FROM message_photos
+		 WHERE message_id IN (%s)
+		 ORDER BY id`,
+		strings.Join(placeholders, ","),
+	)
+	rows, err := db.conn.QueryContext(ctx, q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	result := make(map[int64][]PhotoRecord)
+	for rows.Next() {
+		var p PhotoRecord
+		var mime, source sql.NullString
+		var size sql.NullInt64
+		var width, height sql.NullInt64
+		if err := rows.Scan(&p.ID, &p.MessageID, &p.FileUniqueID, &p.FileID, &mime, &size, &width, &height, &source); err != nil {
+			logger.Error().Err(err).Msg("failed to scan message photo")
+			continue
+		}
+		p.MIMEType = mime.String
+		p.FileSize = size.Int64
+		p.Width = int(width.Int64)
+		p.Height = int(height.Int64)
+		p.Source = PhotoSource(source.String)
+		if p.Source == "" {
+			p.Source = PhotoSourcePhoto
+		}
+		result[p.MessageID] = append(result[p.MessageID], p)
+	}
+	return result, rows.Err()
+}
+
+// GetImageDescription returns the cached description for a file_unique_id, or
+// (nil, nil) when not cached.
+func (db *DB) GetImageDescription(ctx context.Context, fileUniqueID string) (*ImageDescription, error) {
+	if fileUniqueID == "" {
+		return nil, nil
+	}
+	var d ImageDescription
+	err := db.conn.QueryRowContext(ctx,
+		`SELECT file_unique_id, description, model, created_at, last_used_at, error
+		 FROM image_descriptions WHERE file_unique_id = ?`,
+		fileUniqueID,
+	).Scan(&d.FileUniqueID, &d.Description, &d.Model, &d.CreatedAt, &d.LastUsedAt, &d.Error)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &d, nil
+}
+
+// PutImageDescription upserts a cached description. Passing a non-empty error
+// produces a negative-cache entry (description should be empty in that case).
+func (db *DB) PutImageDescription(ctx context.Context, d ImageDescription) error {
+	if d.FileUniqueID == "" {
+		return fmt.Errorf("file_unique_id required")
+	}
+	now := time.Now()
+	if d.CreatedAt.IsZero() {
+		d.CreatedAt = now
+	}
+	if d.LastUsedAt.IsZero() {
+		d.LastUsedAt = now
+	}
+	_, err := db.conn.ExecContext(ctx,
+		`INSERT INTO image_descriptions (file_unique_id, description, model, created_at, last_used_at, error)
+		 VALUES (?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(file_unique_id) DO UPDATE SET
+			description  = excluded.description,
+			model        = excluded.model,
+			created_at   = excluded.created_at,
+			last_used_at = excluded.last_used_at,
+			error        = excluded.error`,
+		d.FileUniqueID, d.Description, d.Model, d.CreatedAt, d.LastUsedAt, d.Error,
+	)
 	return err
+}
+
+// TouchImageDescription bumps last_used_at on a cache hit.
+func (db *DB) TouchImageDescription(ctx context.Context, fileUniqueID string) error {
+	if fileUniqueID == "" {
+		return nil
+	}
+	_, err := db.conn.ExecContext(ctx,
+		`UPDATE image_descriptions SET last_used_at = ? WHERE file_unique_id = ?`,
+		time.Now(), fileUniqueID,
+	)
+	return err
+}
+
+// CleanupOldImageDescriptions deletes cache entries last used before now-olderThan.
+func (db *DB) CleanupOldImageDescriptions(ctx context.Context, olderThan time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-olderThan)
+	res, err := db.conn.ExecContext(ctx,
+		`DELETE FROM image_descriptions WHERE last_used_at < ?`,
+		cutoff,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return res.RowsAffected()
 }
 
 func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {

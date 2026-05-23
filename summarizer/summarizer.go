@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram_summarize_bot/db"
@@ -26,12 +27,25 @@ const (
 
 const defaultRetryBaseDelay = 2 * time.Second
 
+// PhotoLookup is the subset of *db.DB the summarizer needs to attach photo
+// descriptions to messages. Decoupled as an interface so tests can fake it.
+type PhotoLookup interface {
+	GetPhotosForMessages(ctx context.Context, messageIDs []int64) (map[int64][]db.PhotoRecord, error)
+}
+
 type Summarizer struct {
-	client         provider.LLMClient
-	model          string
-	metrics        *metrics.Metrics
-	replyThreads   bool
-	retryBaseDelay time.Duration
+	client              provider.LLMClient
+	model               string
+	metrics             *metrics.Metrics
+	replyThreads        bool
+	retryBaseDelay      time.Duration
+	photos              PhotoLookup    // optional; nil => describer disabled
+	describer           ImageDescriber // optional; nil => no image descriptions
+	describeConcurrency int            // 0 => default 4
+	// descriptions is set per-call by SummarizeByTopics and read by
+	// formatMessage. It maps message ID to a list of resolved image
+	// descriptions; nil between calls.
+	descriptions map[int64][]string
 }
 
 type TopicCluster struct {
@@ -64,6 +78,25 @@ func New(client provider.LLMClient, model string, m *metrics.Metrics, replyThrea
 		replyThreads:   replyThreads,
 		retryBaseDelay: defaultRetryBaseDelay,
 	}
+}
+
+// WithImageDescriber enables image descriptions during summarization. Both
+// photos and describer must be non-nil; passing either as nil disables the
+// feature. concurrency caps parallel vision calls per summarize run; 0 means
+// the default of 4. Returns s for chaining.
+func (s *Summarizer) WithImageDescriber(photos PhotoLookup, describer ImageDescriber, concurrency int) *Summarizer {
+	if photos == nil || describer == nil {
+		s.photos = nil
+		s.describer = nil
+		return s
+	}
+	s.photos = photos
+	s.describer = describer
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	s.describeConcurrency = concurrency
+	return s
 }
 
 func isRetryableError(err error) bool {
@@ -125,12 +158,115 @@ func (s *Summarizer) SummarizeByTopics(ctx context.Context, messages []db.Messag
 		topicMax = 5
 	}
 
+	// Resolve image descriptions up front. The result is threaded through
+	// formatMessage via a per-call lookup map; cluster/summarize prompts
+	// inherit the enrichment automatically.
+	descriptions := s.resolveImageDescriptions(ctx, messages)
+	s.descriptions = descriptions
+	defer func() { s.descriptions = nil }()
+
 	clusters, err := s.ClusterTopics(ctx, messages, topicMax)
 	if err != nil {
 		return nil, err
 	}
 
 	return s.SummarizeTopics(ctx, messages, clusters, additionalInstructions)
+}
+
+// resolveImageDescriptions returns a map from message ID to a slice of
+// non-empty image descriptions, or nil when the feature is disabled. Vision
+// calls run with bounded parallelism; failures degrade silently.
+func (s *Summarizer) resolveImageDescriptions(ctx context.Context, messages []db.Message) map[int64][]string {
+	if s.describer == nil || s.photos == nil {
+		return nil
+	}
+
+	ids := make([]int64, 0, len(messages))
+	for _, m := range messages {
+		if m.ID != 0 {
+			ids = append(ids, m.ID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+
+	byMessage, err := s.photos.GetPhotosForMessages(ctx, ids)
+	if err != nil {
+		logger.Warn().Err(err).Msg("failed to load message photos; skipping image descriptions")
+		return nil
+	}
+	if len(byMessage) == 0 {
+		return nil
+	}
+
+	// Deduplicate by file_unique_id so the same image (e.g. forwarded) is
+	// only described once even if it appears in multiple messages.
+	uniquePhotos := make(map[string]db.PhotoRecord)
+	for _, photos := range byMessage {
+		for _, p := range photos {
+			if p.FileUniqueID == "" {
+				continue
+			}
+			if _, ok := uniquePhotos[p.FileUniqueID]; !ok {
+				uniquePhotos[p.FileUniqueID] = p
+			}
+		}
+	}
+	if len(uniquePhotos) == 0 {
+		return nil
+	}
+
+	concurrency := s.describeConcurrency
+	if concurrency <= 0 {
+		concurrency = 4
+	}
+	sem := make(chan struct{}, concurrency)
+	var (
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		result = make(map[string]string, len(uniquePhotos))
+	)
+	for key, photo := range uniquePhotos {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-sem }()
+			desc, derr := s.describer.Describe(ctx, photo)
+			if derr != nil {
+				logger.Warn().Err(derr).Str("file_unique_id", key).Msg("image describe error")
+				return
+			}
+			if desc == "" {
+				return
+			}
+			mu.Lock()
+			result[key] = desc
+			mu.Unlock()
+		}()
+	}
+	wg.Wait()
+	if len(result) == 0 {
+		return nil
+	}
+
+	descByMessage := make(map[int64][]string, len(byMessage))
+	for msgID, photos := range byMessage {
+		var descs []string
+		for _, p := range photos {
+			if d, ok := result[p.FileUniqueID]; ok {
+				descs = append(descs, d)
+			}
+		}
+		if len(descs) > 0 {
+			descByMessage[msgID] = descs
+		}
+	}
+	if len(descByMessage) == 0 {
+		return nil
+	}
+	return descByMessage
 }
 
 func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, topicMax int) ([]TopicCluster, error) {
@@ -379,7 +515,7 @@ func (s *Summarizer) formatIndexedMessages(messages []db.Message) string {
 				parent = &messages[pi]
 			}
 		}
-		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg, parent, aliases))
+		fmt.Fprintf(&sb, "%d. %s\n", i, formatMessage(msg, parent, aliases, s.descriptions[msg.ID]))
 	}
 	return sb.String()
 }
@@ -404,7 +540,7 @@ func (s *Summarizer) formatClustersForPrompt(messages []db.Message, clusters []T
 					parent = &messages[pi]
 				}
 			}
-			fmt.Fprintf(&sb, "- %s\n", formatMessage(msg, parent, aliases))
+			fmt.Fprintf(&sb, "- %s\n", formatMessage(msg, parent, aliases, s.descriptions[msg.ID]))
 		}
 		sb.WriteString("\n")
 	}
@@ -430,7 +566,7 @@ func buildUserAliasMap(messages []db.Message) map[string]string {
 	return aliases
 }
 
-func formatMessage(msg db.Message, parent *db.Message, aliases map[string]string) string {
+func formatMessage(msg db.Message, parent *db.Message, aliases map[string]string, imageDescs []string) string {
 	author := aliases[msg.UserHash]
 	if author == "" {
 		author = "anon"
@@ -451,7 +587,20 @@ func formatMessage(msg db.Message, parent *db.Message, aliases map[string]string
 		}
 		annotation = fmt.Sprintf(" (↩ %s: %q)", parentAuthor, string(parentText))
 	}
-	return fmt.Sprintf("[%s] %s%s: %s", timeStr, author, annotation, msg.Text)
+
+	body := msg.Text
+	for _, desc := range imageDescs {
+		desc = strings.TrimSpace(desc)
+		if desc == "" {
+			continue
+		}
+		if body != "" {
+			body += " "
+		}
+		body += "[изображение: " + desc + "]"
+	}
+
+	return fmt.Sprintf("[%s] %s%s: %s", timeStr, author, annotation, body)
 }
 
 func sanitizeClusters(clusters []TopicCluster, messageCount, topicMax int) ([]TopicCluster, error) {

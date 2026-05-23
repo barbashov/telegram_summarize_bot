@@ -61,6 +61,135 @@ func TestNew(t *testing.T) {
 	})
 }
 
+func TestMessagePhotosAndImageDescriptions(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+	now := time.Now()
+
+	t.Run("photos attached and cascaded on message delete", func(t *testing.T) {
+		msgID, err := db.AddMessageReturningID(ctx, &Message{
+			GroupID:     -1,
+			UserHash:    "aa",
+			Text:        "with photo",
+			Timestamp:   now,
+			TgMessageID: 1001,
+		})
+		if err != nil || msgID == 0 {
+			t.Fatalf("AddMessageReturningID: id=%d err=%v", msgID, err)
+		}
+
+		photos := []PhotoRecord{
+			{FileUniqueID: "uniq-A", FileID: "fid-A", MIMEType: "image/jpeg", Width: 100, Height: 200, Source: PhotoSourcePhoto},
+			{FileUniqueID: "uniq-B", FileID: "fid-B", MIMEType: "image/png", Source: PhotoSourceDocument},
+		}
+		if err := db.AddMessagePhotos(ctx, msgID, photos); err != nil {
+			t.Fatalf("AddMessagePhotos: %v", err)
+		}
+
+		got, err := db.GetPhotosForMessages(ctx, []int64{msgID})
+		if err != nil {
+			t.Fatalf("GetPhotosForMessages: %v", err)
+		}
+		if len(got[msgID]) != 2 {
+			t.Fatalf("expected 2 photos, got %d (%+v)", len(got[msgID]), got)
+		}
+
+		// Idempotent: re-adding the same set shouldn't duplicate.
+		if err := db.AddMessagePhotos(ctx, msgID, photos); err != nil {
+			t.Fatalf("AddMessagePhotos again: %v", err)
+		}
+		got, _ = db.GetPhotosForMessages(ctx, []int64{msgID})
+		if len(got[msgID]) != 2 {
+			t.Errorf("after duplicate insert, expected 2 rows, got %d", len(got[msgID]))
+		}
+
+		// FK CASCADE: deleting the message row removes its photos.
+		if _, err := db.CleanupOldMessages(ctx, -1*time.Hour); err != nil {
+			t.Fatalf("CleanupOldMessages: %v", err)
+		}
+		got, _ = db.GetPhotosForMessages(ctx, []int64{msgID})
+		if len(got[msgID]) != 0 {
+			t.Errorf("expected photos cascade-deleted, got %d", len(got[msgID]))
+		}
+	})
+
+	t.Run("image description put/get/touch/cleanup", func(t *testing.T) {
+		key := "unique-key-1"
+		if got, err := db.GetImageDescription(ctx, key); err != nil || got != nil {
+			t.Fatalf("expected nil for missing entry, got %+v err=%v", got, err)
+		}
+
+		earlier := time.Now().Add(-100 * time.Hour)
+		if err := db.PutImageDescription(ctx, ImageDescription{
+			FileUniqueID: key,
+			Description:  "a cat on a windowsill",
+			Model:        "gpt-5.5",
+			CreatedAt:    earlier,
+			LastUsedAt:   earlier,
+		}); err != nil {
+			t.Fatalf("PutImageDescription: %v", err)
+		}
+
+		got, err := db.GetImageDescription(ctx, key)
+		if err != nil || got == nil {
+			t.Fatalf("expected hit, got nil err=%v", err)
+		}
+		if got.Description != "a cat on a windowsill" {
+			t.Errorf("desc = %q", got.Description)
+		}
+
+		// Touch bumps last_used_at to ~now, protecting from a stale-cutoff sweep.
+		if err := db.TouchImageDescription(ctx, key); err != nil {
+			t.Fatalf("TouchImageDescription: %v", err)
+		}
+		// Sweep with a generous cutoff (1h): we just touched, so nothing deleted.
+		purged, err := db.CleanupOldImageDescriptions(ctx, time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupOldImageDescriptions: %v", err)
+		}
+		if purged != 0 {
+			t.Errorf("expected 0 purged after touch, got %d", purged)
+		}
+
+		// Now add a stale entry and sweep again.
+		if err := db.PutImageDescription(ctx, ImageDescription{
+			FileUniqueID: "stale-key",
+			Description:  "x",
+			Model:        "m",
+			CreatedAt:    earlier,
+			LastUsedAt:   earlier,
+		}); err != nil {
+			t.Fatalf("PutImageDescription stale: %v", err)
+		}
+		purged, err = db.CleanupOldImageDescriptions(ctx, time.Hour)
+		if err != nil {
+			t.Fatalf("CleanupOldImageDescriptions: %v", err)
+		}
+		if purged != 1 {
+			t.Errorf("expected 1 purged stale, got %d", purged)
+		}
+	})
+
+	t.Run("negative cache entry round-trips", func(t *testing.T) {
+		key := "neg-1"
+		if err := db.PutImageDescription(ctx, ImageDescription{
+			FileUniqueID: key,
+			Description:  "",
+			Model:        "gpt-5.5",
+			Error:        "vision call failed",
+		}); err != nil {
+			t.Fatalf("PutImageDescription neg: %v", err)
+		}
+		got, err := db.GetImageDescription(ctx, key)
+		if err != nil || got == nil {
+			t.Fatalf("expected hit, got nil err=%v", err)
+		}
+		if got.Error != "vision call failed" || got.Description != "" {
+			t.Errorf("neg cache mismatch: %+v", got)
+		}
+	})
+}
+
 func TestAddMessageAndGetMessages(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)
@@ -130,16 +259,18 @@ func TestAddMessageAndGetMessages(t *testing.T) {
 		}
 	})
 
-	t.Run("empty text is not stored", func(t *testing.T) {
-		if err := db.AddMessage(ctx, &Message{GroupID: -300, UserHash: "xx", Text: "", Timestamp: now}); err != nil {
+	t.Run("empty text is allowed (photo-only messages)", func(t *testing.T) {
+		// Empty text rows are valid when paired with photos. The handler
+		// gates pure no-content messages out before AddMessage is called.
+		if err := db.AddMessage(ctx, &Message{GroupID: -300, UserHash: "xx", Text: "", Timestamp: now, TgMessageID: 42}); err != nil {
 			t.Fatalf("AddMessage: %v", err)
 		}
 		got, err := db.GetMessages(ctx, -300, now.Add(-1*time.Hour), 100)
 		if err != nil {
 			t.Fatalf("GetMessages: %v", err)
 		}
-		if len(got) != 0 {
-			t.Errorf("expected 0 messages for empty text, got %d", len(got))
+		if len(got) != 1 || got[0].Text != "" {
+			t.Errorf("expected 1 empty-text row, got %d (%+v)", len(got), got)
 		}
 	})
 

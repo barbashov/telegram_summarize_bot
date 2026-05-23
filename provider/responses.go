@@ -50,12 +50,11 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 			if m.Role == "assistant" {
 				role = responses.EasyInputMessageRoleAssistant
 			}
+			content := buildEasyInputContent(m)
 			inputItems = append(inputItems, responses.ResponseInputItemUnionParam{
 				OfMessage: &responses.EasyInputMessageParam{
-					Role: role,
-					Content: responses.EasyInputMessageContentUnionParam{
-						OfString: openai.String(m.Content),
-					},
+					Role:    role,
+					Content: content,
 				},
 			})
 		}
@@ -163,6 +162,31 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 		FinishReason:   finishReason,
 		HTTPStatusCode: 200,
 	}, nil
+}
+
+// buildEasyInputContent returns a text-only string content when no images are
+// attached, otherwise a multi-part input list with one input_text part plus
+// one input_image part per image (each carrying a base64 data URL).
+func buildEasyInputContent(m Message) responses.EasyInputMessageContentUnionParam {
+	if len(m.Images) == 0 {
+		return responses.EasyInputMessageContentUnionParam{
+			OfString: openai.String(m.Content),
+		}
+	}
+	parts := make(responses.ResponseInputMessageContentListParam, 0, len(m.Images)+1)
+	if m.Content != "" {
+		parts = append(parts, responses.ResponseInputContentParamOfInputText(m.Content))
+	}
+	for _, img := range m.Images {
+		part := responses.ResponseInputContentParamOfInputImage(responses.ResponseInputImageDetailAuto)
+		if part.OfInputImage != nil {
+			part.OfInputImage.ImageURL = openai.String(dataURI(img))
+		}
+		parts = append(parts, part)
+	}
+	return responses.EasyInputMessageContentUnionParam{
+		OfInputItemContentList: parts,
+	}
 }
 
 func wrapResponsesError(err error) error {

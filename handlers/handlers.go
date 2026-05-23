@@ -33,6 +33,7 @@ type telegramClient interface {
 	GetChat(ctx context.Context, params *telego.GetChatParams) (*telego.ChatFullInfo, error)
 	SetMyCommands(ctx context.Context, params *telego.SetMyCommandsParams) error
 	AnswerCallbackQuery(ctx context.Context, params *telego.AnswerCallbackQueryParams) error
+	GetFile(ctx context.Context, params *telego.GetFileParams) (*telego.File, error)
 }
 
 type summaryService interface {

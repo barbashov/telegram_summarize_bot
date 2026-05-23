@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/sashabaranov/go-openai"
@@ -134,6 +135,69 @@ func TestCompletionsClientAPIError(t *testing.T) {
 	}
 	if apiErr.HTTPStatusCode != 429 {
 		t.Errorf("status = %d, want 429", apiErr.HTTPStatusCode)
+	}
+}
+
+// TestCompletionsClientImageContent verifies that an attached image produces
+// a multi-part content body with an image_url data URI part. The default
+// text-only path is exercised by TestCompletionsClientComplete above.
+func TestCompletionsClientImageContent(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		resp := openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionChoice{
+				{
+					Message:      openai.ChatCompletionMessage{Content: "ok"},
+					FinishReason: "stop",
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := NewCompletionsClient("k", server.URL)
+	if err != nil {
+		t.Fatalf("NewCompletionsClient: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), CompletionRequest{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "user", Content: "describe", Images: []ImageInput{
+				{Bytes: []byte("RAWBYTES"), MIMEType: "image/png"},
+			}},
+		},
+		MaxTokens: 50,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	msgs, ok := captured["messages"].([]any)
+	if !ok || len(msgs) == 0 {
+		t.Fatalf("missing messages in body: %+v", captured)
+	}
+	m0, _ := msgs[0].(map[string]any)
+	content, ok := m0["content"].([]any)
+	if !ok {
+		t.Fatalf("expected multi-part content, got: %T (%+v)", m0["content"], m0)
+	}
+	if len(content) != 2 {
+		t.Fatalf("expected 2 parts (text + image), got %d", len(content))
+	}
+	imgPart, _ := content[1].(map[string]any)
+	if imgPart["type"] != "image_url" {
+		t.Errorf("parts[1].type = %v, want image_url", imgPart["type"])
+	}
+	img, _ := imgPart["image_url"].(map[string]any)
+	url, _ := img["url"].(string)
+	if !strings.HasPrefix(url, "data:image/png;base64,") {
+		t.Errorf("expected base64 image data URI, got: %q", url)
 	}
 }
 

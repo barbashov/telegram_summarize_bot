@@ -23,26 +23,41 @@ const (
 const defaultOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI well-known client ID
 const defaultOAuthCodexVersion = "0.124.0"
 
+// VisionEnabled selects whether the bot tries to describe images during summarization.
+type VisionEnabled string
+
+const (
+	VisionEnabledAuto  VisionEnabled = "auto"  // capability-detect from model name
+	VisionEnabledTrue  VisionEnabled = "true"  // force on
+	VisionEnabledFalse VisionEnabled = "false" // force off
+)
+
 type Config struct {
-	BotToken          string
-	LLMMode           LLMMode
-	LLMToken          string
-	LLMEndpoint       string
-	Model             string
-	SummaryHours      int
-	RetentionDays     int
-	MaxMessages       int
-	TopicMax          int
-	RateLimitSec      int
-	DBPath            string
-	AllowedGroups     []int64
-	AdminUserIDs      []int64
-	DailySummaryHour  int
-	ReplyThreads      bool
-	URLMaxChars       int
-	OAuthTokenDir     string
-	OAuthClientID     string
-	OAuthCodexVersion string
+	BotToken                 string
+	LLMMode                  LLMMode
+	LLMToken                 string
+	LLMEndpoint              string
+	Model                    string
+	SummaryHours             int
+	RetentionDays            int
+	MaxMessages              int
+	TopicMax                 int
+	RateLimitSec             int
+	DBPath                   string
+	AllowedGroups            []int64
+	AdminUserIDs             []int64
+	DailySummaryHour         int
+	ReplyThreads             bool
+	URLMaxChars              int
+	OAuthTokenDir            string
+	OAuthClientID            string
+	OAuthCodexVersion        string
+	VisionEnabled            VisionEnabled
+	VisionModel              string // empty => use Model
+	ImageCacheDays           int
+	ImageMaxBytes            int
+	ImageDescribeConcurrency int
+	ImageDescribeTimeoutSec  int
 }
 
 func Load() (*Config, error) {
@@ -144,26 +159,40 @@ func Load() (*Config, error) {
 		replyThreads = false
 	}
 
+	visionEnabled := VisionEnabledAuto
+	switch strings.TrimSpace(strings.ToLower(os.Getenv("VISION_ENABLED"))) {
+	case "true", "1", "yes", "on":
+		visionEnabled = VisionEnabledTrue
+	case "false", "0", "no", "off":
+		visionEnabled = VisionEnabledFalse
+	}
+
 	return &Config{
-		BotToken:          botToken,
-		LLMMode:           llmMode,
-		LLMToken:          llmToken,
-		LLMEndpoint:       llmEndpoint,
-		Model:             model,
-		SummaryHours:      envIntOr("SUMMARY_HOURS", 24),
-		RetentionDays:     envIntOr("RETENTION_DAYS", 7),
-		MaxMessages:       envIntOr("MAX_MESSAGES", 250),
-		TopicMax:          envIntOr("TOPIC_MAX", 5),
-		RateLimitSec:      envIntOr("RATE_LIMIT_SEC", 60),
-		DBPath:            dbPath,
-		AllowedGroups:     allowedGroups,
-		AdminUserIDs:      adminUserIDs,
-		DailySummaryHour:  dailySummaryHour,
-		ReplyThreads:      replyThreads,
-		URLMaxChars:       envIntOr("URL_MAX_CHARS", 64000),
-		OAuthTokenDir:     oauthTokenDir,
-		OAuthClientID:     oauthClientID,
-		OAuthCodexVersion: oauthCodexVersion,
+		BotToken:                 botToken,
+		LLMMode:                  llmMode,
+		LLMToken:                 llmToken,
+		LLMEndpoint:              llmEndpoint,
+		Model:                    model,
+		SummaryHours:             envIntOr("SUMMARY_HOURS", 24),
+		RetentionDays:            envIntOr("RETENTION_DAYS", 7),
+		MaxMessages:              envIntOr("MAX_MESSAGES", 250),
+		TopicMax:                 envIntOr("TOPIC_MAX", 5),
+		RateLimitSec:             envIntOr("RATE_LIMIT_SEC", 60),
+		DBPath:                   dbPath,
+		AllowedGroups:            allowedGroups,
+		AdminUserIDs:             adminUserIDs,
+		DailySummaryHour:         dailySummaryHour,
+		ReplyThreads:             replyThreads,
+		URLMaxChars:              envIntOr("URL_MAX_CHARS", 64000),
+		OAuthTokenDir:            oauthTokenDir,
+		OAuthClientID:            oauthClientID,
+		OAuthCodexVersion:        oauthCodexVersion,
+		VisionEnabled:            visionEnabled,
+		VisionModel:              strings.TrimSpace(os.Getenv("VISION_MODEL")),
+		ImageCacheDays:           envIntOr("IMAGE_CACHE_DAYS", 90),
+		ImageMaxBytes:            envIntOr("IMAGE_MAX_BYTES", 5_000_000),
+		ImageDescribeConcurrency: envIntOr("IMAGE_DESCRIBE_CONCURRENCY", 4),
+		ImageDescribeTimeoutSec:  envIntOr("IMAGE_DESCRIBE_TIMEOUT_SEC", 30),
 	}, nil
 }
 
@@ -181,6 +210,24 @@ func (c *Config) SummaryDuration() time.Duration {
 
 func (c *Config) RetentionDuration() time.Duration {
 	return time.Duration(c.RetentionDays) * 24 * time.Hour
+}
+
+// ImageCacheDuration is the retention window for cached image descriptions.
+func (c *Config) ImageCacheDuration() time.Duration {
+	return time.Duration(c.ImageCacheDays) * 24 * time.Hour
+}
+
+// ImageDescribeTimeout is the per-image vision-call timeout.
+func (c *Config) ImageDescribeTimeout() time.Duration {
+	return time.Duration(c.ImageDescribeTimeoutSec) * time.Second
+}
+
+// VisionModelOrDefault returns VisionModel if set, otherwise Model.
+func (c *Config) VisionModelOrDefault() string {
+	if c.VisionModel != "" {
+		return c.VisionModel
+	}
+	return c.Model
 }
 
 func (c *Config) IsAdminUser(userID int64) bool {

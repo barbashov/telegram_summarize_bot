@@ -56,7 +56,12 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 
 	groupID := msg.Chat.ID
+	// Media messages carry their text in msg.Caption, not msg.Text. Falling
+	// back keeps the caption alongside the photo for summarization.
 	text := msg.Text
+	if text == "" {
+		text = msg.Caption
+	}
 	tgMessageID := int64(msg.MessageID)
 
 	var replyToTgID int64
@@ -64,12 +69,16 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		replyToTgID = int64(msg.ReplyToMessage.MessageID)
 	}
 
+	photoRecords := extractPhotoRecords(msg)
+	hasMedia := hasImageMedia(msg)
+
 	logger.Debug().
 		Int64("group_id", groupID).
 		Str("text", text).
+		Bool("has_media", hasMedia).
 		Msg("Received message")
 
-	if text == "" {
+	if text == "" && !hasMedia {
 		return
 	}
 
@@ -98,7 +107,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	// treated as commands — the forwarder didn't intend to issue one.
 	if msg.ForwardOrigin != nil {
 		forwardedFrom := forwardOriginHandle(msg.ForwardOrigin, groupID, b.userHashSalt)
-		if err := b.db.AddMessage(ctx, &db.Message{
+		msgID, err := b.db.AddMessageReturningID(ctx, &db.Message{
 			GroupID:       groupID,
 			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 			Text:          text,
@@ -106,8 +115,15 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			ForwardedFrom: forwardedFrom,
 			TgMessageID:   tgMessageID,
 			ReplyToTgID:   replyToTgID,
-		}); err != nil {
+		})
+		if err != nil {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
+			return
+		}
+		if msgID != 0 && len(photoRecords) > 0 {
+			if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
+				logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos to forwarded message")
+			}
 		}
 		return
 	}
@@ -123,15 +139,22 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	if err := b.db.AddMessage(ctx, &db.Message{
+	msgID, err := b.db.AddMessageReturningID(ctx, &db.Message{
 		GroupID:     groupID,
 		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 		Text:        text,
 		Timestamp:   time.Now(),
 		TgMessageID: tgMessageID,
 		ReplyToTgID: replyToTgID,
-	}); err != nil {
+	})
+	if err != nil {
 		logger.Error().Err(err).Msg("failed to add message")
+		return
+	}
+	if msgID != 0 && len(photoRecords) > 0 {
+		if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
+			logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos")
+		}
 	}
 }
 

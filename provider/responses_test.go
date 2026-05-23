@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	oaierr "github.com/openai/openai-go"
@@ -69,6 +70,79 @@ func TestResponsesClientComplete(t *testing.T) {
 	}
 	if resp.FinishReason != "stop" {
 		t.Errorf("finish_reason = %q, want %q", resp.FinishReason, "stop")
+	}
+}
+
+// TestResponsesClientImageContent asserts that an attached image produces an
+// input message whose content list contains an input_image item carrying a
+// base64 data URI. Vision support flows through the Responses API for both
+// direct OpenAI and the OAuth/Codex backend.
+func TestResponsesClientImageContent(t *testing.T) {
+	var captured map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&captured); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		resp := map[string]any{
+			"id":     "resp_img",
+			"status": "completed",
+			"output": []map[string]any{
+				{
+					"type": "message",
+					"content": []map[string]any{
+						{"type": "output_text", "text": "ok"},
+					},
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := NewResponsesClient("k", server.URL)
+	if err != nil {
+		t.Fatalf("NewResponsesClient: %v", err)
+	}
+
+	_, err = client.Complete(context.Background(), CompletionRequest{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "system", Content: "describe images"},
+			{Role: "user", Content: "what is this?", Images: []ImageInput{
+				{Bytes: []byte("BINARY"), MIMEType: "image/jpeg"},
+			}},
+		},
+		MaxTokens: 50,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+
+	input, ok := captured["input"].([]any)
+	if !ok || len(input) == 0 {
+		t.Fatalf("input not an array: %T (%+v)", captured["input"], captured)
+	}
+	userMsg, _ := input[0].(map[string]any)
+	content, ok := userMsg["content"].([]any)
+	if !ok {
+		t.Fatalf("user content not a list: %T", userMsg["content"])
+	}
+
+	var found bool
+	for _, part := range content {
+		p, _ := part.(map[string]any)
+		if p["type"] != "input_image" {
+			continue
+		}
+		url, _ := p["image_url"].(string)
+		if !strings.HasPrefix(url, "data:image/jpeg;base64,") {
+			t.Errorf("input_image url = %q, want data: prefix", url)
+		}
+		found = true
+	}
+	if !found {
+		t.Errorf("no input_image part found in: %+v", content)
 	}
 }
 
