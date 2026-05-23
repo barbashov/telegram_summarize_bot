@@ -192,6 +192,41 @@ func TestFetchImageEnforcesByteLimit(t *testing.T) {
 	}
 }
 
+// TestFetchImageOctetStreamFallsBackToMagicBytes covers the Telegram CDN
+// behavior: photo downloads come through with Content-Type
+// application/octet-stream rather than image/*. We must fall back to magic-
+// byte detection on the payload, otherwise every photo is rejected and the
+// vision pipeline never fires.
+func TestFetchImageOctetStreamFallsBackToMagicBytes(t *testing.T) {
+	// Minimal JPEG: SOI marker + APP0 (JFIF) header. http.DetectContentType
+	// is happy with just the SOI for image/jpeg classification.
+	jpegBytes := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F', 0x00}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(jpegBytes)
+	}))
+	defer server.Close()
+
+	prev := telegramFileAPIBase
+	telegramFileAPIBase = server.URL + "/file/bot"
+	defer func() { telegramFileAPIBase = prev }()
+
+	b := &Bot{
+		telegram: &fakeFileTelegram{filePath: "ok"},
+		cfg:      &config.Config{BotToken: "tok", ImageMaxBytes: 10000},
+	}
+	data, mime, err := b.FetchImage(context.Background(), "any")
+	if err != nil {
+		t.Fatalf("expected fallback to accept JPEG bytes, got error: %v", err)
+	}
+	if mime != "image/jpeg" {
+		t.Errorf("expected detected mime image/jpeg, got %q", mime)
+	}
+	if len(data) != len(jpegBytes) {
+		t.Errorf("data len = %d, want %d", len(data), len(jpegBytes))
+	}
+}
+
 func TestFetchImageHappyPath(t *testing.T) {
 	body := []byte("\xff\xd8\xff\xe0fake-jpeg-bytes")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

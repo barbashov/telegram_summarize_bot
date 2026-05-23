@@ -120,12 +120,9 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			logger.Error().Err(err).Msg("failed to add forwarded message")
 			return
 		}
-		logger.Info().Int64("message_id", msgID).Int("photo_records", len(photoRecords)).Msg("DIAG forwarded photo path")
 		if msgID != 0 && len(photoRecords) > 0 {
 			if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
 				logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos to forwarded message")
-			} else {
-				logger.Info().Int64("message_id", msgID).Int("photos", len(photoRecords)).Msg("DIAG photos attached to forwarded message")
 			}
 		}
 		return
@@ -154,12 +151,9 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		logger.Error().Err(err).Msg("failed to add message")
 		return
 	}
-	logger.Info().Int64("message_id", msgID).Int("photo_records", len(photoRecords)).Msg("DIAG non-forwarded photo path")
 	if msgID != 0 && len(photoRecords) > 0 {
 		if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
 			logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos")
-		} else {
-			logger.Info().Int64("message_id", msgID).Int("photos", len(photoRecords)).Msg("DIAG photos attached")
 		}
 	}
 }

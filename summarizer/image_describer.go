@@ -107,12 +107,10 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("image cache lookup failed; proceeding without cache")
 	} else if cached != nil {
 		if cached.Error == "" {
-			logger.Info().Str("file_unique_id", photo.FileUniqueID).Msg("DIAG positive cache hit")
 			_ = d.db.TouchImageDescription(ctx, photo.FileUniqueID)
 			return cached.Description, nil
 		}
 		if time.Since(cached.CreatedAt) < negativeCacheTTL {
-			logger.Warn().Str("file_unique_id", photo.FileUniqueID).Str("cached_error", cached.Error).Msg("DIAG negative cache hit; skipping vision call")
 			return "", nil
 		}
 	}
@@ -120,15 +118,13 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 	bytes, mime, err := d.fetcher.FetchImage(ctx, photo.FileID)
 	if err != nil {
 		if errors.Is(err, ErrFileExpired) {
-			// file_id rotated; cache nothing — a re-upload may recover.
-			logger.Warn().Str("file_unique_id", photo.FileUniqueID).Msg("DIAG image file expired; skipping")
+			logger.Debug().Str("file_unique_id", photo.FileUniqueID).Msg("image file expired; skipping")
 			return "", nil
 		}
-		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Str("file_id", photo.FileID).Msg("DIAG image fetch failed")
+		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Msg("image fetch failed; negative-caching")
 		d.storeNegative(ctx, photo.FileUniqueID, err.Error())
 		return "", nil
 	}
-	logger.Info().Int("bytes", len(bytes)).Str("mime", mime).Str("file_unique_id", photo.FileUniqueID).Msg("DIAG image fetched, calling vision")
 
 	callCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()

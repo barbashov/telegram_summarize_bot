@@ -196,7 +196,6 @@ func (s *Summarizer) resolveImageDescriptions(ctx context.Context, messages []db
 		logger.Warn().Err(err).Msg("failed to load message photos; skipping image descriptions")
 		return nil
 	}
-	logger.Info().Int("message_count", len(messages)).Int("messages_with_photos", len(byMessage)).Msg("DIAG resolveImageDescriptions")
 	if len(byMessage) == 0 {
 		return nil
 	}

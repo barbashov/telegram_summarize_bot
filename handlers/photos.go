@@ -146,8 +146,12 @@ func (b *Bot) FetchImage(ctx context.Context, fileID string) (data []byte, mime 
 		return nil, "", fmt.Errorf("image exceeds %d bytes", maxBytes)
 	}
 
+	// Telegram's file CDN often serves photos with Content-Type
+	// "application/octet-stream" rather than an image/* MIME, so we cannot
+	// trust the header alone. When it isn't image-shaped, fall back to
+	// magic-byte detection on the payload before rejecting.
 	mime = resp.Header.Get("Content-Type")
-	if mime == "" {
+	if !strings.HasPrefix(strings.ToLower(mime), "image/") {
 		mime = http.DetectContentType(data)
 	}
 	if !strings.HasPrefix(strings.ToLower(mime), "image/") {
