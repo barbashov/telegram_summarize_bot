@@ -119,12 +119,14 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord) (s
 	if err != nil {
 		if errors.Is(err, ErrFileExpired) {
 			// file_id rotated; cache nothing — a re-upload may recover.
-			logger.Debug().Str("file_unique_id", photo.FileUniqueID).Msg("image file expired; skipping")
+			logger.Warn().Str("file_unique_id", photo.FileUniqueID).Msg("DIAG image file expired; skipping")
 			return "", nil
 		}
+		logger.Warn().Err(err).Str("file_unique_id", photo.FileUniqueID).Str("file_id", photo.FileID).Msg("DIAG image fetch failed")
 		d.storeNegative(ctx, photo.FileUniqueID, err.Error())
 		return "", nil
 	}
+	logger.Info().Int("bytes", len(bytes)).Str("mime", mime).Str("file_unique_id", photo.FileUniqueID).Msg("DIAG image fetched, calling vision")
 
 	callCtx, cancel := context.WithTimeout(ctx, d.timeout)
 	defer cancel()
