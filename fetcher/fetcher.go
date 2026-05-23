@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -9,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	readability "github.com/go-shiori/go-readability"
 )
@@ -18,7 +20,17 @@ const (
 	defaultMaxChars = 64_000
 	connectTimeout  = 5 * time.Second
 	totalTimeout    = 10 * time.Second
+	// minArticleChars is the floor below which an HTML page is treated as having
+	// no real article (login walls, SSO redirects, empty JS shells often extract
+	// to nothing or a stray word).
+	minArticleChars = 50
 )
+
+// ErrNoReadableContent means the page loaded fine but no article text could be
+// extracted — typically a login/SSO wall, a redirect bootstrap, or a JS-rendered
+// shell. Callers should surface a "couldn't read this page" message rather than
+// summarizing the shell.
+var ErrNoReadableContent = errors.New("no readable content extracted from page")
 
 // reservedRanges lists extra non-public CIDRs not covered by net.IP's built-in
 // classification helpers (CGNAT, documentation/benchmark ranges, reserved space,
@@ -205,11 +217,15 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 
 	text := string(body)
 
+	// For HTML, require readability to extract a real article. Falling back to
+	// raw HTML here would feed login/SSO/JS-shell markup to the summarizer, so
+	// instead report it as unreadable. Raw text/plain bodies are kept as-is.
 	if strings.Contains(ct, "text/html") {
-		article, err := readability.FromReader(strings.NewReader(text), parsed)
-		if err == nil && strings.TrimSpace(article.TextContent) != "" {
-			text = article.TextContent
+		article, rerr := readability.FromReader(strings.NewReader(text), parsed)
+		if rerr != nil || utf8.RuneCountInString(strings.TrimSpace(article.TextContent)) < minArticleChars {
+			return "", ErrNoReadableContent
 		}
+		text = article.TextContent
 	}
 
 	text = strings.TrimSpace(text)
@@ -219,7 +235,7 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 	}
 
 	if text == "" {
-		return "", fmt.Errorf("no text content extracted from URL")
+		return "", ErrNoReadableContent
 	}
 
 	return text, nil

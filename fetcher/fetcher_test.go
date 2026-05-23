@@ -2,6 +2,7 @@ package fetcher
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -212,6 +213,23 @@ func TestPickPublicIPs(t *testing.T) {
 	}
 }
 
+func TestFetchHTMLNoArticleReturnsErrNoReadableContent(t *testing.T) {
+	// An HTML page with only a redirect/login script and no article body:
+	// readability extracts nothing, so we report it unreadable instead of
+	// summarizing the shell (the dzen.ru SSO-bootstrap case).
+	shell := `<!DOCTYPE html><html><head><title>Redirecting…</title></head>` +
+		`<body><script>function autologin(){window.location.href="https://sso.example/push";}autologin();</script></body></html>`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		_, _ = w.Write([]byte(shell))
+	}))
+	defer srv.Close()
+
+	if _, err := fetch(context.Background(), srv.URL, 0, false); !errors.Is(err, ErrNoReadableContent) {
+		t.Fatalf("err = %v, want ErrNoReadableContent", err)
+	}
+}
+
 func TestIsAllowedContentType(t *testing.T) {
 	tests := []struct {
 		ct      string
@@ -240,10 +258,7 @@ func TestFetchEmptyBody(t *testing.T) {
 	defer srv.Close()
 
 	_, err := fetch(context.Background(), srv.URL, 0, false)
-	if err == nil {
-		t.Fatal("expected error for empty body")
-	}
-	if !strings.Contains(err.Error(), "no text content") {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, ErrNoReadableContent) {
+		t.Fatalf("err = %v, want ErrNoReadableContent", err)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
@@ -14,9 +15,9 @@ import (
 
 // urlReply builds a reply message whose text contains url, with a matching
 // "url" entity. The text is BMP-only, so rune offsets equal UTF-16 offsets.
-func urlReply(msgID int, prefix, url string) *telego.Message {
+func urlReply(prefix, url string) *telego.Message {
 	return &telego.Message{
-		MessageID: msgID,
+		MessageID: 100,
 		Text:      prefix + url,
 		Entities: []telego.MessageEntity{{
 			Type:   "url",
@@ -199,7 +200,7 @@ func TestHandleSummarizeReplyBareLink(t *testing.T) {
 
 	url := "https://example.com/article"
 	// Bare URL with no surrounding prose → lone link, short-circuits.
-	b.handleSummarize(ctx, replyUpdate(urlReply(100, "", url)), nil)
+	b.handleSummarize(ctx, replyUpdate(urlReply("", url)), nil)
 
 	if gotURL != url {
 		t.Fatalf("fetched URL = %q, want %q", gotURL, url)
@@ -231,7 +232,7 @@ func TestHandleSummarizeReplyLinkWithProseBlends(t *testing.T) {
 	}
 
 	// Surrounding prose is short but present → folded in alongside the link.
-	b.handleSummarize(context.Background(), replyUpdate(urlReply(100, "важная мысль про ", "https://example.com/article")), nil)
+	b.handleSummarize(context.Background(), replyUpdate(urlReply("важная мысль про ", "https://example.com/article")), nil)
 
 	if sum.urlCalls != 1 {
 		t.Fatalf("SummarizeURL calls = %d, want 1", sum.urlCalls)
@@ -250,6 +251,25 @@ func TestHandleSummarizeReplyLinkWithProseBlends(t *testing.T) {
 	}
 }
 
+func TestHandleSummarizeReplyLinkUnreadable(t *testing.T) {
+	sum := &fakeSummarizer{}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	b.fetchURL = func(_ context.Context, _ string, _ int) (string, error) {
+		return "", fetcher.ErrNoReadableContent
+	}
+
+	b.handleSummarize(context.Background(), replyUpdate(urlReply("", "https://dzen.ru/a/x")), nil)
+
+	if sum.urlCalls != 0 {
+		t.Fatalf("SummarizeURL should not be called for an unreadable page, got %d", sum.urlCalls)
+	}
+	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "требует входа") {
+		t.Fatalf("expected unreadable-page message, got %#v", tg.editTexts)
+	}
+}
+
 func TestHandleSummarizeReplyLinkFetchFails(t *testing.T) {
 	sum := &fakeSummarizer{}
 	b, database, tg := newTestBot(t, sum)
@@ -260,7 +280,7 @@ func TestHandleSummarizeReplyLinkFetchFails(t *testing.T) {
 	}
 
 	// Bare URL so the only content is the (failing) link.
-	b.handleSummarize(context.Background(), replyUpdate(urlReply(100, "", "https://example.com")), nil)
+	b.handleSummarize(context.Background(), replyUpdate(urlReply("", "https://example.com")), nil)
 
 	if sum.urlCalls != 0 {
 		t.Fatalf("SummarizeURL should not be called when fetch fails, got %d", sum.urlCalls)

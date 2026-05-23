@@ -7,6 +7,7 @@ import (
 	"unicode/utf16"
 	"unicode/utf8"
 
+	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/summarizer"
 	"telegram_summarize_bot/tgutil"
@@ -80,14 +81,17 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 	// Condense each link and image into compact text. The message text stays
 	// raw and is added at blend time.
 	var parts []replyPart
+	var lastLinkErr error
 	for _, link := range links {
 		content, ferr := b.fetchURL(ctx, link, b.cfg.URLMaxChars)
 		if ferr != nil {
+			lastLinkErr = ferr
 			logger.Warn().Err(ferr).Str("url", link).Msg("reply-summarize: failed to fetch URL")
 			continue
 		}
 		summary, serr := b.summarizer.SummarizeURL(ctx, link, content, instructions)
 		if serr != nil {
+			lastLinkErr = serr
 			logger.Warn().Err(serr).Str("url", link).Msg("reply-summarize: failed to summarize URL")
 			continue
 		}
@@ -118,7 +122,11 @@ func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update) {
 		// Nothing usable came back; explain why.
 		switch {
 		case len(links) > 0:
-			b.editWithRetry(ctx, groupID, statusMsgID, "Не удалось загрузить ссылку.")
+			if errors.Is(lastLinkErr, fetcher.ErrNoReadableContent) {
+				b.editWithRetry(ctx, groupID, statusMsgID, "Не удалось прочитать страницу — возможно, она требует входа или контент подгружается через JavaScript.")
+			} else {
+				b.editWithRetry(ctx, groupID, statusMsgID, "Не удалось загрузить ссылку.")
+			}
 		case visionDisabled:
 			b.editWithRetry(ctx, groupID, statusMsgID, "Распознавание изображений отключено.")
 		default:

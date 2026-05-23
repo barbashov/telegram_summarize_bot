@@ -2,6 +2,7 @@ package admin
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -37,7 +38,11 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	content, err := fetcher.Fetch(ctx, rawURL, a.cfg.URLMaxChars)
 	if err != nil {
 		logger.Error().Err(err).Str("url", rawURL).Msg("failed to fetch URL")
-		a.deps.EditWithRetry(ctx, chatID, statusMsgID, "Не удалось загрузить страницу: "+err.Error())
+		msg := "Не удалось загрузить страницу: " + err.Error()
+		if errors.Is(err, fetcher.ErrNoReadableContent) {
+			msg = "Не удалось прочитать страницу — возможно, она требует входа или контент подгружается через JavaScript."
+		}
+		a.deps.EditWithRetry(ctx, chatID, statusMsgID, msg)
 		return
 	}
 
