@@ -209,6 +209,42 @@ func (s *TokenStore) GetAccountID() string {
 	return s.tokens.AccountID
 }
 
+// GetPlanType returns the ChatGPT subscription plan (e.g. "plus") parsed from
+// the stored id_token, or "" if unknown.
+func (s *TokenStore) GetPlanType() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens == nil {
+		return ""
+	}
+	return ExtractPlanType(s.tokens.IDToken)
+}
+
+// ExtractPlanType extracts the chatgpt_plan_type claim from a JWT id_token.
+// No signature verification is performed — we trust the token endpoint.
+func ExtractPlanType(idToken string) string {
+	if idToken == "" {
+		return ""
+	}
+	parts := strings.Split(idToken, ".")
+	if len(parts) < 2 {
+		return ""
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return ""
+	}
+	var claims struct {
+		Auth struct {
+			PlanType string `json:"chatgpt_plan_type"`
+		} `json:"https://api.openai.com/auth"`
+	}
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		return ""
+	}
+	return claims.Auth.PlanType
+}
+
 // ExtractAccountID extracts the chatgpt_account_id claim from a JWT id_token.
 // No signature verification is performed — we trust the token endpoint.
 func ExtractAccountID(idToken string) string {

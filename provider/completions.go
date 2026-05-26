@@ -76,10 +76,20 @@ func (c *completionsClient) Complete(ctx context.Context, req CompletionRequest)
 		}
 	}
 
+	usage := TokenUsage{
+		PromptTokens:     resp.Usage.PromptTokens,
+		CompletionTokens: resp.Usage.CompletionTokens,
+		TotalTokens:      resp.Usage.TotalTokens,
+	}
+	if resp.Usage.PromptTokensDetails != nil {
+		usage.CachedInputTokens = resp.Usage.PromptTokensDetails.CachedTokens
+	}
+
 	return CompletionResponse{
 		Content:        resp.Choices[0].Message.Content,
 		FinishReason:   string(resp.Choices[0].FinishReason),
 		HTTPStatusCode: 200,
+		Usage:          usage,
 	}, nil
 }
 

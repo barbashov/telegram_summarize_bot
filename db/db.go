@@ -276,6 +276,17 @@ func (db *DB) migrate() error {
 			error          TEXT NOT NULL DEFAULT ''
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_image_desc_last_used ON image_descriptions(last_used_at)`,
+		`CREATE TABLE IF NOT EXISTS token_usage (
+			id                INTEGER PRIMARY KEY AUTOINCREMENT,
+			ts                DATETIME NOT NULL,
+			model             TEXT     NOT NULL,
+			operation         TEXT     NOT NULL DEFAULT '',
+			prompt_tokens     INTEGER  NOT NULL,
+			cached_tokens     INTEGER  NOT NULL DEFAULT 0,
+			completion_tokens INTEGER  NOT NULL,
+			total_tokens      INTEGER  NOT NULL
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_token_usage_ts ON token_usage(ts)`,
 	}
 
 	for _, q := range queries {

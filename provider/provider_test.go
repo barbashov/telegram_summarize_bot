@@ -20,7 +20,7 @@ func TestNewCompletionsMode(t *testing.T) {
 		LLMToken:    "test-key",
 		LLMEndpoint: "https://example.com/v1",
 	}
-	client, err := New(cfg)
+	client, err := New(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -35,7 +35,7 @@ func TestNewResponsesMode(t *testing.T) {
 		LLMToken:    "test-key",
 		LLMEndpoint: "https://api.openai.com/v1",
 	}
-	client, err := New(cfg)
+	client, err := New(cfg, nil)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -50,7 +50,7 @@ func TestNewOAuthModeNoTokens(t *testing.T) {
 		OAuthTokenDir: t.TempDir(),
 		OAuthClientID: "test-client",
 	}
-	_, err := New(cfg)
+	_, err := New(cfg, nil)
 	if err == nil {
 		t.Fatal("expected error when no tokens exist")
 	}
@@ -60,7 +60,7 @@ func TestNewInvalidMode(t *testing.T) {
 	cfg := &config.Config{
 		LLMMode: "invalid",
 	}
-	_, err := New(cfg)
+	_, err := New(cfg, nil)
 	if err == nil {
 		t.Fatal("expected error for invalid mode")
 	}

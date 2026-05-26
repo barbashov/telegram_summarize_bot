@@ -13,6 +13,7 @@ import (
 	"telegram_summarize_bot/httputil"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
+	"telegram_summarize_bot/provider"
 	"telegram_summarize_bot/summarizer"
 
 	"github.com/mymmrac/telego"
@@ -59,7 +60,7 @@ type Bot struct {
 	fetchURL func(ctx context.Context, rawURL string, maxChars int) (string, error)
 }
 
-func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
+func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics, llm provider.LLMClient) (*Bot, error) {
 	bot, err := telego.NewBot(cfg.BotToken, telego.WithHTTPClient(httputil.NewClient(60*time.Second)))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create bot: %w", err)
@@ -84,7 +85,7 @@ func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summa
 		fetchURL:    fetcher.Fetch,
 	}
 
-	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, bot)
+	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, bot, llm)
 
 	return b, nil
 }
@@ -104,6 +105,7 @@ func (b *Bot) Start(ctx context.Context) error {
 			{Command: "reset", Description: "Сбросить все метрики"},
 			{Command: "groups", Description: "Управление группами"},
 			{Command: "instructions", Description: "Инструкции суммаризации"},
+			{Command: "usage", Description: "Использование токенов и квоты"},
 			{Command: "help", Description: "Справка"},
 		},
 		Scope: tu.ScopeAllPrivateChats(),

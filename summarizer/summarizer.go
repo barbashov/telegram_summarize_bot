@@ -135,7 +135,7 @@ func (s *Summarizer) retrySleep(ctx context.Context, attempt int) error {
 	}
 }
 
-func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt string, maxTokens int, temperature float32) (provider.CompletionResponse, error) {
+func (s *Summarizer) complete(ctx context.Context, operation, systemPrompt, userPrompt string, maxTokens int, temperature float32) (provider.CompletionResponse, error) {
 	logger.Debug().Str("model", s.model).Int("max_tokens", maxTokens).Int("prompt_len", len(userPrompt)).Msg("LLM request started")
 	resp, err := s.client.Complete(ctx, provider.CompletionRequest{
 		Model: s.model,
@@ -145,6 +145,7 @@ func (s *Summarizer) complete(ctx context.Context, systemPrompt, userPrompt stri
 		},
 		MaxTokens:   maxTokens,
 		Temperature: temperature,
+		Operation:   operation,
 	})
 	if err != nil {
 		logEvt := logger.Debug().Err(err).Str("model", s.model)
@@ -294,7 +295,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 
 	var lastErr error
 	for attempt := range maxLLMRetries {
-		resp, err := s.complete(ctx, systemPrompt, prompt, clusterTokens, 0.1)
+		resp, err := s.complete(ctx, provider.OpCluster, systemPrompt, prompt, clusterTokens, 0.1)
 		if err != nil {
 			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to create topic clustering completion")
 			s.metrics.RecordError("llm_cluster", err.Error())
@@ -345,7 +346,7 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 
 	var lastErr error
 	for attempt := range maxLLMRetries {
-		resp, err := s.complete(ctx, systemPrompt, prompt, finalMaxTokens, 0.3)
+		resp, err := s.complete(ctx, provider.OpSummarize, systemPrompt, prompt, finalMaxTokens, 0.3)
 		if err != nil {
 			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to create topic summary completion")
 			s.metrics.RecordError("llm_summarize", err.Error())
@@ -431,7 +432,7 @@ func (s *Summarizer) SummarizeText(ctx context.Context, content, instructions st
 
 	var lastErr error
 	for attempt := range maxLLMRetries {
-		resp, err := s.complete(ctx, systemPrompt, userPrompt, urlMaxTokens, 0.3)
+		resp, err := s.complete(ctx, provider.OpText, systemPrompt, userPrompt, urlMaxTokens, 0.3)
 		if err != nil {
 			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to summarize text")
 			s.metrics.RecordError("llm_text_summarize", err.Error())
@@ -466,7 +467,7 @@ func (s *Summarizer) SummarizeURL(ctx context.Context, pageURL, content, instruc
 
 	var lastErr error
 	for attempt := range maxLLMRetries {
-		resp, err := s.complete(ctx, systemPrompt, userPrompt, urlMaxTokens, 0.3)
+		resp, err := s.complete(ctx, provider.OpURL, systemPrompt, userPrompt, urlMaxTokens, 0.3)
 		if err != nil {
 			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to summarize URL content")
 			s.metrics.RecordError("llm_url_summarize", err.Error())

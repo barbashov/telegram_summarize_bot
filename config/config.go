@@ -65,6 +65,8 @@ type Config struct {
 	ImageDescribeConcurrency int
 	ImageDescribeTimeoutSec  int
 	LLMHTTPTimeoutSec        int
+	CodexQuotaTTLSec         int
+	ModelContextTokens       int // optional override for context-window utilization; 0 => auto
 }
 
 func Load() (*Config, error) {
@@ -212,7 +214,15 @@ func Load() (*Config, error) {
 		ImageDescribeConcurrency: envIntOr("IMAGE_DESCRIBE_CONCURRENCY", 4),
 		ImageDescribeTimeoutSec:  envIntOr("IMAGE_DESCRIBE_TIMEOUT_SEC", 60),
 		LLMHTTPTimeoutSec:        envIntOr("LLM_HTTP_TIMEOUT_SEC", 180),
+		CodexQuotaTTLSec:         envIntOr("CODEX_QUOTA_TTL_SEC", 900),
+		ModelContextTokens:       envIntOr("MODEL_CONTEXT_TOKENS", 0),
 	}, nil
+}
+
+// CodexQuotaTTL is how long a cached Codex quota snapshot is considered fresh
+// before /usage attempts a live refresh.
+func (c *Config) CodexQuotaTTL() time.Duration {
+	return time.Duration(c.CodexQuotaTTLSec) * time.Second
 }
 
 type ConfigError struct {

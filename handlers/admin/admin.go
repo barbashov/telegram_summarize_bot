@@ -10,6 +10,7 @@ import (
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
+	"telegram_summarize_bot/provider"
 
 	"github.com/mymmrac/telego"
 )
@@ -49,13 +50,14 @@ type Admin struct {
 	summarizer  SummaryService
 	rateLimiter RateLimiterIface
 	telegram    TelegramSender
+	llm         provider.LLMClient // for live Codex quota resolution
 
 	mu                         sync.Mutex
 	pendingSummaryInstructions map[int64]int64
 }
 
 // New creates a new Admin handler.
-func New(deps Deps, database *db.DB, m *metrics.Metrics, cfg *config.Config, sum SummaryService, rl RateLimiterIface, tg TelegramSender) *Admin {
+func New(deps Deps, database *db.DB, m *metrics.Metrics, cfg *config.Config, sum SummaryService, rl RateLimiterIface, tg TelegramSender, llm provider.LLMClient) *Admin {
 	return &Admin{
 		deps:                       deps,
 		db:                         database,
@@ -64,6 +66,7 @@ func New(deps Deps, database *db.DB, m *metrics.Metrics, cfg *config.Config, sum
 		summarizer:                 sum,
 		rateLimiter:                rl,
 		telegram:                   tg,
+		llm:                        llm,
 		pendingSummaryInstructions: make(map[int64]int64),
 	}
 }
@@ -100,6 +103,8 @@ func (a *Admin) Handle(ctx context.Context, update telego.Update) bool {
 		a.handleGroups(ctx, msg.Chat.ID, msg.From.ID, fields[1:])
 	case "/instructions":
 		a.handleInstructions(ctx, msg.Chat.ID)
+	case "/usage":
+		a.handleUsage(ctx, msg.Chat.ID)
 	case "/help":
 		a.handleHelp(ctx, msg.Chat.ID)
 	default:

@@ -18,7 +18,7 @@ func TestPrivateCommandStatus_AlertUser(t *testing.T) {
 	b.cfg.AdminUserIDs = []int64{alertUserID}
 
 	// Re-initialize admin with updated config.
-	b.admin = admin.New(b, database, b.metrics, b.cfg, &fakeSummarizer{}, b.rateLimiter, tg)
+	b.admin = admin.New(b, database, b.metrics, b.cfg, &fakeSummarizer{}, b.rateLimiter, tg, nil)
 
 	update := telego.Update{
 		Message: &telego.Message{
