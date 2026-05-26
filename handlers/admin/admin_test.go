@@ -85,7 +85,7 @@ func newTestAdmin(t *testing.T) (*Admin, *db.DB, *fakeDeps) {
 		Model:        "test-model",
 	}
 
-	a := New(deps, database, metrics.New(), cfg, &fakeSummarizer{}, &fakeRateLimiter{}, tg)
+	a := New(deps, database, metrics.New(), cfg, &fakeSummarizer{}, &fakeRateLimiter{}, tg, nil)
 	return a, database, deps
 }
 

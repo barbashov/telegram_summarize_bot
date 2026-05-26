@@ -42,6 +42,12 @@ func TestResponsesClientComplete(t *testing.T) {
 					},
 				},
 			},
+			"usage": map[string]any{
+				"input_tokens":         200,
+				"input_tokens_details": map[string]any{"cached_tokens": 50},
+				"output_tokens":        80,
+				"total_tokens":         280,
+			},
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
@@ -70,6 +76,10 @@ func TestResponsesClientComplete(t *testing.T) {
 	}
 	if resp.FinishReason != "stop" {
 		t.Errorf("finish_reason = %q, want %q", resp.FinishReason, "stop")
+	}
+	wantUsage := TokenUsage{PromptTokens: 200, CachedInputTokens: 50, CompletionTokens: 80, TotalTokens: 280}
+	if resp.Usage != wantUsage {
+		t.Errorf("usage = %+v, want %+v", resp.Usage, wantUsage)
 	}
 }
 

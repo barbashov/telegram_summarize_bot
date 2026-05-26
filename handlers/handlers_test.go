@@ -148,7 +148,7 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 			return "", errors.New("fetchURL not stubbed in this test")
 		},
 	}
-	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, tg)
+	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, tg, nil)
 
 	return b, database, tg
 }

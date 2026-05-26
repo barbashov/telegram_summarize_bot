@@ -75,6 +75,41 @@ func TestCompletionsClientComplete(t *testing.T) {
 	}
 }
 
+func TestCompletionsClientUsage(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		resp := openai.ChatCompletionResponse{
+			Choices: []openai.ChatCompletionChoice{
+				{Message: openai.ChatCompletionMessage{Content: "ok"}, FinishReason: "stop"},
+			},
+			Usage: openai.Usage{
+				PromptTokens:        100,
+				CompletionTokens:    40,
+				TotalTokens:         140,
+				PromptTokensDetails: &openai.PromptTokensDetails{CachedTokens: 30},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	client, err := NewCompletionsClient("key", server.URL, 0)
+	if err != nil {
+		t.Fatalf("NewCompletionsClient: %v", err)
+	}
+	resp, err := client.Complete(context.Background(), CompletionRequest{
+		Model:    "m",
+		Messages: []Message{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	want := TokenUsage{PromptTokens: 100, CachedInputTokens: 30, CompletionTokens: 40, TotalTokens: 140}
+	if resp.Usage != want {
+		t.Errorf("usage = %+v, want %+v", resp.Usage, want)
+	}
+}
+
 func TestCompletionsClientNoChoices(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		resp := openai.ChatCompletionResponse{Choices: []openai.ChatCompletionChoice{}}

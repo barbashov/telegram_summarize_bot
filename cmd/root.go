@@ -98,7 +98,7 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 		Str("model", cfg.Model).
 		Msg("Configuration loaded")
 
-	llmClient, err := provider.New(cfg)
+	llmClient, err := provider.New(cfg, database)
 	if err != nil {
 		return fmt.Errorf("failed to initialize LLM provider: %w", err)
 	}
@@ -107,7 +107,7 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 		WithReplyThreadDepth(cfg.ReplyThreadContextDepth)
 
 	initCtx, initCancel := context.WithTimeout(ctx, 10*time.Second)
-	tgBot, err := handlers.NewBot(initCtx, cfg, database, sum, m)
+	tgBot, err := handlers.NewBot(initCtx, cfg, database, sum, m, llmClient)
 	initCancel()
 	if err != nil {
 		return fmt.Errorf("failed to initialize bot: %w", err)

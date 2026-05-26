@@ -19,7 +19,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
-- Admin private commands (`/status`, `/groups`, `/instructions`): runtime metrics, dynamic group management, and per-group summary instructions
+- Admin private commands (`/status`, `/groups`, `/instructions`, `/usage`): runtime metrics, dynamic group management, per-group summary instructions, and token-usage / Codex-quota reporting
 - SQLite persistence
 - Graceful shutdown
 
@@ -153,6 +153,15 @@ Opens an interactive private-DM flow for configuring additional instructions for
 
 The saved text is appended to the final summary prompt only. It can change emphasis or style, but it cannot override the bot's mandatory Russian JSON output rules. Only users listed in `ADMIN_USER_IDS` can use this command.
 
+#### `/usage` — token usage and Codex quotas
+
+Reports LLM token usage and (in OAuth/Codex mode) the account quota:
+
+- **Token usage history** — totals for today / last 7 days / last 30 days (input, cache-read, output, calls), plus per-model and per-operation (clustering / summarizing / vision) breakdowns. Recorded going forward; history before this feature won't appear.
+- **Account limits** (OAuth mode only) — the Codex **Session** (5h) and **Weekly** (7d) windows with percent remaining and reset times, parsed from the `x-codex-*` response headers the bot already receives.
+
+Quota freshness uses a tiered strategy: the last captured snapshot if newer than `CODEX_QUOTA_TTL_SEC`; otherwise a best-effort poll of the Codex usage endpoint; otherwise a tiny throwaway request to read fresh headers. The same report is available from the command line via `./telegram_summarize_bot usage` (reads the bot's database; works while the bot is running).
+
 #### URL summarization
 
 Send a URL in a private message — the bot fetches the page, extracts the article text (using readability), and replies with a summary. Only admin users can use this feature; non-admins are ignored.
@@ -217,6 +226,8 @@ All configuration is via environment variables (`.env` file):
 | `IMAGE_DESCRIBE_CONCURRENCY` | `4` | Max parallel vision calls per summarize run |
 | `IMAGE_DESCRIBE_TIMEOUT_SEC` | `60` | Per-image vision call timeout (seconds) |
 | `LLM_HTTP_TIMEOUT_SEC` | `180` | HTTP client timeout for all LLM requests (cluster, summary, vision) |
+| `CODEX_QUOTA_TTL_SEC` | `900` | How long a cached Codex quota snapshot is considered fresh before `/usage` attempts a live refresh (OAuth mode) |
+| `MODEL_CONTEXT_TOKENS` | *(auto)* | Override for the context-window size used in the `/usage` context-utilization line; `0` auto-detects from the model name |
 | `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + LLM traffic (`socks5://host:port`, `http://host:port`) |
 
 > **Migration note:** `OPENROUTER_API_KEY` and `OPENROUTER_URL` still work but are deprecated. Use `LLM_TOKEN` and `LLM_ENDPOINT` instead.

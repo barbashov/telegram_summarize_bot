@@ -13,6 +13,10 @@ import (
 
 const metricsRetention = 30 * 24 * time.Hour
 
+// tokenUsageRetention keeps token-usage history well beyond the 30d report
+// window so trends remain visible without unbounded growth.
+const tokenUsageRetention = 90 * 24 * time.Hour
+
 func (b *Bot) statsCacheLoop(ctx context.Context) {
 	ticker := time.NewTicker(time.Minute)
 	defer ticker.Stop()
@@ -98,6 +102,11 @@ func (b *Bot) cleanupLoop(ctx context.Context) {
 				logger.Error().Err(err).Msg("failed to purge old image descriptions")
 			} else if purged > 0 {
 				logger.Info().Int64("purged", purged).Msg("purged old image descriptions")
+			}
+			if purged, err := b.db.PurgeOldTokenUsage(ctx, time.Now().Add(-tokenUsageRetention)); err != nil {
+				logger.Error().Err(err).Msg("failed to purge old token usage")
+			} else if purged > 0 {
+				logger.Info().Int64("purged", purged).Msg("purged old token usage")
 			}
 		}
 	}

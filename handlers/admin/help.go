@@ -10,7 +10,8 @@ func (a *Admin) handleHelp(ctx context.Context, chatID int64) {
 		"`/groups` — список разрешённых групп\n" +
 		"`/groups add <group_id>` — добавить группу\n" +
 		"`/groups remove <group_id>` — удалить группу\n" +
-		"`/instructions` — настроить дополнительные инструкции суммаризации для группы\n\n" +
+		"`/instructions` — настроить дополнительные инструкции суммаризации для группы\n" +
+		"`/usage` — использование токенов и квоты Codex\n\n" +
 		"*Суммаризация URL:*\nОтправьте ссылку — бот загрузит страницу и вернёт краткое содержание\\."
 	a.deps.SendFormatted(ctx, chatID, helpText)
 }

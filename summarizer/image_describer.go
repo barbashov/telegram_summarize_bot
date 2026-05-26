@@ -179,6 +179,7 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord, st
 		},
 		MaxTokens:   maxTokens,
 		Temperature: 0.1,
+		Operation:   provider.OpVision,
 	})
 	if err != nil {
 		logger.Warn().Err(err).Str("cache_key", cacheKey).Msg("vision call failed")

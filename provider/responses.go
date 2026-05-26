@@ -22,12 +22,17 @@ type responsesClient struct {
 }
 
 // NewResponsesClient creates an LLMClient using the OpenAI Responses API.
-// A non-positive timeout falls back to defaultLLMHTTPTimeout.
-func NewResponsesClient(token, endpoint string, timeout time.Duration) (LLMClient, error) {
+// A non-positive timeout falls back to defaultLLMHTTPTimeout. When a recorder
+// is supplied (via WithRecorder), Codex quota headers on responses are captured.
+func NewResponsesClient(token, endpoint string, timeout time.Duration, opts ...ClientOption) (LLMClient, error) {
 	if timeout <= 0 {
 		timeout = defaultLLMHTTPTimeout
 	}
+	o := applyClientOptions(opts)
 	httpClient := DebugHTTPClient(timeout)
+	if o.rec != nil {
+		httpClient.Transport = &codexRateLimitTransport{inner: httpClient.Transport, rec: o.rec}
+	}
 	client := openai.NewClient(
 		option.WithAPIKey(token),
 		option.WithBaseURL(endpoint),
@@ -165,6 +170,12 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 		Content:        text,
 		FinishReason:   finishReason,
 		HTTPStatusCode: 200,
+		Usage: TokenUsage{
+			PromptTokens:      int(resp.Usage.InputTokens),
+			CachedInputTokens: int(resp.Usage.InputTokensDetails.CachedTokens),
+			CompletionTokens:  int(resp.Usage.OutputTokens),
+			TotalTokens:       int(resp.Usage.TotalTokens),
+		},
 	}, nil
 }
 
