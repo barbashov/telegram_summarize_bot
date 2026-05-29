@@ -48,7 +48,7 @@ See README for the full behavior, arguments, and configuration (`config/config.g
 
 ### Rate limiting
 
-In-memory (not persisted to DB). Keyed by `userID_groupID`. Cleanup runs every 5 minutes. Configurable via `RATE_LIMIT_SEC` (default 60s).
+In-memory (not persisted to DB). Keyed by group ID (one summarize per group per `RATE_LIMIT_SEC`). Cleanup runs every 5 minutes. Configurable via `RATE_LIMIT_SEC` (default 60s).
 
 ## Conventions
 
