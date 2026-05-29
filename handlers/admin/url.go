@@ -3,9 +3,6 @@ package admin
 import (
 	"context"
 	"errors"
-	"fmt"
-	"strings"
-	"time"
 
 	"telegram_summarize_bot/fetcher"
 	"telegram_summarize_bot/logger"
@@ -29,7 +26,7 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	if !a.rateLimiter.Allow(chatID) {
 		a.metrics.RateLimit.Record(0)
 		remaining := a.rateLimiter.RemainingTime(chatID)
-		a.deps.SendMessage(ctx, chatID, "Подождите "+formatDuration(remaining)+" перед следующим запросом.")
+		a.deps.SendMessage(ctx, chatID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом.")
 		return
 	}
 
@@ -68,66 +65,4 @@ func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL str
 	for _, chunk := range chunks[1:] {
 		a.deps.SendFormatted(ctx, chatID, chunk)
 	}
-}
-
-func formatDuration(d time.Duration) string {
-	seconds := int(d.Seconds())
-	if seconds < 60 {
-		return fmt.Sprintf("%d секунд", seconds)
-	}
-	minutes := seconds / 60
-	return fmt.Sprintf("%d минут", minutes)
-}
-
-func splitMessage(text string, limit int) []string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return nil
-	}
-	if limit <= 0 || len(text) <= limit {
-		return []string{text}
-	}
-
-	lines := strings.Split(text, "\n")
-	var chunks []string
-	var current strings.Builder
-
-	appendChunk := func() {
-		chunk := strings.TrimSpace(current.String())
-		if chunk != "" {
-			chunks = append(chunks, chunk)
-		}
-		current.Reset()
-	}
-
-	for _, line := range lines {
-		line = strings.TrimRight(line, " ")
-		candidateLen := len(line)
-		if current.Len() > 0 {
-			candidateLen = current.Len() + 1 + len(line)
-		}
-
-		if candidateLen <= limit {
-			if current.Len() > 0 {
-				current.WriteString("\n")
-			}
-			current.WriteString(line)
-			continue
-		}
-
-		if current.Len() > 0 {
-			appendChunk()
-		}
-
-		for len(line) > limit {
-			chunks = append(chunks, strings.TrimSpace(line[:limit]))
-			line = line[limit:]
-		}
-		if strings.TrimSpace(line) != "" {
-			current.WriteString(line)
-		}
-	}
-
-	appendChunk()
-	return chunks
 }

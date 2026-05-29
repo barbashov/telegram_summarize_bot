@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"telegram_summarize_bot/config"
@@ -23,6 +24,12 @@ const (
 	telegramMessageLimit     = 4096
 	cleanupInterval          = 1 * time.Hour
 	rateLimitCleanupInterval = 5 * time.Minute
+	// maxConcurrentUpdates bounds how many updates are processed in parallel,
+	// providing backpressure against floods (each handler can do DB + LLM work).
+	maxConcurrentUpdates = 32
+	// shutdownDrainTimeout is how long Start waits for in-flight handlers to
+	// finish before returning (and the caller closes the DB).
+	shutdownDrainTimeout = 5 * time.Second
 )
 
 type telegramClient interface {
@@ -57,6 +64,11 @@ type Bot struct {
 	// fetchURL fetches and extracts readable text from a URL. Defaults to
 	// fetcher.Fetch; overridable in tests to avoid real network access.
 	fetchURL func(ctx context.Context, rawURL string, maxChars int) (string, error)
+
+	// inflight tracks running update handlers so shutdown can drain them; sem
+	// bounds their concurrency (backpressure).
+	inflight sync.WaitGroup
+	sem      chan struct{}
 }
 
 func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics) (*Bot, error) {
@@ -82,6 +94,7 @@ func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summa
 		username:    strings.ToLower(me.Username),
 		metrics:     m,
 		fetchURL:    fetcher.Fetch,
+		sem:         make(chan struct{}, maxConcurrentUpdates),
 	}
 
 	b.admin = admin.New(b, database, m, cfg, sum, b.rateLimiter, bot)
@@ -145,13 +158,46 @@ func (b *Bot) Start(ctx context.Context) error {
 		case <-ctx.Done():
 			logger.Info().Msg("Stopping bot...")
 			cancelPolling()
+			b.drainHandlers(shutdownDrainTimeout)
 			return nil
 		case update, ok := <-updates:
 			if !ok {
 				return nil
 			}
-			go b.handleUpdate(ctx, update)
+			// Acquire a slot before spawning so a flood applies backpressure to
+			// the poller instead of spawning unbounded goroutines.
+			select {
+			case b.sem <- struct{}{}:
+			case <-ctx.Done():
+				logger.Info().Msg("Stopping bot...")
+				cancelPolling()
+				b.drainHandlers(shutdownDrainTimeout)
+				return nil
+			}
+			b.inflight.Add(1)
+			go func(u telego.Update) {
+				defer b.inflight.Done()
+				defer func() { <-b.sem }()
+				b.handleUpdate(ctx, u)
+			}(update)
 		}
+	}
+}
+
+// drainHandlers waits up to timeout for in-flight update handlers to finish, so
+// they don't write to the DB after the caller closes it. In-flight LLM/network
+// calls use the (now-cancelled) parent context and abort quickly; this mainly
+// lets handlers unwind cleanly.
+func (b *Bot) drainHandlers(timeout time.Duration) {
+	done := make(chan struct{})
+	go func() {
+		b.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(timeout):
+		logger.Warn().Dur("timeout", timeout).Msg("shutdown drain timed out; some handlers still running")
 	}
 }
 

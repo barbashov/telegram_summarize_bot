@@ -169,6 +169,13 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 		return nil, fmt.Errorf("failed to open db: %w", err)
 	}
 
+	// Serialize all access through a single connection. SQLite + database/sql can
+	// otherwise open several handles to the same file concurrently, and concurrent
+	// writers then fail with SQLITE_BUSY ("database is locked"). With one pooled
+	// connection, writes queue at the Go layer and can never collide; per-connection
+	// PRAGMAs below also apply consistently because there is exactly one connection.
+	conn.SetMaxOpenConns(1)
+
 	if err := conn.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping db: %w", err)
 	}
@@ -178,6 +185,15 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	// level so ON DELETE CASCADE on message_photos actually fires.
 	if _, err := conn.Exec(`PRAGMA foreign_keys = ON`); err != nil {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
+	}
+
+	// WAL improves write latency and crash safety; busy_timeout is cheap insurance
+	// (with a single connection there is never contention, but it costs nothing).
+	if _, err := conn.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		return nil, fmt.Errorf("failed to enable WAL: %w", err)
+	}
+	if _, err := conn.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
+		return nil, fmt.Errorf("failed to set busy_timeout: %w", err)
 	}
 
 	db := &DB{conn: conn, dbPath: dbPath, metrics: m}

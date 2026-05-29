@@ -26,6 +26,18 @@ jobs:
         with:
           version: v2.12.2
 
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: go test (race)
+        run: go test -race ./...
+
   security:
     runs-on: ubuntu-latest
     steps:
@@ -42,7 +54,7 @@ jobs:
         run: go run github.com/securego/gosec/v2/cmd/gosec@v2.22.9 ./...
 
   build:
-    needs: [lint, security]
+    needs: [lint, test, security]
     runs-on: ubuntu-latest
     permissions:
       contents: read
