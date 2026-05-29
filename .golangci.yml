@@ -13,6 +13,9 @@ linters:
     - unconvert
     - unparam
   settings:
+    govet:
+      enable:
+        - nilness
     gocritic:
       enabled-tags:
         - diagnostic

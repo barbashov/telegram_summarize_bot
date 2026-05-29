@@ -529,42 +529,6 @@ func TestHandle_InstructionsCancelAndSlashCommandDoesNotSave(t *testing.T) {
 	}
 }
 
-func TestFormatDuration(t *testing.T) {
-	tests := []struct {
-		d    time.Duration
-		want string
-	}{
-		{30 * time.Second, "30 секунд"},
-		{60 * time.Second, "1 минут"},
-		{0, "0 секунд"},
-	}
-
-	for _, tt := range tests {
-		got := formatDuration(tt.d)
-		if got != tt.want {
-			t.Fatalf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
-		}
-	}
-}
-
-func TestSplitMessage(t *testing.T) {
-	tests := []struct {
-		name   string
-		text   string
-		limit  int
-		chunks int
-	}{
-		{"empty", "", 100, 0},
-		{"within limit", "hello", 100, 1},
-		{"over limit", strings.Repeat("a", 50) + "\n" + strings.Repeat("b", 50), 60, 2},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := splitMessage(tt.text, tt.limit)
-			if len(got) != tt.chunks {
-				t.Fatalf("got %d chunks, want %d", len(got), tt.chunks)
-			}
-		})
-	}
-}
+// formatDuration and splitMessage moved/removed: duration formatting is now
+// tgutil.FormatDuration (tested in tgutil/format_test.go) and the unused
+// splitMessage helper was deleted.

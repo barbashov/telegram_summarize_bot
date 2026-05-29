@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -99,6 +100,18 @@ func hasImageMedia(msg *telego.Message) bool {
 // plus the inferred MIME type. It enforces maxBytes (truncation = error) and
 // returns ErrFileExpired when Telegram says the handle is no longer valid.
 func (b *Bot) FetchImage(ctx context.Context, fileID string) (data []byte, mime string, err error) {
+	// The Telegram file-download URL embeds the bot token in its path, and
+	// net/http stringifies that URL into *url.Error values. Redact the token
+	// from any returned error so it can't leak into logs or the negative-cache
+	// error column.
+	defer func() {
+		// Guard on Contains so sentinel errors (e.g. ErrFileExpired) keep their
+		// identity for errors.Is — only the token-bearing download error is rewrapped.
+		if err != nil && b.cfg.BotToken != "" && strings.Contains(err.Error(), b.cfg.BotToken) {
+			err = errors.New(strings.ReplaceAll(err.Error(), b.cfg.BotToken, "<token>"))
+		}
+	}()
+
 	if fileID == "" {
 		return nil, "", fmt.Errorf("empty file_id")
 	}

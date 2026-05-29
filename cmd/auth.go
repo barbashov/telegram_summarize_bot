@@ -152,13 +152,11 @@ func RunTokenRefresh(clientID, tokenDir string) error {
 		return fmt.Errorf("refresh failed: %w", err)
 	}
 
-	token, err := store.GetValidToken()
-	if err != nil {
+	if _, err := store.GetValidToken(); err != nil {
 		return fmt.Errorf("get token after refresh: %w", err)
 	}
 
 	fmt.Println("✓ Token refreshed successfully")
-	fmt.Printf("  Token prefix: %s...\n", token[:20])
 	return nil
 }
 

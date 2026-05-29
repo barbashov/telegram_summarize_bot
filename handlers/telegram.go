@@ -128,9 +128,7 @@ func (b *Bot) editFormattedFinal(ctx context.Context, chatID, msgID int64, text 
 			return nil
 		}
 		if !sleepCtx(ctx, editRetryDelay) {
-			if lastErr == nil {
-				return ctx.Err()
-			}
+			// lastErr is non-nil here: the lastErr == nil case returned above.
 			return lastErr
 		}
 	}

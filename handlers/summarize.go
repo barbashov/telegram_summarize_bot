@@ -8,6 +8,7 @@ import (
 
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/summarizer"
+	"telegram_summarize_bot/tgutil"
 
 	"github.com/mymmrac/telego"
 )
@@ -60,7 +61,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessage(ctx, groupID, "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessage(ctx, groupID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 

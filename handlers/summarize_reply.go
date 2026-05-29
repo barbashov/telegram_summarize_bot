@@ -97,7 +97,7 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *te
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 	committed := false
@@ -227,7 +227,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID int64, reply *te
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+formatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 	committed := false

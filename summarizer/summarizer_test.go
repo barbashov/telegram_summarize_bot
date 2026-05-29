@@ -53,7 +53,7 @@ func TestClusterTopicsSanitizesAssignments(t *testing.T) {
 		{Text: "Четвертое", Timestamp: time.Unix(180, 0)},
 	}
 
-	clusters, err := sum.ClusterTopics(context.Background(), messages, 5)
+	clusters, err := sum.ClusterTopics(context.Background(), messages, 5, nil)
 	if err != nil {
 		t.Fatalf("ClusterTopics returned error: %v", err)
 	}
@@ -79,7 +79,7 @@ func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
 	}
 	sum := New(&fakeLLMClient{responses: responses}, "test-model", metrics.New(), true)
 
-	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5)
+	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -278,7 +278,7 @@ func TestRenderMessageLineReplyAnnotation(t *testing.T) {
 	s := New(&fakeLLMClient{}, "m", metrics.New(), true)
 
 	render := func(messages []db.Message, target db.Message) string {
-		return s.renderMessageLine(messages, buildReplyIndex(messages), BuildUserAliasMap(messages), target)
+		return s.renderMessageLine(messages, buildReplyIndex(messages), BuildUserAliasMap(messages), nil, target)
 	}
 
 	t.Run("immediate parent breadcrumb with alias + snippet", func(t *testing.T) {
@@ -340,7 +340,7 @@ func TestRenderMessageLineReplyAnnotation(t *testing.T) {
 		mid := db.Message{TgMessageID: 2, ReplyToTgID: 1, UserHash: "h2", Text: "mid", Timestamp: ts}
 		leaf := db.Message{TgMessageID: 3, ReplyToTgID: 2, UserHash: "h3", Text: "leaf", Timestamp: ts}
 		msgs := []db.Message{root, mid, leaf}
-		out := s2.renderMessageLine(msgs, buildReplyIndex(msgs), BuildUserAliasMap(msgs), leaf)
+		out := s2.renderMessageLine(msgs, buildReplyIndex(msgs), BuildUserAliasMap(msgs), nil, leaf)
 		if !strings.Contains(out, "↩ [У2]") || strings.Contains(out, "У1›") {
 			t.Fatalf("depth=1 should show only the immediate parent, got: %q", out)
 		}
@@ -354,7 +354,7 @@ func TestFormatIndexedMessages_ReplyThreadsEnabled(t *testing.T) {
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	s := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
-	out := s.formatIndexedMessages(messages)
+	out := s.formatIndexedMessages(messages, nil)
 	if !strings.Contains(out, "↩") {
 		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
 	}
@@ -367,7 +367,7 @@ func TestFormatIndexedMessages_ReplyThreadsDisabled(t *testing.T) {
 		{TgMessageID: 2, ReplyToTgID: 1, UserHash: "deadbeef", Text: "reply to first", Timestamp: ts},
 	}
 	s := New(&fakeLLMClient{}, "test-model", metrics.New(), false)
-	out := s.formatIndexedMessages(messages)
+	out := s.formatIndexedMessages(messages, nil)
 	if strings.Contains(out, "↩") {
 		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
 	}
@@ -381,7 +381,7 @@ func TestFormatClustersForPrompt_ReplyThreadsEnabled(t *testing.T) {
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
 	s := New(&fakeLLMClient{}, "test-model", metrics.New(), true)
-	out := s.formatClustersForPrompt(messages, clusters)
+	out := s.formatClustersForPrompt(messages, clusters, nil)
 	if !strings.Contains(out, "↩") {
 		t.Fatalf("expected reply annotation with replyThreads=true, got: %q", out)
 	}
@@ -395,7 +395,7 @@ func TestFormatClustersForPrompt_ReplyThreadsDisabled(t *testing.T) {
 	}
 	clusters := []TopicCluster{{Title: "Test", MessageIndexes: []int{0, 1}}}
 	s := New(&fakeLLMClient{}, "test-model", metrics.New(), false)
-	out := s.formatClustersForPrompt(messages, clusters)
+	out := s.formatClustersForPrompt(messages, clusters, nil)
 	if strings.Contains(out, "↩") {
 		t.Fatalf("unexpected reply annotation with replyThreads=false, got: %q", out)
 	}
@@ -550,7 +550,7 @@ func TestClusterTopicsRetriesOnNetworkError(t *testing.T) {
 
 	clusters, err := sum.ClusterTopics(context.Background(), []db.Message{
 		{Text: "msg", Timestamp: time.Unix(0, 0)},
-	}, 5)
+	}, 5, nil)
 	if err != nil {
 		t.Fatalf("expected success after retries, got: %v", err)
 	}
@@ -574,7 +574,7 @@ func TestClusterTopicsNoRetryOnContextCanceled(t *testing.T) {
 
 	_, err := sum.ClusterTopics(context.Background(), []db.Message{
 		{Text: "msg", Timestamp: time.Unix(0, 0)},
-	}, 5)
+	}, 5, nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -597,7 +597,7 @@ func TestSummarizeTopicsRetriesOnNetworkError(t *testing.T) {
 	messages := []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}
 	clusters := []TopicCluster{{Title: "Тема", MessageIndexes: []int{0}}}
 
-	result, err := sum.SummarizeTopics(context.Background(), messages, clusters, "")
+	result, err := sum.SummarizeTopics(context.Background(), messages, clusters, "", nil)
 	if err != nil {
 		t.Fatalf("expected success after retry, got: %v", err)
 	}
@@ -702,4 +702,60 @@ func TestDescribeImageDelegatesToDescriber(t *testing.T) {
 	if desc.calls["u1"] != 1 {
 		t.Fatalf("describer called %d times, want 1", desc.calls["u1"])
 	}
+}
+
+// concurrentStubClient is a thread-safe LLM stub returning canned cluster/summary
+// JSON depending on the prompt, so the race regression test below doesn't itself
+// race on the harness.
+type concurrentStubClient struct {
+	mu    sync.Mutex
+	calls int
+}
+
+func (c *concurrentStubClient) Complete(_ context.Context, req provider.CompletionRequest) (provider.CompletionResponse, error) {
+	c.mu.Lock()
+	c.calls++
+	c.mu.Unlock()
+	var user string
+	for _, m := range req.Messages {
+		if m.Role == "user" {
+			user = m.Content
+		}
+	}
+	if strings.Contains(user, "Разбей сообщения") {
+		return provider.CompletionResponse{
+			Content:      `{"topics":[{"title":"Тема","message_indexes":[0],"message_count":1}]}`,
+			FinishReason: "stop",
+		}, nil
+	}
+	return provider.CompletionResponse{
+		Content:      `{"tldr":"итог","topics":[{"title":"Тема","summary":"ок","message_count":1}]}`,
+		FinishReason: "stop",
+	}, nil
+}
+
+// TestSummarizeByTopicsConcurrentNoRace exercises a single shared *Summarizer from
+// many goroutines (the production wiring). It must pass under `go test -race`;
+// before image descriptions were threaded as a per-call argument it raced on the
+// shared s.descriptions field.
+func TestSummarizeByTopicsConcurrentNoRace(t *testing.T) {
+	client := &concurrentStubClient{}
+	desc := &stubImageDescriber{calls: map[string]int{}, resp: map[string]string{"u1": "описание"}}
+	photos := &stubPhotoLookup{byMessage: map[int64][]db.PhotoRecord{1: {{FileUniqueID: "u1", FileID: "f1"}}}}
+	sum := New(client, "m", metrics.New(), true)
+	sum.WithImageDescriber(photos, desc, 2)
+
+	msgs := []db.Message{{ID: 1, TgMessageID: 1, UserHash: "h1", Text: "привет", Timestamp: time.Unix(0, 0)}}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := sum.SummarizeByTopics(context.Background(), msgs, 5, ""); err != nil {
+				t.Errorf("SummarizeByTopics returned error: %v", err)
+			}
+		}()
+	}
+	wg.Wait()
 }
