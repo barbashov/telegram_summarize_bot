@@ -1,120 +1,60 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"html"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
-	"runtime"
-	"strings"
 	"time"
 
 	"telegram_summarize_bot/provider"
 )
 
 const (
-	openAIAuthURL    = "https://auth.openai.com/oauth/authorize"
-	oauthScopes      = "openid profile email offline_access api.connectors.read api.connectors.invoke"
-	oauthDefaultPort = 1455
+	// Device authorization endpoints (Codex CLI device flow). No inbound
+	// callback or local browser is required, so this works on headless/SSH hosts.
+	deviceUserCodeURL = "https://auth.openai.com/api/accounts/deviceauth/usercode" // #nosec G101 -- endpoint URL, not a credential
+	deviceTokenURL    = "https://auth.openai.com/api/accounts/deviceauth/token"    // #nosec G101 -- endpoint URL, not a credential
+	deviceRedirectURI = "https://auth.openai.com/deviceauth/callback"
+	deviceVerifyURL   = "https://auth.openai.com/codex/device"
+
+	// Polling bounds for the device authorization flow.
+	deviceMinInterval     = 3 * time.Second
+	deviceDefaultInterval = 5 * time.Second
+	deviceMaxWait         = 15 * time.Minute
 )
 
-// RunAuth performs the OAuth PKCE flow for OpenAI Codex subscription.
+// RunAuth performs the OpenAI Codex device authorization flow: it requests a
+// device code, prints a verification URL + user code for the operator to open
+// on any device, polls until sign-in completes, then exchanges the resulting
+// authorization code for tokens and stores them.
 func RunAuth(ctx context.Context, clientID, tokenDir string) error {
-	// Generate PKCE values
-	verifier, err := generateCodeVerifier()
+	httpClient := provider.HTTPClient(15 * time.Second)
+
+	// Step 1: request a device code.
+	userCode, deviceAuthID, interval, err := requestDeviceCode(ctx, httpClient, deviceUserCodeURL, clientID)
 	if err != nil {
-		return fmt.Errorf("generate code verifier: %w", err)
+		return fmt.Errorf("request device code: %w", err)
 	}
-	challenge := computeCodeChallenge(verifier)
-	state, err := generateState()
+
+	// Step 2: tell the operator where to go.
+	fmt.Printf("\nTo sign in, open this URL on any device:\n\n    %s\n\n", deviceVerifyURL)
+	fmt.Printf("and enter this code:\n\n    %s\n\n", userCode)
+	fmt.Println("Waiting for sign-in... (press Ctrl+C to cancel)")
+
+	// Step 3: poll until the operator completes sign-in.
+	authCode, verifier, err := pollDeviceAuth(ctx, httpClient, deviceTokenURL, deviceAuthID, userCode, interval)
 	if err != nil {
-		return fmt.Errorf("generate state: %w", err)
+		return fmt.Errorf("device authorization: %w", err)
 	}
 
-	// Start local callback server on the well-known Codex CLI port.
-	listener, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", oauthDefaultPort))
-	if err != nil {
-		return fmt.Errorf("start callback server on port %d: %w", oauthDefaultPort, err)
-	}
-	redirectURI := fmt.Sprintf("http://localhost:%d/auth/callback", oauthDefaultPort)
-
-	codeCh := make(chan string, 1)
-	errCh := make(chan error, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			errCh <- fmt.Errorf("state mismatch")
-			http.Error(w, "State mismatch", http.StatusBadRequest)
-			return
-		}
-		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
-			desc := r.URL.Query().Get("error_description")
-			errCh <- fmt.Errorf("OAuth error: %s: %s", errMsg, desc)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			// Escape the provider-supplied values before reflecting them into HTML.
-			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>",
-				html.EscapeString(errMsg), html.EscapeString(desc))
-			return
-		}
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errCh <- fmt.Errorf("no authorization code in callback")
-			http.Error(w, "No code", http.StatusBadRequest)
-			return
-		}
-		codeCh <- code
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
-	})
-
-	server := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
-		ReadTimeout:       10 * time.Second,
-		WriteTimeout:      10 * time.Second,
-	}
-	go func() { _ = server.Serve(listener) }()
-	defer func() {
-		// Use a fresh background context: the parent ctx may already be
-		// cancelled if the user hit Ctrl+C, and server.Shutdown needs a
-		// short grace window regardless.
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		_ = server.Shutdown(shutdownCtx)
-		cancel()
-	}()
-
-	// Build authorization URL
-	authURL := buildAuthURL(clientID, redirectURI, challenge, state)
-	fmt.Printf("\nOpening browser for OpenAI authentication...\n")
-	fmt.Printf("If the browser doesn't open, visit this URL manually:\n\n%s\n\n", authURL)
-	openBrowser(authURL)
-
-	// Wait for callback
-	fmt.Println("Waiting for authentication (3 minutes timeout)...")
-	var code string
-	select {
-	case code = <-codeCh:
-	case err := <-errCh:
-		return err
-	case <-time.After(3 * time.Minute):
-		return fmt.Errorf("authentication timed out after 3 minutes")
-	case <-ctx.Done():
-		return ctx.Err()
-	}
-
-	// Exchange code for tokens
+	// Step 4: exchange the authorization code for tokens.
 	fmt.Println("Exchanging authorization code for tokens...")
-	tokens, err := exchangeCode(clientID, code, redirectURI, verifier)
+	tokens, err := exchangeCode(clientID, authCode, deviceRedirectURI, verifier)
 	if err != nil {
 		return fmt.Errorf("token exchange: %w", err)
 	}
@@ -206,56 +146,113 @@ func RunTest(ctx context.Context, clientID, tokenDir, model string) error {
 	return nil
 }
 
-func generateCodeVerifier() (string, error) {
-	b := make([]byte, 64)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+// requestDeviceCode asks the device-auth endpoint for a user code. The returned
+// interval is the server-suggested poll cadence, clamped to a sane minimum.
+func requestDeviceCode(ctx context.Context, client *http.Client, endpoint, clientID string) (userCode, deviceAuthID string, interval time.Duration, err error) {
+	body, err := json.Marshal(map[string]string{"client_id": clientID})
+	if err != nil {
+		return "", "", 0, err
 	}
-	return base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func computeCodeChallenge(verifier string) string {
-	h := sha256.Sum256([]byte(verifier))
-	return base64.RawURLEncoding.EncodeToString(h[:])
-}
-
-func generateState() (string, error) {
-	b := make([]byte, 16)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", "", 0, err
 	}
-	return fmt.Sprintf("%x", b), nil
-}
+	req.Header.Set("Content-Type", "application/json")
 
-func buildAuthURL(clientID, redirectURI, challenge, state string) string {
-	params := url.Values{}
-	params.Set("response_type", "code")
-	params.Set("client_id", clientID)
-	params.Set("redirect_uri", redirectURI)
-	params.Set("scope", oauthScopes)
-	params.Set("code_challenge", challenge)
-	params.Set("code_challenge_method", "S256")
-	params.Set("id_token_add_organizations", "true")
-	params.Set("codex_cli_simplified_flow", "true")
-	params.Set("state", state)
-	params.Set("originator", provider.CodexOriginator)
-	// Use %20 for spaces instead of + (url.Values.Encode uses +, but OAuth expects %20).
-	return openAIAuthURL + "?" + strings.ReplaceAll(params.Encode(), "+", "%20")
-}
-
-func openBrowser(rawURL string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", rawURL)
-	case "linux":
-		cmd = exec.Command("xdg-open", rawURL)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", rawURL)
-	default:
-		return
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", "", 0, err
 	}
-	_ = cmd.Start()
+	defer func() { _ = resp.Body.Close() }()
+
+	respBody, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return "", "", 0, fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+	}
+
+	// interval may arrive as a JSON number or string; json.Number handles both.
+	var parsed struct {
+		UserCode     string      `json:"user_code"`
+		DeviceAuthID string      `json:"device_auth_id"`
+		Interval     json.Number `json:"interval"`
+	}
+	dec := json.NewDecoder(bytes.NewReader(respBody))
+	dec.UseNumber()
+	if err := dec.Decode(&parsed); err != nil {
+		return "", "", 0, fmt.Errorf("parse response: %w (body: %s)", err, string(respBody))
+	}
+	if parsed.UserCode == "" || parsed.DeviceAuthID == "" {
+		return "", "", 0, fmt.Errorf("incomplete device code response: %s", string(respBody))
+	}
+
+	interval = deviceDefaultInterval
+	if secs, err := parsed.Interval.Int64(); err == nil && secs > 0 {
+		interval = time.Duration(secs) * time.Second
+	}
+	if interval < deviceMinInterval {
+		interval = deviceMinInterval
+	}
+
+	return parsed.UserCode, parsed.DeviceAuthID, interval, nil
+}
+
+// pollDeviceAuth polls the device-auth token endpoint until the operator
+// completes sign-in (HTTP 200), returning the server-supplied authorization
+// code and PKCE verifier. HTTP 403/404 mean "still pending"; any other status
+// is a hard failure. The poll runs until ctx is cancelled or deviceMaxWait.
+func pollDeviceAuth(ctx context.Context, client *http.Client, endpoint, deviceAuthID, userCode string, interval time.Duration) (authCode, verifier string, err error) {
+	deadline := time.Now().Add(deviceMaxWait)
+	body, err := json.Marshal(map[string]string{"device_auth_id": deviceAuthID, "user_code": userCode})
+	if err != nil {
+		return "", "", err
+	}
+
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return "", "", ctx.Err()
+		case <-ticker.C:
+		}
+		if time.Now().After(deadline) {
+			return "", "", fmt.Errorf("timed out after %s waiting for sign-in", deviceMaxWait)
+		}
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+		if err != nil {
+			return "", "", err
+		}
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			return "", "", err
+		}
+		respBody, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		switch resp.StatusCode {
+		case http.StatusOK:
+			var parsed struct {
+				AuthorizationCode string `json:"authorization_code"`
+				CodeVerifier      string `json:"code_verifier"`
+			}
+			if err := json.Unmarshal(respBody, &parsed); err != nil {
+				return "", "", fmt.Errorf("parse response: %w (body: %s)", err, string(respBody))
+			}
+			if parsed.AuthorizationCode == "" {
+				return "", "", fmt.Errorf("no authorization_code in response: %s", string(respBody))
+			}
+			return parsed.AuthorizationCode, parsed.CodeVerifier, nil
+		case http.StatusForbidden, http.StatusNotFound:
+			// Authorization still pending; keep polling.
+			continue
+		default:
+			return "", "", fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(respBody))
+		}
+	}
 }
 
 func exchangeCode(clientID, code, redirectURI, verifier string) (*provider.OAuthTokens, error) {
@@ -270,11 +267,19 @@ func exchangeCode(clientID, code, redirectURI, verifier string) (*provider.OAuth
 		return nil, err
 	}
 
+	// The device flow may omit id_token (no openid scope requested); the Codex
+	// access token is itself a JWT carrying the chatgpt_account_id claim, so
+	// fall back to it when id_token yields nothing.
+	accountID := provider.ExtractAccountID(tr.IDToken)
+	if accountID == "" {
+		accountID = provider.ExtractAccountID(tr.AccessToken)
+	}
+
 	return &provider.OAuthTokens{
 		AccessToken:  tr.AccessToken,
 		RefreshToken: tr.RefreshToken,
 		IDToken:      tr.IDToken,
-		AccountID:    provider.ExtractAccountID(tr.IDToken),
+		AccountID:    accountID,
 		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
 	}, nil
 }

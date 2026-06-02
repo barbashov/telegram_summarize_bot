@@ -63,19 +63,19 @@ MODEL=gpt-4o
 
 #### OpenAI Codex (OAuth)
 
-Uses an OpenAI Codex subscription with OAuth authentication. No API key needed — authenticate via browser:
+Uses an OpenAI Codex subscription with OAuth authentication. No API key needed — authenticate via the **device flow**:
 
 ```bash
 # First, authenticate:
 ./telegram_summarize_bot openai auth
-# Follow the browser prompts, then add to .env:
+# Open the printed URL on any device, enter the printed code, then add to .env:
 LLM_MODE=oauth
 MODEL=gpt-4o
 # Optional: override Codex client version header if a model requires newer client.
 # OAUTH_CODEX_VERSION=0.124.0
 ```
 
-The `openai auth` command opens your browser for OAuth login, saves tokens locally, and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
+The `openai auth` command uses the OpenAI Codex device authorization flow: it prints a verification URL (`https://auth.openai.com/codex/device`) and a one-time code, then waits while you open that URL on any device (phone, laptop) and enter the code. Because it needs no local browser and no inbound callback port, it works on headless/remote hosts over SSH. Once you sign in, the command saves tokens locally and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
 If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.124.0`).
 
 ## Running

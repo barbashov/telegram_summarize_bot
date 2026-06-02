@@ -1,184 +1,164 @@
 package cmd
 
 import (
-	"crypto/sha256"
-	"encoding/base64"
-	"fmt"
+	"context"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
-	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
-func TestGenerateCodeVerifier(t *testing.T) {
-	v1, err := generateCodeVerifier()
-	if err != nil {
-		t.Fatalf("generateCodeVerifier: %v", err)
-	}
-	v2, err := generateCodeVerifier()
-	if err != nil {
-		t.Fatalf("generateCodeVerifier: %v", err)
-	}
+func TestRequestDeviceCode(t *testing.T) {
+	t.Run("numeric interval", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"user_code":"ABCD-1234","device_auth_id":"dev-1","interval":7}`))
+		}))
+		defer ts.Close()
 
-	if v1 == v2 {
-		t.Error("two verifiers should not be equal")
-	}
-	if len(v1) < 32 {
-		t.Errorf("verifier too short: %d chars", len(v1))
-	}
-}
-
-func TestComputeCodeChallenge(t *testing.T) {
-	verifier := "test-verifier-123"
-	challenge := computeCodeChallenge(verifier)
-
-	// Verify manually
-	h := sha256.Sum256([]byte(verifier))
-	expected := base64.RawURLEncoding.EncodeToString(h[:])
-
-	if challenge != expected {
-		t.Errorf("challenge = %q, want %q", challenge, expected)
-	}
-}
-
-func TestGenerateState(t *testing.T) {
-	s1, err := generateState()
-	if err != nil {
-		t.Fatalf("generateState: %v", err)
-	}
-	s2, err := generateState()
-	if err != nil {
-		t.Fatalf("generateState: %v", err)
-	}
-
-	if s1 == s2 {
-		t.Error("two states should not be equal")
-	}
-	if len(s1) != 32 { // 16 bytes = 32 hex chars
-		t.Errorf("state length = %d, want 32", len(s1))
-	}
-}
-
-func TestBuildAuthURL(t *testing.T) {
-	authURL := buildAuthURL("client-123", "http://localhost:8080/callback", "challenge-abc", "state-xyz")
-
-	parsed, err := url.Parse(authURL)
-	if err != nil {
-		t.Fatalf("parse URL: %v", err)
-	}
-
-	if !strings.HasPrefix(authURL, openAIAuthURL) {
-		t.Errorf("URL should start with %s, got %s", openAIAuthURL, authURL)
-	}
-
-	params := parsed.Query()
-	checks := map[string]string{
-		"client_id":                  "client-123",
-		"redirect_uri":               "http://localhost:8080/callback",
-		"response_type":              "code",
-		"scope":                      oauthScopes,
-		"state":                      "state-xyz",
-		"code_challenge":             "challenge-abc",
-		"code_challenge_method":      "S256",
-		"id_token_add_organizations": "true",
-		"codex_cli_simplified_flow":  "true",
-		"originator":                 "codex-tui",
-	}
-	for key, want := range checks {
-		if got := params.Get(key); got != want {
-			t.Errorf("param %s = %q, want %q", key, got, want)
-		}
-	}
-}
-
-func TestCallbackHandler(t *testing.T) {
-	state := "test-state-123"
-	codeCh := make(chan string, 1)
-	errCh := make(chan error, 1)
-
-	mux := http.NewServeMux()
-	mux.HandleFunc("/auth/callback", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("state") != state {
-			errCh <- fmt.Errorf("state mismatch")
-			http.Error(w, "State mismatch", http.StatusBadRequest)
-			return
-		}
-		if errMsg := r.URL.Query().Get("error"); errMsg != "" {
-			desc := r.URL.Query().Get("error_description")
-			errCh <- fmt.Errorf("OAuth error: %s: %s", errMsg, desc)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = fmt.Fprintf(w, "<html><body><h2>Authentication failed</h2><p>%s: %s</p></body></html>", errMsg, desc)
-			return
-		}
-		code := r.URL.Query().Get("code")
-		if code == "" {
-			errCh <- fmt.Errorf("no authorization code in callback")
-			http.Error(w, "No code", http.StatusBadRequest)
-			return
-		}
-		codeCh <- code
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		_, _ = fmt.Fprint(w, "<html><body><h2>Authentication successful!</h2><p>You can close this window.</p></body></html>")
-	})
-
-	ts := httptest.NewServer(mux)
-	defer ts.Close()
-
-	t.Run("success", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/auth/callback?code=auth123&state=" + state)
+		userCode, deviceAuthID, interval, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
 		if err != nil {
-			t.Fatalf("GET: %v", err)
+			t.Fatalf("requestDeviceCode: %v", err)
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("status = %d, want 200", resp.StatusCode)
+		if userCode != "ABCD-1234" {
+			t.Errorf("user_code = %q, want %q", userCode, "ABCD-1234")
 		}
-		if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
-			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
+		if deviceAuthID != "dev-1" {
+			t.Errorf("device_auth_id = %q, want %q", deviceAuthID, "dev-1")
 		}
-		code := <-codeCh
-		if code != "auth123" {
-			t.Errorf("code = %q, want %q", code, "auth123")
+		if interval != 7*time.Second {
+			t.Errorf("interval = %s, want 7s", interval)
 		}
 	})
 
-	t.Run("state mismatch", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/auth/callback?code=auth123&state=wrong-state")
+	t.Run("string interval", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"user_code":"X","device_auth_id":"d","interval":"10"}`))
+		}))
+		defer ts.Close()
+
+		_, _, interval, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
 		if err != nil {
-			t.Fatalf("GET: %v", err)
+			t.Fatalf("requestDeviceCode: %v", err)
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", resp.StatusCode)
+		if interval != 10*time.Second {
+			t.Errorf("interval = %s, want 10s", interval)
 		}
-		<-errCh
 	})
 
-	t.Run("missing code", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/auth/callback?state=" + state)
+	t.Run("interval clamped to minimum", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"user_code":"X","device_auth_id":"d","interval":1}`))
+		}))
+		defer ts.Close()
+
+		_, _, interval, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
 		if err != nil {
-			t.Fatalf("GET: %v", err)
+			t.Fatalf("requestDeviceCode: %v", err)
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("status = %d, want 400", resp.StatusCode)
+		if interval != deviceMinInterval {
+			t.Errorf("interval = %s, want clamped %s", interval, deviceMinInterval)
 		}
-		<-errCh
 	})
 
-	t.Run("oauth error", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/auth/callback?state=" + state + "&error=access_denied&error_description=user+denied")
+	t.Run("missing interval defaults", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"user_code":"X","device_auth_id":"d"}`))
+		}))
+		defer ts.Close()
+
+		_, _, interval, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
 		if err != nil {
-			t.Fatalf("GET: %v", err)
+			t.Fatalf("requestDeviceCode: %v", err)
 		}
-		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("status = %d, want 200", resp.StatusCode)
+		if interval != deviceDefaultInterval {
+			t.Errorf("interval = %s, want default %s", interval, deviceDefaultInterval)
 		}
-		if ct := resp.Header.Get("Content-Type"); ct != "text/html; charset=utf-8" {
-			t.Errorf("Content-Type = %q, want text/html; charset=utf-8", ct)
+	})
+
+	t.Run("non-200 status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "nope", http.StatusInternalServerError)
+		}))
+		defer ts.Close()
+
+		_, _, _, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
+		if err == nil {
+			t.Fatal("expected error on HTTP 500")
 		}
-		<-errCh
+	})
+
+	t.Run("incomplete response", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"user_code":"X"}`))
+		}))
+		defer ts.Close()
+
+		_, _, _, err := requestDeviceCode(context.Background(), ts.Client(), ts.URL, "client-1")
+		if err == nil {
+			t.Fatal("expected error on missing device_auth_id")
+		}
+	})
+}
+
+func TestPollDeviceAuth(t *testing.T) {
+	t.Run("pending then success", func(t *testing.T) {
+		var calls int32
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := atomic.AddInt32(&calls, 1)
+			if n < 3 {
+				// Alternate the two "pending" statuses.
+				if n == 1 {
+					w.WriteHeader(http.StatusForbidden)
+				} else {
+					w.WriteHeader(http.StatusNotFound)
+				}
+				return
+			}
+			_, _ = w.Write([]byte(`{"authorization_code":"auth-xyz","code_verifier":"ver-abc"}`))
+		}))
+		defer ts.Close()
+
+		authCode, verifier, err := pollDeviceAuth(context.Background(), ts.Client(), ts.URL, "d", "u", time.Millisecond)
+		if err != nil {
+			t.Fatalf("pollDeviceAuth: %v", err)
+		}
+		if authCode != "auth-xyz" {
+			t.Errorf("authorization_code = %q, want %q", authCode, "auth-xyz")
+		}
+		if verifier != "ver-abc" {
+			t.Errorf("code_verifier = %q, want %q", verifier, "ver-abc")
+		}
+		if atomic.LoadInt32(&calls) < 3 {
+			t.Errorf("expected at least 3 polls, got %d", calls)
+		}
+	})
+
+	t.Run("hard error status", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, "bad request", http.StatusBadRequest)
+		}))
+		defer ts.Close()
+
+		_, _, err := pollDeviceAuth(context.Background(), ts.Client(), ts.URL, "d", "u", time.Millisecond)
+		if err == nil {
+			t.Fatal("expected error on HTTP 400")
+		}
+	})
+
+	t.Run("context cancellation", func(t *testing.T) {
+		ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden) // always pending
+		}))
+		defer ts.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, _, err := pollDeviceAuth(ctx, ts.Client(), ts.URL, "d", "u", time.Millisecond)
+		if err == nil {
+			t.Fatal("expected error on cancelled context")
+		}
 	})
 }
