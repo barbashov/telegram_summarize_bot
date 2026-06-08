@@ -21,14 +21,15 @@ var (
 
 var pruneDeletedCmd = &cobra.Command{
 	Use:   "prune-deleted",
-	Short: "Удалить из БД сообщения, удалённые в Telegram (сверка с JSON-экспортом чата)",
-	Long: `Telegram Bot API не сообщает боту об удалении сообщений в группе, поэтому
-удалённые сообщения остаются в БД и попадают в саммаризации. Эта команда сверяет
-БД с JSON-экспортом чата (Telegram Desktop → Экспорт истории чата → формат JSON):
-сообщения, которых нет в экспорте, считаются удалёнными и убираются из БД.
+	Short: "Remove messages from the DB that were deleted in Telegram (reconcile against a chat JSON export)",
+	Long: `The Telegram Bot API does not notify the bot when messages are deleted in a
+group, so deleted messages linger in the DB and pollute summaries. This command
+reconciles the DB against a JSON export of the chat (Telegram Desktop → Export
+chat history → JSON format): messages present in the DB but absent from the
+export are treated as deleted and removed from the DB.
 
-По умолчанию — сухой прогон (только превью). Для реального удаления добавьте --apply;
-перед удалением записывается резервная копия удаляемых строк в pruned-<group>-<unixtime>.json.`,
+Dry-run by default (preview only). Add --apply to actually delete; before
+deleting, a backup of the removed rows is written to pruned-<group>-<unixtime>.json.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		c, err := config.Load()
 		if err != nil {
@@ -39,9 +40,9 @@ var pruneDeletedCmd = &cobra.Command{
 }
 
 func init() {
-	pruneDeletedCmd.Flags().StringVar(&pruneFile, "file", "", "путь к JSON-экспорту Telegram Desktop")
-	pruneDeletedCmd.Flags().Int64Var(&pruneGroup, "group", 0, "ID группы в формате Telegram (отрицательный, напр. -100123456789)")
-	pruneDeletedCmd.Flags().BoolVar(&pruneApply, "apply", false, "реально удалить (без флага — только превью)")
+	pruneDeletedCmd.Flags().StringVar(&pruneFile, "file", "", "path to the Telegram Desktop JSON export")
+	pruneDeletedCmd.Flags().Int64Var(&pruneGroup, "group", 0, "group ID in Telegram format (negative, e.g. -100123456789)")
+	pruneDeletedCmd.Flags().BoolVar(&pruneApply, "apply", false, "actually delete (without this flag, preview only)")
 	rootCmd.AddCommand(pruneDeletedCmd)
 }
 
@@ -61,12 +62,12 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 	}
 	defer func() { _ = database.Close() }()
 
-	// Без --group: подсказать пользователю известные группы и выйти.
+	// Without --group: list the known groups for the user and exit.
 	if groupID == 0 {
 		return printKnownGroups(ctx, database)
 	}
 	if filePath == "" {
-		return fmt.Errorf("требуется --file (путь к JSON-экспорту чата)")
+		return fmt.Errorf("--file is required (path to the chat JSON export)")
 	}
 
 	live, minID, maxID, err := parseExport(filePath)
@@ -74,27 +75,27 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 		return err
 	}
 	if len(live) == 0 {
-		return fmt.Errorf("в экспорте %q не найдено ни одного сообщения с id", filePath)
+		return fmt.Errorf("no messages with an id found in export %q", filePath)
 	}
 
 	stored, err := database.GetMessagesInTgIDRange(ctx, groupID, minID, maxID)
 	if err != nil {
-		return fmt.Errorf("чтение сообщений из БД: %w", err)
+		return fmt.Errorf("reading messages from DB: %w", err)
 	}
 
 	toDelete := selectDeletedMessages(live, stored)
 
-	fmt.Printf("Группа: %d\n", groupID)
-	fmt.Printf("Экспорт: %d сообщений, диапазон message_id [%d..%d]\n", len(live), minID, maxID)
-	fmt.Printf("В БД в этом диапазоне: %d сообщений\n", len(stored))
-	fmt.Printf("Удалено в Telegram (есть в БД, нет в экспорте): %d\n\n", len(toDelete))
+	fmt.Printf("Group: %d\n", groupID)
+	fmt.Printf("Export: %d messages, message_id range [%d..%d]\n", len(live), minID, maxID)
+	fmt.Printf("In DB within this range: %d messages\n", len(stored))
+	fmt.Printf("Deleted in Telegram (present in DB, absent from export): %d\n\n", len(toDelete))
 
 	if len(toDelete) == 0 {
-		fmt.Println("Нечего удалять.")
+		fmt.Println("Nothing to delete.")
 		return nil
 	}
 
-	fmt.Println("tg_message_id | время (UTC)         | текст")
+	fmt.Println("tg_message_id | time (UTC)          | text")
 	fmt.Println("--------------+---------------------+------------------------------")
 	for _, m := range toDelete {
 		fmt.Printf("%13d | %s | %s\n", m.TgMessageID, m.Timestamp.UTC().Format("2006-01-02 15:04:05"), truncate(m.Text, 60))
@@ -102,13 +103,13 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 	fmt.Println()
 
 	if !apply {
-		fmt.Println("Сухой прогон. Для удаления добавьте флаг --apply.")
+		fmt.Println("Dry run. Add --apply to delete.")
 		return nil
 	}
 
 	backupPath := fmt.Sprintf("pruned-%d-%d.json", groupID, time.Now().Unix())
 	if err := writeBackup(backupPath, toDelete); err != nil {
-		return fmt.Errorf("запись резервной копии %q: %w", backupPath, err)
+		return fmt.Errorf("writing backup %q: %w", backupPath, err)
 	}
 
 	ids := make([]int64, len(toDelete))
@@ -117,11 +118,11 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 	}
 	deleted, err := database.DeleteMessagesByIDs(ctx, ids)
 	if err != nil {
-		return fmt.Errorf("удаление сообщений: %w", err)
+		return fmt.Errorf("deleting messages: %w", err)
 	}
 
-	fmt.Printf("Удалено сообщений: %d\n", deleted)
-	fmt.Printf("Резервная копия: %s\n", backupPath)
+	fmt.Printf("Deleted messages: %d\n", deleted)
+	fmt.Printf("Backup: %s\n", backupPath)
 	return nil
 }
 
@@ -146,11 +147,11 @@ func selectDeletedMessages(live map[int64]bool, stored []db.Message) []db.Messag
 func parseExport(filePath string) (live map[int64]bool, minID, maxID int64, err error) {
 	data, err := os.ReadFile(filePath) // #nosec G304 -- operator-supplied path for a one-off maintenance command
 	if err != nil {
-		return nil, 0, 0, fmt.Errorf("чтение экспорта %q: %w", filePath, err)
+		return nil, 0, 0, fmt.Errorf("reading export %q: %w", filePath, err)
 	}
 	var export tgExport
 	if err := json.Unmarshal(data, &export); err != nil {
-		return nil, 0, 0, fmt.Errorf("разбор JSON %q: %w", filePath, err)
+		return nil, 0, 0, fmt.Errorf("parsing JSON %q: %w", filePath, err)
 	}
 	live = make(map[int64]bool, len(export.Messages))
 	for _, m := range export.Messages {
@@ -179,13 +180,13 @@ func writeBackup(path string, msgs []db.Message) error {
 func printKnownGroups(ctx context.Context, database *db.DB) error {
 	groups, err := database.GetKnownGroups(ctx)
 	if err != nil {
-		return fmt.Errorf("чтение списка групп: %w", err)
+		return fmt.Errorf("reading group list: %w", err)
 	}
 	if len(groups) == 0 {
-		fmt.Println("Известных групп нет.")
+		fmt.Println("No known groups.")
 		return nil
 	}
-	fmt.Println("Укажите группу через --group. Известные группы:")
+	fmt.Println("Specify a group with --group. Known groups:")
 	for _, g := range groups {
 		fmt.Printf("  %d  %s\n", g.GroupID, g.Title)
 	}
