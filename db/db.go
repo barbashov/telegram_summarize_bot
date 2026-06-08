@@ -695,6 +695,27 @@ func (db *DB) GetMessageByTgID(ctx context.Context, groupID, tgMessageID int64) 
 	return &msg, nil
 }
 
+// UpdateMessageText overwrites the stored text of a message identified by
+// (group_id, tg_message_id). Returns whether a row was updated. Used to reflect
+// Telegram message edits. No-op (false) when tgMessageID == 0 or no row matches.
+func (db *DB) UpdateMessageText(ctx context.Context, groupID, tgMessageID int64, text string) (bool, error) {
+	if tgMessageID == 0 {
+		return false, nil
+	}
+	res, err := db.conn.ExecContext(ctx,
+		`UPDATE messages SET text = ? WHERE group_id = ? AND tg_message_id = ?`,
+		text, groupID, tgMessageID,
+	)
+	if err != nil {
+		return false, err
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return affected > 0, nil
+}
+
 func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (int64, error) {
 	cutoff := time.Now().Add(-olderThan)
 	result, err := db.conn.ExecContext(ctx,

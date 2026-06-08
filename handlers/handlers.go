@@ -131,6 +131,7 @@ func (b *Bot) Start(ctx context.Context) error {
 		Timeout: 60,
 		AllowedUpdates: []string{
 			"message",
+			"edited_message",
 			"my_chat_member",
 			"callback_query",
 		},

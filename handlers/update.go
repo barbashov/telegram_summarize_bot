@@ -46,6 +46,11 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
+	if update.EditedMessage != nil {
+		b.handleEditedMessage(ctx, update.EditedMessage)
+		return
+	}
+
 	if update.Message == nil {
 		return
 	}

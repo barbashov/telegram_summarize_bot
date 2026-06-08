@@ -387,6 +387,43 @@ func TestGetMessageByTgID(t *testing.T) {
 	}
 }
 
+func TestUpdateMessageText(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+	now := time.Now()
+
+	if err := db.AddMessage(ctx, &Message{
+		GroupID: -100, UserHash: "aabb", Text: "original", Timestamp: now, TgMessageID: 555,
+	}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	// Update existing row.
+	updated, err := db.UpdateMessageText(ctx, -100, 555, "edited")
+	if err != nil {
+		t.Fatalf("UpdateMessageText: %v", err)
+	}
+	if !updated {
+		t.Fatal("expected updated=true for existing row")
+	}
+	got, err := db.GetMessageByTgID(ctx, -100, 555)
+	if err != nil {
+		t.Fatalf("GetMessageByTgID: %v", err)
+	}
+	if got == nil || got.Text != "edited" {
+		t.Fatalf("expected text %q, got %+v", "edited", got)
+	}
+
+	// Non-existent tg_message_id → false.
+	if updated, err := db.UpdateMessageText(ctx, -100, 999, "x"); err != nil || updated {
+		t.Fatalf("non-existent: got (%v, %v), want (false, nil)", updated, err)
+	}
+	// tgMessageID == 0 → false without a query.
+	if updated, err := db.UpdateMessageText(ctx, -100, 0, "x"); err != nil || updated {
+		t.Fatalf("zero id: got (%v, %v), want (false, nil)", updated, err)
+	}
+}
+
 func TestAddMessageDeduplication(t *testing.T) {
 	ctx := context.Background()
 	db := newTestDB(t)

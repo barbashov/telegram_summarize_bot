@@ -170,6 +170,10 @@ SSRF protection is built in: only `http`/`https` schemes are allowed, private/re
 
 Any user not in `ADMIN_USER_IDS` receives setup guidance instead of admin commands.
 
+### Edited messages
+
+Unlike deletions, Telegram **does** notify bots when a message is edited (the `edited_message` update). The bot subscribes to it and, on an edit, overwrites the stored text of that message in place (matched by group + message id), so any later summarization uses the current version. Caption edits on photos update the text too; the photo itself is left untouched. Edits never trigger commands and never insert a new row — only already-stored messages are updated.
+
 ### Pruning deleted messages (`prune-deleted` CLI)
 
 Telegram's **Bot API never notifies bots when a message is deleted** in a group (unlike edits; the only deletion update, `deleted_business_messages`, applies to Telegram Business accounts, not groups). So a message deleted in the chat stays in the bot's database until retention cleanup and would otherwise be included in summaries. There is no way to detect this live through the Bot API.
