@@ -783,6 +783,7 @@ func (db *DB) DeleteMessagesByIDs(ctx context.Context, ids []int64) (int64, erro
 			placeholders[i] = "?"
 			args[i] = id
 		}
+		// #nosec G201 -- interpolated value is a comma-joined list of "?" placeholders; the ids are passed as bound args
 		query := fmt.Sprintf(`DELETE FROM messages WHERE id IN (%s)`, strings.Join(placeholders, ","))
 		result, err := db.conn.ExecContext(ctx, query, args...)
 		if err != nil {

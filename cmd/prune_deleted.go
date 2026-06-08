@@ -144,7 +144,7 @@ func selectDeletedMessages(live map[int64]bool, stored []db.Message) []db.Messag
 // parseExport reads a Telegram Desktop JSON export and returns the set of live
 // message ids together with their min/max (the id range the export covers).
 func parseExport(filePath string) (live map[int64]bool, minID, maxID int64, err error) {
-	data, err := os.ReadFile(filePath) //nolint:gosec // operator-supplied path for a one-off maintenance command
+	data, err := os.ReadFile(filePath) // #nosec G304 -- operator-supplied path for a one-off maintenance command
 	if err != nil {
 		return nil, 0, 0, fmt.Errorf("чтение экспорта %q: %w", filePath, err)
 	}
