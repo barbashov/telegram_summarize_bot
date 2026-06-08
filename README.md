@@ -170,6 +170,27 @@ SSRF protection is built in: only `http`/`https` schemes are allowed, private/re
 
 Any user not in `ADMIN_USER_IDS` receives setup guidance instead of admin commands.
 
+### Pruning deleted messages (`prune-deleted` CLI)
+
+Telegram's **Bot API never notifies bots when a message is deleted** in a group (unlike edits; the only deletion update, `deleted_business_messages`, applies to Telegram Business accounts, not groups). So a message deleted in the chat stays in the bot's database until retention cleanup and would otherwise be included in summaries. There is no way to detect this live through the Bot API.
+
+The `prune-deleted` CLI command reconciles the database against a **Telegram Desktop chat export** (Export chat history → JSON format), which contains only the messages that still exist. Messages present in the DB but absent from the export are treated as deleted and removed.
+
+```bash
+# Preview only (dry run) — shows what would be deleted:
+./telegram_summarize_bot prune-deleted --file export.json --group -100123456789
+
+# Actually delete (writes a JSON backup of removed rows first):
+./telegram_summarize_bot prune-deleted --file export.json --group -100123456789 --apply
+
+# Omit --group to list known group IDs the bot has seen.
+```
+
+- Matching is by Telegram `message_id` over the **id range the export covers** (`[min..max]` of the exported ids). Messages outside that range, or stored without a `tg_message_id` (very old rows), are left untouched.
+- **Edge case:** messages deleted *after* the newest surviving message can't be detected (no later message bounds the range). Export after the chat has newer activity to cover them.
+- `--apply` writes a backup file `pruned-<group>-<unixtime>.json` with the deleted rows before removing them. Attached photos are removed via cascade.
+- The command reads `DB_PATH` from config; point it at a copy first if you want to verify before touching the live database.
+
 ## Bot Commands
 
 Commands are triggered by mentioning the bot in a group message:

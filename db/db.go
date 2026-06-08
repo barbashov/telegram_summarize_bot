@@ -711,6 +711,71 @@ func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (
 	return rowsAffected, nil
 }
 
+// GetMessagesInTgIDRange returns the group's messages whose tg_message_id falls
+// within [minID, maxID] (inclusive). Messages with a NULL tg_message_id are
+// excluded — they cannot be reconciled against a Telegram export. Used by the
+// prune-deleted CLI command to diff the DB against an export.
+func (db *DB) GetMessagesInTgIDRange(ctx context.Context, groupID, minID, maxID int64) ([]Message, error) {
+	defer db.metrics.DBGet.Start()()
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT id, group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
+		 FROM messages
+		 WHERE group_id = ? AND tg_message_id IS NOT NULL AND tg_message_id BETWEEN ? AND ?
+		 ORDER BY tg_message_id`,
+		groupID, minID, maxID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		var forwardedFrom sql.NullString
+		var tgMessageID, replyToTgID sql.NullInt64
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserHash, &msg.Text, &msg.Timestamp, &forwardedFrom, &tgMessageID, &replyToTgID); err != nil {
+			logger.Error().Err(err).Msg("failed to scan message")
+			continue
+		}
+		msg.ForwardedFrom = forwardedFrom.String
+		msg.TgMessageID = tgMessageID.Int64
+		msg.ReplyToTgID = replyToTgID.Int64
+		messages = append(messages, msg)
+	}
+	return messages, rows.Err()
+}
+
+// DeleteMessagesByIDs deletes messages by their internal primary-key ids.
+// Attached photos are removed via the ON DELETE CASCADE foreign key. Deletion
+// runs in batches to stay within SQLite's bound-variable limit. Returns the
+// total number of rows deleted.
+func (db *DB) DeleteMessagesByIDs(ctx context.Context, ids []int64) (int64, error) {
+	const batchSize = 500
+	var total int64
+	for start := 0; start < len(ids); start += batchSize {
+		end := min(start+batchSize, len(ids))
+		batch := ids[start:end]
+		placeholders := make([]string, len(batch))
+		args := make([]any, len(batch))
+		for i, id := range batch {
+			placeholders[i] = "?"
+			args[i] = id
+		}
+		query := fmt.Sprintf(`DELETE FROM messages WHERE id IN (%s)`, strings.Join(placeholders, ","))
+		result, err := db.conn.ExecContext(ctx, query, args...)
+		if err != nil {
+			return total, err
+		}
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return total, err
+		}
+		total += affected
+	}
+	return total, nil
+}
+
 func (db *DB) GetLastSummarizeTime(ctx context.Context, groupID int64) (*time.Time, error) {
 	var t time.Time
 	err := db.conn.QueryRowContext(ctx,

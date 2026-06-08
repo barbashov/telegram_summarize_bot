@@ -26,7 +26,7 @@ make security    # vulncheck + gosec
 
 - **Group** (mention the bot): `@bot summarize [hours]` (aliases `s`, `sub`); reply + `@bot [prompt]` to act on the replied-to message; `@bot help`.
 - **Admin** (private chat, gated by `ADMIN_USER_IDS`): `/status`, `/reset`, `/groups`, `/instructions`, `/usage`, `/help`, and URL summarization.
-- **CLI**: `openai auth`, `usage` (same report as `/usage`).
+- **CLI**: `openai auth`, `usage` (same report as `/usage`), `prune-deleted` (remove messages deleted in Telegram by diffing the DB against a Telegram Desktop JSON export — Bot API gives no deletion events; dry-run by default, `--apply` to delete with a backup file).
 
 See README for the full behavior, arguments, and configuration (`config/config.go` is the source of truth; required: `BOT_TOKEN`, `ALLOWED_GROUPS`).
 
