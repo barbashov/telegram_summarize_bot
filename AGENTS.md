@@ -52,7 +52,10 @@ In-memory (not persisted to DB). Keyed by group ID (one summarize per group per 
 
 ## Conventions
 
-- **All bot-facing text is Russian.** Keep new user-visible strings (commands, reports, errors) in Russian.
+- **Language depends on the surface.** Keep the two text surfaces distinct:
+  - **Telegram-facing** text (group/admin commands, reports, errors shown in chat) → **Russian**.
+  - **CLI** (cobra commands, flag help, CLI-only stdout/stderr) → **English**, matching the existing `cmd/` commands.
+  - Shared reports rendered in Telegram (the `usage.Build()` `/usage` report) stay **Russian** even when printed by the `usage` CLI command — the same bytes appear in the Telegram admin report.
 - **Tests are split per source file** — e.g. `help.go` → `help_test.go`, not one big test file per package.
 - **Lint runs in Docker** via `make lint` (golangci-lint, which already includes `govet`). Don't run `go vet` separately or assume a local `golangci-lint` binary exists.
 - Go `1.26+`; module path is `telegram_summarize_bot` (no `go.mod` replace tricks — internal imports use that prefix).
