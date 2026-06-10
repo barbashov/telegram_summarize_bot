@@ -133,15 +133,15 @@ func (b *Bot) scanKnownGroups(ctx context.Context) {
 		return
 	}
 	for _, id := range ids {
-		title := ""
-		username := ""
 		info, err := b.telegram.GetChat(ctx, &telego.GetChatParams{ChatID: tu.ID(id)})
 		if err != nil || info == nil {
-			logger.Warn().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to get chat info")
-		} else {
-			title = info.Title
-			username = info.Username
+			// UpsertKnownGroup overwrites title/username unconditionally; skip the
+			// write on failure rather than blanking a previously good title.
+			logger.Warn().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to get chat info, skipping upsert")
+			continue
 		}
+		title := info.Title
+		username := info.Username
 		if err := b.db.UpsertKnownGroup(ctx, id, title, username); err != nil {
 			logger.Error().Err(err).Int64("group_id", id).Msg("scanKnownGroups: failed to upsert known group")
 		} else {

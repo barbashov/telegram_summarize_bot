@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	oaierr "github.com/openai/openai-go"
@@ -278,4 +279,36 @@ func TestWrapResponsesError(t *testing.T) {
 			t.Errorf("expected original error, got %v", err)
 		}
 	})
+}
+
+// TestResponsesClientCredentialsRace hammers setCredentials and the credential
+// read path concurrently; run under -race it would catch a regression of the
+// shared-field data race.
+func TestResponsesClientCredentialsRace(t *testing.T) {
+	c := &responsesClient{}
+
+	var wg sync.WaitGroup
+	const goroutines = 8
+	const iterations = 1000
+	for range goroutines {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				c.setCredentials("tok", "acct")
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				token, accountID := c.credentials()
+				// Reads must observe a consistent (both-empty or both-set) pair.
+				if (token == "") != (accountID == "") {
+					t.Errorf("torn credentials: token=%q accountID=%q", token, accountID)
+					return
+				}
+			}
+		}()
+	}
+	wg.Wait()
 }

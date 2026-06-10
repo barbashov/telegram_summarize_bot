@@ -1409,3 +1409,50 @@ func TestErrorLog(t *testing.T) {
 		}
 	})
 }
+
+// TestMessageTimestampZoneNormalization verifies that a message stored with a
+// timestamp in a non-UTC fixed zone is normalized to UTC at the DB layer, so a
+// UTC query cutoff includes/excludes it by absolute instant rather than by the
+// lexicographic text of a zoned RFC3339 string (Fix 5).
+func TestMessageTimestampZoneNormalization(t *testing.T) {
+	ctx := context.Background()
+	db := newTestDB(t)
+
+	const groupID int64 = -1001
+
+	// 12:00 in UTC+3 == 09:00 UTC (the same absolute instant).
+	plus3 := time.FixedZone("UTC+3", 3*3600)
+	stamp := time.Date(2025, 1, 1, 12, 0, 0, 0, plus3)
+
+	if err := db.AddMessage(ctx, &Message{
+		GroupID:     groupID,
+		Text:        "hello",
+		Timestamp:   stamp,
+		TgMessageID: 1,
+	}); err != nil {
+		t.Fatalf("AddMessage: %v", err)
+	}
+
+	// Cutoff at 08:00 UTC is before the 09:00 UTC instant → message included.
+	includeSince := time.Date(2025, 1, 1, 8, 0, 0, 0, time.UTC)
+	msgs, err := db.GetMessages(ctx, groupID, includeSince, 10)
+	if err != nil {
+		t.Fatalf("GetMessages (include): %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected message included for cutoff before instant, got %d", len(msgs))
+	}
+
+	// Cutoff at 10:00 UTC is after the 09:00 UTC instant → message excluded.
+	// A lexicographic comparison of the zoned string "2025-01-01T12:00:00+03:00"
+	// against "2025-01-01T10:00:00Z" would wrongly include it; UTC normalization
+	// fixes that.
+	excludeSince := time.Date(2025, 1, 1, 10, 0, 0, 0, time.UTC)
+	msgs, err = db.GetMessages(ctx, groupID, excludeSince, 10)
+	if err != nil {
+		t.Fatalf("GetMessages (exclude): %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("expected message excluded for cutoff after instant, got %d", len(msgs))
+	}
+}

@@ -108,6 +108,16 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		}
 	}
 
+	// Private-chat messages — including forwards — route to the private handler
+	// and are never stored as group messages. This must come before the
+	// ForwardOrigin branch: otherwise anyone forwarding into the bot's private
+	// chat would have it persisted into the group-messages DB, and an admin
+	// forwarding a URL would store it instead of triggering URL summarization.
+	if msg.Chat.Type == "private" {
+		b.handlePrivateCommand(ctx, update)
+		return
+	}
+
 	// Forwarded messages are stored with original author attribution but never
 	// treated as commands — the forwarder didn't intend to issue one.
 	if msg.ForwardOrigin != nil {
@@ -116,7 +126,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			GroupID:       groupID,
 			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 			Text:          text,
-			Timestamp:     time.Now(),
+			Timestamp:     time.Now().UTC(),
 			ForwardedFrom: forwardedFrom,
 			TgMessageID:   tgMessageID,
 			ReplyToTgID:   replyToTgID,
@@ -133,11 +143,6 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		return
 	}
 
-	if msg.Chat.Type == "private" {
-		b.handlePrivateCommand(ctx, update)
-		return
-	}
-
 	command, err := b.extractCommandFromMention(text, msg.Entities)
 	if err == nil {
 		b.handleCommand(ctx, update, command)
@@ -148,7 +153,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		GroupID:     groupID,
 		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 		Text:        text,
-		Timestamp:   time.Now(),
+		Timestamp:   time.Now().UTC(),
 		TgMessageID: tgMessageID,
 		ReplyToTgID: replyToTgID,
 	})
@@ -164,6 +169,12 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 }
 
 func (b *Bot) handleMyChatMember(ctx context.Context, cmu *telego.ChatMemberUpdated) {
+	// Ignore private-chat membership changes: a user blocking/unblocking the bot
+	// is not a group join and must not pollute known_groups or notify admins.
+	if cmu.Chat.Type == "private" {
+		return
+	}
+
 	newStatus := cmu.NewChatMember.MemberStatus()
 	if newStatus != "member" && newStatus != "administrator" {
 		return

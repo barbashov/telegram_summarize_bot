@@ -231,6 +231,48 @@ func TestHandle_GroupsAddRemove(t *testing.T) {
 	}
 }
 
+// TestHandle_GroupsRemoveEmptyTitle verifies that a known group whose title is
+// empty can still be removed: the "not known" check uses an explicit found flag,
+// not an empty-title sentinel (Fix 7).
+func TestHandle_GroupsRemoveEmptyTitle(t *testing.T) {
+	a, database, deps := newTestAdmin(t)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+
+	// Known group with an empty title (legitimate — title not yet resolved).
+	if err := database.UpsertKnownGroup(ctx, -100456, "", ""); err != nil {
+		t.Fatalf("UpsertKnownGroup error: %v", err)
+	}
+	if err := database.AddAllowedGroup(ctx, -100456, 999); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+
+	a.Handle(ctx, telego.Update{
+		Message: &telego.Message{
+			Text: "/groups remove -100456",
+			Chat: telego.Chat{ID: 999, Type: "private"},
+			From: &telego.User{ID: 999},
+		},
+	})
+
+	if len(deps.sentTexts) != 1 || !strings.Contains(deps.sentTexts[0], "удалена") {
+		t.Fatalf("expected remove confirmation for empty-title group, got: %v", deps.sentTexts)
+	}
+	// The display should fall back to the ID, not show as missing.
+	if !strings.Contains(deps.sentTexts[0], "-100456") {
+		t.Fatalf("expected ID fallback in confirmation, got: %v", deps.sentTexts)
+	}
+
+	allowed, err := database.IsGroupAllowed(ctx, -100456)
+	if err != nil {
+		t.Fatalf("IsGroupAllowed error: %v", err)
+	}
+	if allowed {
+		t.Fatal("expected group to be removed")
+	}
+}
+
 func TestHandle_UnknownCommand(t *testing.T) {
 	a, database, deps := newTestAdmin(t)
 	defer func() { _ = database.Close() }()

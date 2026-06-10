@@ -64,8 +64,7 @@ func (c *oauthClient) Complete(ctx context.Context, req CompletionRequest) (Comp
 
 	// Update token and account ID on the inner responses client.
 	if rc, ok := c.inner.(*responsesClient); ok {
-		rc.token = token
-		rc.accountID = c.tokenStore.GetAccountID()
+		rc.setCredentials(token, c.tokenStore.GetAccountID())
 	}
 
 	return c.inner.Complete(ctx, req)

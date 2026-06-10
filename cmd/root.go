@@ -146,5 +146,11 @@ func runBot(ctx context.Context, cfg *config.Config) error {
 	}
 
 	logger.Info().Msg("Bot shutdown complete")
+
+	// An internal failure (not signal-driven shutdown) must propagate so the
+	// process exits non-zero; a clean signal shutdown returns nil.
+	if startErr != nil && ctx.Err() == nil {
+		return startErr
+	}
 	return nil
 }

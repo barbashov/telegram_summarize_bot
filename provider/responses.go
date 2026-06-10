@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/openai/openai-go"
@@ -15,10 +16,28 @@ import (
 )
 
 type responsesClient struct {
-	client             *openai.Client
+	client *openai.Client
+	// credMu guards token and accountID, which OAuth mode rewrites before each
+	// request while concurrent Complete calls read them.
+	credMu             sync.RWMutex
 	token              string // mutable for OAuth token injection
 	accountID          string // ChatGPT-Account-ID header, set for OAuth mode
 	codexClientVersion string // optional OAuth override for the "version" header
+}
+
+// setCredentials atomically updates the OAuth token and account ID.
+func (c *responsesClient) setCredentials(token, accountID string) {
+	c.credMu.Lock()
+	defer c.credMu.Unlock()
+	c.token = token
+	c.accountID = accountID
+}
+
+// credentials returns a consistent snapshot of the OAuth token and account ID.
+func (c *responsesClient) credentials() (token, accountID string) {
+	c.credMu.RLock()
+	defer c.credMu.RUnlock()
+	return c.token, c.accountID
 }
 
 // NewResponsesClient creates an LLMClient using the OpenAI Responses API.
@@ -83,15 +102,18 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 	}
 
 	// Build per-request options: token + optional account ID header for OAuth mode.
-	reqOpts := []option.RequestOption{option.WithAPIKey(c.token)}
-	if c.accountID != "" {
+	// Snapshot the mutable credentials once so concurrent setCredentials writes
+	// can't tear a request mid-build.
+	token, accountID := c.credentials()
+	reqOpts := []option.RequestOption{option.WithAPIKey(token)}
+	if accountID != "" {
 		// ChatGPT backend requires store=false; rejects max_output_tokens and temperature.
 		params.Store = openai.Bool(false)
 		version := c.codexClientVersion
 		if version == "" {
 			version = CodexClientVersion
 		}
-		reqOpts = append(reqOpts, option.WithHeader(HeaderAccountID, c.accountID))
+		reqOpts = append(reqOpts, option.WithHeader(HeaderAccountID, accountID))
 		reqOpts = append(reqOpts, option.WithHeader("version", version))
 		reqOpts = append(reqOpts, option.WithHeader("originator", CodexOriginator))
 		return c.completeStreaming(ctx, params, reqOpts)

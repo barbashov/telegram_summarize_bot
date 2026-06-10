@@ -194,6 +194,90 @@ func TestHandleUpdateCaptionFallback(t *testing.T) {
 	}
 }
 
+// TestForwardedPrivateMessageNotStored verifies a forwarded message in a private
+// chat is routed to the private handler (Fix 3) and never persisted as a group
+// message, while a forwarded message in an allowed group is still stored.
+func TestForwardedPrivateMessageNotStored(t *testing.T) {
+	b, database, tg := newTestBot(t, &fakeSummarizer{})
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+
+	// Forward into the bot's private chat: must NOT be stored.
+	const privateID int64 = 555
+	b.handleUpdate(ctx, telego.Update{Message: &telego.Message{
+		MessageID:     1,
+		Chat:          telego.Chat{ID: privateID, Type: "private"},
+		From:          &telego.User{ID: privateID},
+		Text:          "forwarded text",
+		ForwardOrigin: &telego.MessageOriginHiddenUser{SenderUserName: "someone"},
+	}})
+
+	msgs, err := database.GetMessages(ctx, privateID, time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 0 {
+		t.Fatalf("forwarded private message must not be stored, got %d", len(msgs))
+	}
+	// The private handler should have responded (reached the private-command path).
+	if len(tg.sentTexts) == 0 {
+		t.Fatal("expected private handler to respond to forwarded private message")
+	}
+
+	// Forward into an allowed group: must be stored.
+	const groupID int64 = -1009999999999
+	if err := database.AddAllowedGroup(ctx, groupID, 0); err != nil {
+		t.Fatalf("AddAllowedGroup: %v", err)
+	}
+	b.handleUpdate(ctx, telego.Update{Message: &telego.Message{
+		MessageID:     2,
+		Chat:          telego.Chat{ID: groupID, Type: "supergroup", Title: "g"},
+		From:          &telego.User{ID: 42},
+		Text:          "group forward",
+		ForwardOrigin: &telego.MessageOriginHiddenUser{SenderUserName: "someone"},
+	}})
+
+	gmsgs, err := database.GetMessages(ctx, groupID, time.Now().Add(-time.Hour), 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(gmsgs) != 1 || gmsgs[0].Text != "group forward" {
+		t.Fatalf("forwarded group message should be stored, got %+v", gmsgs)
+	}
+	if gmsgs[0].ForwardedFrom == "" {
+		t.Fatal("expected forwarded-from attribution on stored group forward")
+	}
+}
+
+// TestMyChatMemberPrivateChatIgnored verifies a my_chat_member update for a
+// private chat (a user blocking/unblocking the bot) causes no known_groups
+// upsert and no admin notification (Fix 6).
+func TestMyChatMemberPrivateChatIgnored(t *testing.T) {
+	b, database, tg := newTestBot(t, &fakeSummarizer{})
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	const userID int64 = 777
+	b.cfg.AdminUserIDs = []int64{12345} // an admin exists, so a notification would be visible
+
+	b.handleMyChatMember(ctx, &telego.ChatMemberUpdated{
+		Chat:          telego.Chat{ID: userID, Type: "private"},
+		NewChatMember: &telego.ChatMemberMember{Status: "member"},
+	})
+
+	groups, err := database.GetKnownGroups(ctx)
+	if err != nil {
+		t.Fatalf("GetKnownGroups: %v", err)
+	}
+	if len(groups) != 0 {
+		t.Fatalf("private chat must not be upserted into known_groups, got %+v", groups)
+	}
+	if len(tg.sentTexts) != 0 {
+		t.Fatalf("expected no admin notification for private chat, got %v", tg.sentTexts)
+	}
+}
+
 func TestHandlePrivateChatInfo(t *testing.T) {
 	b, database, tg := newTestBot(t, &fakeSummarizer{})
 	defer func() { _ = database.Close() }()

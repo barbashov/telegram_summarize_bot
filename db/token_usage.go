@@ -38,7 +38,7 @@ func (db *DB) InsertTokenUsage(ctx context.Context, model, operation string, pro
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO token_usage (ts, model, operation, prompt_tokens, cached_tokens, completion_tokens, total_tokens)
 		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		time.Now(), model, operation, prompt, cached, completion, total,
+		time.Now().UTC(), model, operation, prompt, cached, completion, total,
 	)
 	return err
 }
@@ -51,7 +51,7 @@ func (db *DB) SumTokenUsageSince(ctx context.Context, since time.Time) (TokenUsa
 		`SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(cached_tokens), 0),
 		        COALESCE(SUM(completion_tokens), 0), COALESCE(SUM(total_tokens), 0), COUNT(*)
 		 FROM token_usage WHERE ts >= ? AND operation != ?`,
-		since, provider.OpProbe,
+		since.UTC(), provider.OpProbe,
 	).Scan(&t.PromptTokens, &t.CachedTokens, &t.CompletionTokens, &t.TotalTokens, &t.Calls)
 	return t, err
 }
@@ -73,7 +73,7 @@ func (db *DB) TokenUsageByOperationSince(ctx context.Context, since time.Time) (
 }
 
 func (db *DB) scanGroups(ctx context.Context, query string, since time.Time) ([]TokenUsageGroup, error) {
-	rows, err := db.conn.QueryContext(ctx, query, since, provider.OpProbe)
+	rows, err := db.conn.QueryContext(ctx, query, since.UTC(), provider.OpProbe)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func (db *DB) LatestPromptTokens(ctx context.Context) (model string, promptToken
 
 // PurgeOldTokenUsage deletes token usage rows older than the given time.
 func (db *DB) PurgeOldTokenUsage(ctx context.Context, before time.Time) (int64, error) {
-	result, err := db.conn.ExecContext(ctx, `DELETE FROM token_usage WHERE ts < ?`, before)
+	result, err := db.conn.ExecContext(ctx, `DELETE FROM token_usage WHERE ts < ?`, before.UTC())
 	if err != nil {
 		return 0, err
 	}

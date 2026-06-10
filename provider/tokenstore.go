@@ -16,10 +16,13 @@ import (
 )
 
 const (
-	tokenFileName  = "openai_tokens.json" // #nosec G101 -- token storage filename, not a credential
-	refreshBuffer  = 5 * time.Minute
-	OpenAITokenURL = "https://auth.openai.com/oauth/token" // #nosec G101 -- OAuth endpoint URL, not a credential
+	tokenFileName = "openai_tokens.json" // #nosec G101 -- token storage filename, not a credential
+	refreshBuffer = 5 * time.Minute
 )
+
+// OpenAITokenURL is the OAuth token endpoint. It is a var (not a const) so tests
+// can point it at an httptest server; production code never reassigns it.
+var OpenAITokenURL = "https://auth.openai.com/oauth/token" // #nosec G101 -- OAuth endpoint URL, not a credential
 
 // TokenResponse is the OAuth token endpoint response format.
 type TokenResponse struct {
@@ -85,6 +88,17 @@ func (s *TokenStore) Save(tokens *OAuthTokens) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := s.persistLocked(tokens); err != nil {
+		return err
+	}
+	s.tokens = tokens
+	return nil
+}
+
+// persistLocked atomically writes tokens to the token file: marshal to a temp
+// file in the same directory (0600), then rename over the target so a reader
+// never observes a half-written file. Callers must hold s.mu.
+func (s *TokenStore) persistLocked(tokens *OAuthTokens) error {
 	if err := os.MkdirAll(s.dir, 0o700); err != nil {
 		return fmt.Errorf("create token dir: %w", err)
 	}
@@ -94,11 +108,28 @@ func (s *TokenStore) Save(tokens *OAuthTokens) error {
 		return fmt.Errorf("marshal tokens: %w", err)
 	}
 
-	if err := os.WriteFile(s.filePath(), data, 0o600); err != nil {
-		return fmt.Errorf("write token file: %w", err)
+	tmp, err := os.CreateTemp(s.dir, tokenFileName+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temp token file: %w", err)
 	}
+	tmpName := tmp.Name()
+	// Best-effort cleanup if we bail out before the rename.
+	defer func() { _ = os.Remove(tmpName) }()
 
-	s.tokens = tokens
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("chmod temp token file: %w", err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temp token file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temp token file: %w", err)
+	}
+	if err := os.Rename(tmpName, s.filePath()); err != nil {
+		return fmt.Errorf("rename token file: %w", err)
+	}
 	return nil
 }
 
@@ -146,25 +177,30 @@ func (s *TokenStore) refreshLocked() error {
 	newTokens := &OAuthTokens{
 		AccessToken:  tr.AccessToken,
 		RefreshToken: s.tokens.RefreshToken,
-		IDToken:      tr.IDToken,
-		AccountID:    ExtractAccountID(tr.IDToken),
+		IDToken:      s.tokens.IDToken,
+		AccountID:    s.tokens.AccountID,
 		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+	}
+	// Only adopt a new id_token (and re-derive the account ID) when one is
+	// returned; refresh responses often omit it, and overwriting with empty
+	// values would lose the account ID needed for the ChatGPT-Account-ID header.
+	if tr.IDToken != "" {
+		newTokens.IDToken = tr.IDToken
+		newTokens.AccountID = ExtractAccountID(tr.IDToken)
 	}
 	// Store rotated refresh token if provided
 	if tr.RefreshToken != "" {
 		newTokens.RefreshToken = tr.RefreshToken
 	}
 
-	// Persist to disk
-	persistData, err := json.MarshalIndent(newTokens, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal refreshed tokens: %w", err)
-	}
-	if err := os.WriteFile(s.filePath(), persistData, 0o600); err != nil {
-		return fmt.Errorf("write refreshed tokens: %w", err)
+	// Update in-memory tokens first so a rotated refresh token survives even if
+	// persistence fails — the old refresh token may already be invalidated
+	// server-side, so we must not roll back on a write error.
+	s.tokens = newTokens
+	if err := s.persistLocked(newTokens); err != nil {
+		logger.Warn().Err(err).Msg("OAuth token refreshed but persisting to disk failed; keeping refreshed tokens in memory")
 	}
 
-	s.tokens = newTokens
 	logger.Info().Time("expires_at", newTokens.ExpiresAt).Msg("OAuth token refreshed successfully")
 	return nil
 }

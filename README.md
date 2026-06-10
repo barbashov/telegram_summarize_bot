@@ -191,6 +191,8 @@ The `prune-deleted` CLI command reconciles the database against a **Telegram Des
 ```
 
 - Matching is by Telegram `message_id` over the **id range the export covers** (`[min..max]` of the exported ids). Messages outside that range, or stored without a `tg_message_id` (very old rows), are left untouched.
+- **Supergroups/channels only** (`-100…` group IDs): in basic groups the export's message ids come from the exporting user's own id sequence and don't match the Bot API ids the bot stores, so diffing would flag live messages as deleted. The command rejects non-supergroup ids.
+- The export's own chat id is checked against `--group` (a mismatched export file is rejected); if the export carries no chat id, a warning is printed and the check is skipped.
 - **Edge case:** messages deleted *after* the newest surviving message can't be detected (no later message bounds the range). Export after the chat has newer activity to cover them.
 - `--apply` writes a backup file `pruned-<group>-<unixtime>.json` with the deleted rows before removing them. Attached photos are removed via cascade.
 - The command reads `DB_PATH` from config; point it at a copy first if you want to verify before touching the live database.

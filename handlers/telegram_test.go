@@ -90,6 +90,49 @@ func TestEditFormattedWithRetryNoFallbackSend(t *testing.T) {
 	}
 }
 
+func TestEditWithRetryZeroIDFallsBackToSend(t *testing.T) {
+	tg := &editTrackingTelegram{}
+	b := &Bot{telegram: tg, metrics: newTestMetrics()}
+
+	b.editWithRetry(context.Background(), 1, 0, "hello")
+
+	if tg.editCalls != 0 {
+		t.Fatalf("expected no edit calls for zero msgID, got %d", tg.editCalls)
+	}
+	if len(tg.sentTexts) != 1 || tg.sentTexts[0] != "hello" {
+		t.Fatalf("expected fallback send of %q, got %v", "hello", tg.sentTexts)
+	}
+}
+
+func TestEditFormattedWithRetryZeroIDFallsBackToSend(t *testing.T) {
+	tg := &editTrackingTelegram{}
+	b := &Bot{telegram: tg, metrics: newTestMetrics()}
+
+	b.editFormattedWithRetry(context.Background(), 1, 0, "hello")
+
+	if tg.editCalls != 0 {
+		t.Fatalf("expected no edit calls for zero msgID, got %d", tg.editCalls)
+	}
+	if len(tg.sentTexts) != 1 || tg.sentTexts[0] != "hello" {
+		t.Fatalf("expected fallback send of %q, got %v", "hello", tg.sentTexts)
+	}
+}
+
+func TestEditFormattedFinalZeroIDFallsBackToSend(t *testing.T) {
+	tg := &editTrackingTelegram{}
+	b := &Bot{telegram: tg, metrics: newTestMetrics()}
+
+	if err := b.editFormattedFinal(context.Background(), 1, 0, "hello"); err != nil {
+		t.Fatalf("expected nil error on fallback send, got %v", err)
+	}
+	if tg.editCalls != 0 {
+		t.Fatalf("expected no edit calls for zero msgID, got %d", tg.editCalls)
+	}
+	if len(tg.sentTexts) != 1 || tg.sentTexts[0] != "hello" {
+		t.Fatalf("expected fallback send of %q, got %v", "hello", tg.sentTexts)
+	}
+}
+
 // countingEditTelegram fails edit calls until failUntil attempts have been made.
 type countingEditTelegram struct {
 	fakeTelegram

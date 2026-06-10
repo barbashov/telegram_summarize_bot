@@ -57,6 +57,13 @@ func (b *Bot) sendMessageReply(ctx context.Context, chatID, replyToMsgID int64, 
 }
 
 func (b *Bot) editWithRetry(ctx context.Context, chatID, msgID int64, text string) {
+	// A zero msgID means the status message was never sent (send failed), so
+	// editing it can never succeed — send a new message instead so the result
+	// still reaches the chat.
+	if msgID == 0 {
+		b.sendMessage(ctx, chatID, text)
+		return
+	}
 	for range editRetries {
 		if err := b.editMessage(ctx, chatID, msgID, text); err == nil {
 			return
@@ -109,6 +116,11 @@ func (b *Bot) editFormatted(ctx context.Context, chatID, messageID int64, text s
 }
 
 func (b *Bot) editFormattedWithRetry(ctx context.Context, chatID, msgID int64, text string) {
+	// See editWithRetry: a zero msgID can never be edited; send instead.
+	if msgID == 0 {
+		b.sendFormatted(ctx, chatID, text)
+		return
+	}
 	for range editRetries {
 		if err := b.editFormatted(ctx, chatID, msgID, text); err == nil {
 			return
@@ -122,6 +134,15 @@ func (b *Bot) editFormattedWithRetry(ctx context.Context, chatID, msgID int64, t
 // editFormattedFinal is like editFormattedWithRetry but returns the last error
 // so the caller can decide whether the delivery succeeded.
 func (b *Bot) editFormattedFinal(ctx context.Context, chatID, msgID int64, text string) error {
+	// A zero msgID means the status message was never sent; editing it can never
+	// succeed and would silently drop the (already paid-for) summary. Send a new
+	// message instead. sendFormatted is best-effort and swallows its own error,
+	// matching the fire-and-forget delivery of the remaining chunks; report
+	// success so the caller proceeds (e.g. commits the rate-limit slot).
+	if msgID == 0 {
+		b.sendFormatted(ctx, chatID, text)
+		return nil
+	}
 	var lastErr error
 	for range editRetries {
 		if lastErr = b.editFormatted(ctx, chatID, msgID, text); lastErr == nil {

@@ -65,13 +65,15 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 			return
 		}
 		var foundTitle string
+		found := false
 		for i := range groups {
 			if groups[i].GroupID == groupID {
 				foundTitle = groups[i].Title
+				found = true
 				break
 			}
 		}
-		if foundTitle == "" {
+		if !found {
 			a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Группа %d не найдена в списке известных групп.", groupID))
 			a.sendGroupsList(ctx, chatID)
 			return
@@ -81,7 +83,12 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 			a.deps.SendMessage(ctx, chatID, "Ошибка удаления группы.")
 			return
 		}
-		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("❌ %s удалена.", foundTitle))
+		// Title may legitimately be empty; fall back to the ID for display.
+		display := foundTitle
+		if display == "" {
+			display = fmt.Sprintf("%d", groupID)
+		}
+		a.deps.SendMessage(ctx, chatID, fmt.Sprintf("❌ %s удалена.", display))
 	default:
 		a.deps.SendFormatted(ctx, chatID, "Неизвестная подкоманда\\. Используйте: `/groups`, `/groups add <id>`, `/groups remove <id>`")
 	}

@@ -442,7 +442,7 @@ func (db *DB) AddMessageReturningID(ctx context.Context, msg *Message) (int64, e
 	defer db.metrics.DBAdd.Start()()
 	res, err := db.conn.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		msg.GroupID, msg.UserHash, msg.Text, msg.Timestamp, msg.ForwardedFrom,
+		msg.GroupID, msg.UserHash, msg.Text, msg.Timestamp.UTC(), msg.ForwardedFrom,
 		nullableInt64(msg.TgMessageID), nullableInt64(msg.ReplyToTgID),
 	)
 	if err != nil {
@@ -593,7 +593,7 @@ func (db *DB) PutImageDescription(ctx context.Context, d ImageDescription) error
 			created_at   = excluded.created_at,
 			last_used_at = excluded.last_used_at,
 			error        = excluded.error`,
-		d.FileUniqueID, d.Description, d.Model, d.CreatedAt, d.LastUsedAt, d.Error,
+		d.FileUniqueID, d.Description, d.Model, d.CreatedAt.UTC(), d.LastUsedAt.UTC(), d.Error,
 	)
 	return err
 }
@@ -605,14 +605,14 @@ func (db *DB) TouchImageDescription(ctx context.Context, fileUniqueID string) er
 	}
 	_, err := db.conn.ExecContext(ctx,
 		`UPDATE image_descriptions SET last_used_at = ? WHERE file_unique_id = ?`,
-		time.Now(), fileUniqueID,
+		time.Now().UTC(), fileUniqueID,
 	)
 	return err
 }
 
 // CleanupOldImageDescriptions deletes cache entries last used before now-olderThan.
 func (db *DB) CleanupOldImageDescriptions(ctx context.Context, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan)
+	cutoff := time.Now().Add(-olderThan).UTC()
 	res, err := db.conn.ExecContext(ctx,
 		`DELETE FROM image_descriptions WHERE last_used_at < ?`,
 		cutoff,
@@ -631,7 +631,7 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 		 WHERE group_id = ? AND timestamp > ?
 		 ORDER BY timestamp DESC
 		 LIMIT ?`,
-		groupID, since, limit,
+		groupID, since.UTC(), limit,
 	)
 	if err != nil {
 		return nil, err
@@ -717,7 +717,7 @@ func (db *DB) UpdateMessageText(ctx context.Context, groupID, tgMessageID int64,
 }
 
 func (db *DB) CleanupOldMessages(ctx context.Context, olderThan time.Duration) (int64, error) {
-	cutoff := time.Now().Add(-olderThan)
+	cutoff := time.Now().Add(-olderThan).UTC()
 	result, err := db.conn.ExecContext(ctx,
 		`DELETE FROM messages WHERE timestamp < ?`,
 		cutoff,
@@ -816,7 +816,7 @@ func (db *DB) GetLastSummarizeTime(ctx context.Context, groupID int64) (*time.Ti
 func (db *DB) SetLastSummarizeTime(ctx context.Context, groupID int64, t time.Time) error {
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT OR REPLACE INTO last_summarize (group_id, timestamp) VALUES (?, ?)`,
-		groupID, t,
+		groupID, t.UTC(),
 	)
 	return err
 }
@@ -845,9 +845,14 @@ func (db *DB) SetGroupSchedule(ctx context.Context, s *GroupSchedule) error {
 	if s.Enabled {
 		enabledInt = 1
 	}
+	var lastDaily *time.Time
+	if s.LastDailySummary != nil {
+		utc := s.LastDailySummary.UTC()
+		lastDaily = &utc
+	}
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT OR REPLACE INTO group_schedules (group_id, enabled, hour, minute, last_daily_summary) VALUES (?, ?, ?, ?, ?)`,
-		s.GroupID, enabledInt, s.Hour, s.Minute, s.LastDailySummary,
+		s.GroupID, enabledInt, s.Hour, s.Minute, lastDaily,
 	)
 	return err
 }
@@ -880,7 +885,7 @@ func (db *DB) GetEnabledSchedules(ctx context.Context) ([]GroupSchedule, error) 
 func (db *DB) UpdateLastDailySummary(ctx context.Context, groupID int64, t time.Time) error {
 	_, err := db.conn.ExecContext(ctx,
 		`UPDATE group_schedules SET last_daily_summary = ? WHERE group_id = ?`,
-		t, groupID,
+		t.UTC(), groupID,
 	)
 	return err
 }
@@ -916,7 +921,7 @@ func (db *DB) SetGroupSummaryInstructions(ctx context.Context, groupID, updatedB
 			instructions = excluded.instructions,
 			updated_at = excluded.updated_at,
 			updated_by = excluded.updated_by`,
-		groupID, instructions, time.Now(), updatedBy,
+		groupID, instructions, time.Now().UTC(), updatedBy,
 	)
 	return err
 }
@@ -933,7 +938,7 @@ func (db *DB) UpsertKnownGroup(ctx context.Context, groupID int64, title, userna
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO known_groups (group_id, title, username, last_seen) VALUES (?, ?, ?, ?)
 		 ON CONFLICT(group_id) DO UPDATE SET title = excluded.title, username = excluded.username, last_seen = excluded.last_seen`,
-		groupID, title, username, time.Now(),
+		groupID, title, username, time.Now().UTC(),
 	)
 	return err
 }
@@ -979,7 +984,7 @@ func (db *DB) IsGroupAllowed(ctx context.Context, groupID int64) (bool, error) {
 func (db *DB) AddAllowedGroup(ctx context.Context, groupID, addedBy int64) error {
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT OR IGNORE INTO allowed_groups (group_id, added_at, added_by) VALUES (?, ?, ?)`,
-		groupID, time.Now(), addedBy,
+		groupID, time.Now().UTC(), addedBy,
 	)
 	return err
 }
@@ -1014,7 +1019,7 @@ func (db *DB) GetAllowedGroupIDs(ctx context.Context) ([]int64, error) {
 func (db *DB) InsertErrorLog(ctx context.Context, ts time.Time, key, msg string) error {
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO bot_error_log (ts, key, msg) VALUES (?, ?, ?)`,
-		ts, key, msg,
+		ts.UTC(), key, msg,
 	)
 	return err
 }
@@ -1023,7 +1028,7 @@ func (db *DB) InsertErrorLog(ctx context.Context, ts time.Time, key, msg string)
 func (db *DB) InsertBotEvent(ctx context.Context, metric string, ts time.Time, durationNS int64) error {
 	_, err := db.conn.ExecContext(ctx,
 		`INSERT INTO bot_events (metric, timestamp, duration_ns) VALUES (?, ?, ?)`,
-		metric, ts, durationNS,
+		metric, ts.UTC(), durationNS,
 	)
 	return err
 }
@@ -1039,7 +1044,7 @@ type BotEvent struct {
 func (db *DB) QueryBotEvents(ctx context.Context, metric string, since time.Time) ([]BotEvent, error) {
 	rows, err := db.conn.QueryContext(ctx,
 		`SELECT metric, timestamp, duration_ns FROM bot_events WHERE metric = ? AND timestamp >= ? ORDER BY timestamp`,
-		metric, since,
+		metric, since.UTC(),
 	)
 	if err != nil {
 		return nil, err
@@ -1062,7 +1067,7 @@ func (db *DB) CountBotEvents(ctx context.Context, metric string, since time.Time
 	var count int64
 	err := db.conn.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM bot_events WHERE metric = ? AND timestamp >= ?`,
-		metric, since,
+		metric, since.UTC(),
 	).Scan(&count)
 	return count, err
 }
@@ -1071,7 +1076,7 @@ func (db *DB) CountBotEvents(ctx context.Context, metric string, since time.Time
 func (db *DB) QueryErrorCounts(ctx context.Context, since time.Time) (map[string]int64, error) {
 	rows, err := db.conn.QueryContext(ctx,
 		`SELECT key, COUNT(*) FROM bot_error_log WHERE ts >= ? GROUP BY key`,
-		since,
+		since.UTC(),
 	)
 	if err != nil {
 		return nil, err
@@ -1096,7 +1101,7 @@ func (db *DB) CountErrors(ctx context.Context, since time.Time, keys ...string) 
 		return 0, nil
 	}
 	placeholders := make([]string, len(keys))
-	args := []any{since}
+	args := []any{since.UTC()}
 	for i, k := range keys {
 		placeholders[i] = "?"
 		args = append(args, k)
@@ -1112,7 +1117,7 @@ func (db *DB) CountErrors(ctx context.Context, since time.Time, keys ...string) 
 
 // PurgeOldBotEvents deletes events older than the given time.
 func (db *DB) PurgeOldBotEvents(ctx context.Context, before time.Time) (int64, error) {
-	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_events WHERE timestamp < ?`, before)
+	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_events WHERE timestamp < ?`, before.UTC())
 	if err != nil {
 		return 0, err
 	}
@@ -1121,7 +1126,7 @@ func (db *DB) PurgeOldBotEvents(ctx context.Context, before time.Time) (int64, e
 
 // PurgeOldErrors deletes error log entries older than the given time.
 func (db *DB) PurgeOldErrors(ctx context.Context, before time.Time) (int64, error) {
-	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log WHERE ts < ?`, before)
+	result, err := db.conn.ExecContext(ctx, `DELETE FROM bot_error_log WHERE ts < ?`, before.UTC())
 	if err != nil {
 		return 0, err
 	}
@@ -1153,7 +1158,7 @@ func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) er
 	for _, id := range groupIDs {
 		if _, err := db.conn.ExecContext(ctx,
 			`INSERT OR IGNORE INTO allowed_groups (group_id, added_at, added_by) VALUES (?, ?, 0)`,
-			id, time.Now(),
+			id, time.Now().UTC(),
 		); err != nil {
 			return fmt.Errorf("failed to seed allowed group %d: %w", id, err)
 		}

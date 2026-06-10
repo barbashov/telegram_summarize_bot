@@ -1,8 +1,14 @@
 package provider
 
 import (
+	"encoding/base64"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -89,5 +95,163 @@ func TestTokenStoreFilePermissions(t *testing.T) {
 	perm := info.Mode().Perm()
 	if perm != 0o600 {
 		t.Errorf("file permissions = %o, want 600", perm)
+	}
+}
+
+// makeIDToken builds a minimal JWT (header.payload.sig) whose payload carries
+// the chatgpt_account_id claim under the OpenAI auth namespace.
+func makeIDToken(t *testing.T, accountID string) string {
+	t.Helper()
+	payload := fmt.Sprintf(`{"https://api.openai.com/auth":{"chatgpt_account_id":%q}}`, accountID)
+	enc := base64.RawURLEncoding.EncodeToString
+	return enc([]byte(`{"alg":"none"}`)) + "." + enc([]byte(payload)) + ".sig"
+}
+
+// tokenServer returns an httptest server that responds to the refresh request
+// with the given token response JSON, and rewires OpenAITokenURL to it for the
+// duration of the test.
+func tokenServer(t *testing.T, responseJSON string) {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(responseJSON))
+	}))
+	t.Cleanup(srv.Close)
+	orig := OpenAITokenURL
+	OpenAITokenURL = srv.URL
+	t.Cleanup(func() { OpenAITokenURL = orig })
+}
+
+func TestTokenStoreRefreshPreservesAccountIDWhenNoIDToken(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		IDToken:      makeIDToken(t, "account-keep"),
+		AccountID:    "account-keep",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	// Refresh response omits id_token and refresh_token.
+	tokenServer(t, `{"access_token":"new-access","expires_in":3600,"token_type":"Bearer"}`)
+
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if store.tokens.AccessToken != "new-access" {
+		t.Errorf("access token = %q, want new-access", store.tokens.AccessToken)
+	}
+	if store.tokens.RefreshToken != "old-refresh" {
+		t.Errorf("refresh token = %q, want old-refresh preserved", store.tokens.RefreshToken)
+	}
+	if store.tokens.AccountID != "account-keep" {
+		t.Errorf("account ID = %q, want account-keep preserved", store.tokens.AccountID)
+	}
+	if store.GetAccountID() != "account-keep" {
+		t.Errorf("GetAccountID = %q, want account-keep", store.GetAccountID())
+	}
+}
+
+func TestTokenStoreRefreshAdoptsNewIDToken(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		IDToken:      makeIDToken(t, "old-account"),
+		AccountID:    "old-account",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	newID := makeIDToken(t, "new-account")
+	tokenServer(t, fmt.Sprintf(`{"access_token":"new-access","refresh_token":"rotated","id_token":%q,"expires_in":3600}`, newID))
+
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if store.tokens.RefreshToken != "rotated" {
+		t.Errorf("refresh token = %q, want rotated", store.tokens.RefreshToken)
+	}
+	if store.tokens.AccountID != "new-account" {
+		t.Errorf("account ID = %q, want new-account", store.tokens.AccountID)
+	}
+}
+
+func TestTokenStoreRefreshKeepsTokensWhenPersistFails(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+	// Make the store dir unwritable by pointing it at a path whose parent is a
+	// file, so MkdirAll/temp-file creation fails.
+	blocker := filepath.Join(dir, "blocker")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatalf("write blocker: %v", err)
+	}
+	store.dir = filepath.Join(blocker, "sub")
+
+	tokenServer(t, `{"access_token":"new-access","refresh_token":"rotated","expires_in":3600}`)
+
+	// Refresh must not fail even though persistence cannot succeed.
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh should not fail on persist error: %v", err)
+	}
+	if store.tokens.AccessToken != "new-access" {
+		t.Errorf("access token = %q, want new-access kept in memory", store.tokens.AccessToken)
+	}
+	if store.tokens.RefreshToken != "rotated" {
+		t.Errorf("refresh token = %q, want rotated kept in memory", store.tokens.RefreshToken)
+	}
+}
+
+func TestTokenStoreAtomicWriteContentAndPerms(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	tokens := &OAuthTokens{
+		AccessToken:  "access-xyz",
+		RefreshToken: "refresh-xyz",
+		IDToken:      "id-xyz",
+		AccountID:    "acct-xyz",
+		ExpiresAt:    time.Now().Add(time.Hour).Round(time.Second),
+	}
+	if err := store.Save(tokens); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	fpath := filepath.Join(dir, tokenFileName)
+	info, err := os.Stat(fpath)
+	if err != nil {
+		t.Fatalf("Stat: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Errorf("perm = %o, want 600", perm)
+	}
+
+	// No leftover temp files in the dir.
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), tokenFileName+".tmp-") {
+			t.Errorf("leftover temp file: %s", e.Name())
+		}
+	}
+
+	// Content round-trips.
+	data, err := os.ReadFile(fpath)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	var got OAuthTokens
+	if err := json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if got.AccessToken != "access-xyz" || got.AccountID != "acct-xyz" {
+		t.Errorf("round-trip mismatch: %+v", got)
 	}
 }
