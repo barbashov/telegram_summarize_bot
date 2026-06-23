@@ -15,9 +15,10 @@ import (
 )
 
 type fakeTelegram struct {
-	sentTexts []string
-	editTexts []string
-	nextID    int
+	sentTexts   []string
+	sentReplyTo []int
+	editTexts   []string
+	nextID      int
 }
 
 func (f *fakeTelegram) GetMe(_ context.Context) (*telego.User, error) {
@@ -30,6 +31,11 @@ func (f *fakeTelegram) UpdatesViaLongPolling(_ context.Context, _ *telego.GetUpd
 
 func (f *fakeTelegram) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
 	f.sentTexts = append(f.sentTexts, params.Text)
+	replyTo := 0
+	if params.ReplyParameters != nil {
+		replyTo = params.ReplyParameters.MessageID
+	}
+	f.sentReplyTo = append(f.sentReplyTo, replyTo)
 	f.nextID++
 	return &telego.Message{MessageID: f.nextID}, nil
 }

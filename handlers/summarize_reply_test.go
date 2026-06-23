@@ -71,6 +71,7 @@ func urlReply(prefix, url string) *telego.Message {
 func replyUpdate(reply *telego.Message) telego.Update {
 	return telego.Update{
 		Message: &telego.Message{
+			MessageID:      200,
 			Text:           "@testbot summarize",
 			Chat:           telego.Chat{ID: 42, Type: "group"},
 			From:           &telego.User{ID: 7, Username: "alice"},
@@ -103,6 +104,10 @@ func TestHandleSummarizeReplyTextOnly(t *testing.T) {
 	}
 	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "Краткая выжимка темы") {
 		t.Fatalf("unexpected result: %#v", tg.editTexts)
+	}
+	// The bot must reply to the command message (200), not the target (100).
+	if len(tg.sentReplyTo) == 0 || tg.sentReplyTo[0] != 200 {
+		t.Fatalf("reply target = %#v, want first reply to command message 200", tg.sentReplyTo)
 	}
 }
 
@@ -467,6 +472,10 @@ func TestHandleSummarizeReplyWalksChain(t *testing.T) {
 	}
 	if len(tg.editTexts) != 1 || !strings.Contains(tg.editTexts[0], "итог обсуждения") {
 		t.Fatalf("unexpected result: %#v", tg.editTexts)
+	}
+	// The thread summary must reply to the command message (200), not the leaf target (12).
+	if len(tg.sentReplyTo) == 0 || tg.sentReplyTo[0] != 200 {
+		t.Fatalf("reply target = %#v, want first reply to command message 200", tg.sentReplyTo)
 	}
 }
 

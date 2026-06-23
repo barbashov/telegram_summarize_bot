@@ -35,12 +35,15 @@ type replyPart struct {
 func (b *Bot) handleSummarizeReply(ctx context.Context, update telego.Update, steering string) {
 	groupID := update.Message.Chat.ID
 	reply := update.Message.ReplyToMessage
+	// cmdMsgID is the user's command message (the one tagging the bot); the bot
+	// replies to it, not to the replied-to target.
+	cmdMsgID := int64(update.Message.MessageID)
 
 	if chain := b.replyChain(ctx, groupID, reply); len(chain) >= 2 {
-		b.summarizeReplyThread(ctx, groupID, reply, chain, steering)
+		b.summarizeReplyThread(ctx, groupID, cmdMsgID, reply, chain, steering)
 		return
 	}
-	b.summarizeSingleReply(ctx, groupID, reply, steering)
+	b.summarizeSingleReply(ctx, groupID, cmdMsgID, reply, steering)
 }
 
 // replyChain reconstructs the reply branch ending at the replied-to message,
@@ -67,7 +70,7 @@ func (b *Bot) replyChain(ctx context.Context, groupID int64, reply *telego.Messa
 // summarizeSingleReply acts on the single replied-to message (no resolvable
 // ancestors): summarize its link(s), describe its image(s), and/or summarize its
 // text, blended into one unified summary; a lone link or image short-circuits.
-func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *telego.Message, steering string) {
+func (b *Bot) summarizeSingleReply(ctx context.Context, groupID, cmdMsgID int64, reply *telego.Message, steering string) {
 	text, entities := replyTextAndEntities(reply)
 	links := tgutil.ExtractURLs(text, entities, replyMaxLinks)
 	photos := extractPhotoRecords(reply)
@@ -85,11 +88,11 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *te
 	if len(links) == 0 && len(photos) == 0 && !includeText {
 		switch {
 		case hasUnsupportedMedia(reply):
-			b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Этот тип сообщения пока не поддерживается для суммаризации.")
+			b.sendMessageReply(ctx, groupID, cmdMsgID, "Этот тип сообщения пока не поддерживается для суммаризации.")
 		case prose != "":
-			b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Сообщение слишком короткое для суммаризации.")
+			b.sendMessageReply(ctx, groupID, cmdMsgID, "Сообщение слишком короткое для суммаризации.")
 		default:
-			b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Нечего суммаризировать в этом сообщении.")
+			b.sendMessageReply(ctx, groupID, cmdMsgID, "Нечего суммаризировать в этом сообщении.")
 		}
 		return
 	}
@@ -97,7 +100,7 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *te
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessageReply(ctx, groupID, cmdMsgID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 	committed := false
@@ -107,7 +110,7 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID int64, reply *te
 		}
 	}()
 
-	statusMsgID := b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Обрабатываю сообщение...")
+	statusMsgID := b.sendMessageReply(ctx, groupID, cmdMsgID, "Обрабатываю сообщение...")
 
 	instructions := combineInstructions(b.loadGroupSummaryInstructions(ctx, groupID), steering)
 
@@ -223,11 +226,11 @@ func combineInstructions(group, steering string) string {
 // as one conversation: every message gets full treatment (its text, followed
 // links, described images) within chain-wide budgets, then the transcript is
 // summarized — honoring any steering prompt over the whole thread.
-func (b *Bot) summarizeReplyThread(ctx context.Context, groupID int64, reply *telego.Message, chain []db.Message, steering string) {
+func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64, reply *telego.Message, chain []db.Message, steering string) {
 	if !b.rateLimiter.Allow(groupID) {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
-		b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
+		b.sendMessageReply(ctx, groupID, cmdMsgID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
 		return
 	}
 	committed := false
@@ -237,7 +240,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID int64, reply *te
 		}
 	}()
 
-	statusMsgID := b.sendMessageReply(ctx, groupID, int64(reply.MessageID), "Собираю ветку обсуждения...")
+	statusMsgID := b.sendMessageReply(ctx, groupID, cmdMsgID, "Собираю ветку обсуждения...")
 	instructions := combineInstructions(b.loadGroupSummaryInstructions(ctx, groupID), steering)
 
 	aliases := summarizer.BuildUserAliasMap(chain)
