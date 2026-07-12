@@ -92,6 +92,8 @@ func (r Report) hasData() bool {
 func modelContextWindow(model string) int {
 	m := strings.ToLower(model)
 	switch {
+	case strings.Contains(m, "gpt-5.6"):
+		return 372000
 	case strings.Contains(m, "gpt-5"):
 		return 272000
 	case strings.Contains(m, "gpt-4o"), strings.Contains(m, "gpt-4.1"):

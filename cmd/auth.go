@@ -32,7 +32,7 @@ const (
 // device code, prints a verification URL + user code for the operator to open
 // on any device, polls until sign-in completes, then exchanges the resulting
 // authorization code for tokens and stores them.
-func RunAuth(ctx context.Context, clientID, tokenDir string) error {
+func RunAuth(ctx context.Context, clientID, tokenDir, codexVersion string) error {
 	httpClient := provider.HTTPClient(15 * time.Second)
 
 	// Step 1: request a device code.
@@ -68,14 +68,14 @@ func RunAuth(ctx context.Context, clientID, tokenDir string) error {
 	fmt.Printf("\n✓ Authentication successful! Token saved to %s/openai_tokens.json\n", tokenDir)
 
 	// List available models
-	if err := listModels(tokens.AccessToken, tokens.AccountID); err != nil {
+	if err := listModels(tokens.AccessToken, tokens.AccountID, codexVersion); err != nil {
 		fmt.Printf("\nWarning: could not list models: %v\n", err)
 	}
 
 	fmt.Printf("\nAdd to your .env:\n")
 	fmt.Printf("  LLM_MODE=oauth\n")
-	fmt.Printf("  MODEL=gpt-4o\n")
-	fmt.Printf("  OAUTH_CODEX_VERSION=%s\n", provider.CodexClientVersion)
+	fmt.Printf("  MODEL=gpt-5.6-sol\n")
+	fmt.Printf("  OAUTH_CODEX_VERSION=%s\n", codexVersion)
 
 	return nil
 }
@@ -101,7 +101,7 @@ func RunTokenRefresh(clientID, tokenDir string) error {
 }
 
 // RunModels lists available OpenAI models using stored OAuth tokens.
-func RunModels(clientID, tokenDir string) error {
+func RunModels(clientID, tokenDir, codexVersion string) error {
 	store := provider.NewTokenStore(tokenDir, clientID)
 	if err := store.Load(); err != nil {
 		return fmt.Errorf("load tokens: %w (run '%s openai auth' first)", err, os.Args[0])
@@ -112,12 +112,12 @@ func RunModels(clientID, tokenDir string) error {
 		return err
 	}
 
-	return listModels(token, store.GetAccountID())
+	return listModels(token, store.GetAccountID(), codexVersion)
 }
 
 // RunTest sends a test prompt to the given model via OAuth and prints the response.
-func RunTest(ctx context.Context, clientID, tokenDir, model string) error {
-	client, err := provider.NewOAuthClient(tokenDir, clientID, os.Getenv("OAUTH_CODEX_VERSION"), 0)
+func RunTest(ctx context.Context, clientID, tokenDir, codexVersion, model string) error {
+	client, err := provider.NewOAuthClient(tokenDir, clientID, codexVersion, 0)
 	if err != nil {
 		return err
 	}
@@ -291,13 +291,13 @@ type modelsResponse struct {
 	} `json:"models"`
 }
 
-func listModels(accessToken, accountID string) error {
-	req, err := http.NewRequest("GET", provider.ChatGPTCodexBaseURL+"/models?client_version="+provider.CodexClientVersion, http.NoBody)
+func listModels(accessToken, accountID, codexVersion string) error {
+	req, err := http.NewRequest("GET", provider.ChatGPTCodexBaseURL+"/models?client_version="+codexVersion, http.NoBody)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+accessToken)
-	req.Header.Set("version", provider.CodexClientVersion)
+	req.Header.Set("version", codexVersion)
 	req.Header.Set("originator", provider.CodexOriginator)
 	if accountID != "" {
 		req.Header.Set(provider.HeaderAccountID, accountID)

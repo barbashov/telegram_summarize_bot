@@ -21,7 +21,7 @@ const (
 )
 
 const defaultOAuthClientID = "app_EMoamEEZ73f0CkXaXp7hrann" // Codex CLI well-known client ID
-const defaultOAuthCodexVersion = "0.124.0"
+const defaultOAuthCodexVersion = "0.144.0"
 
 // VisionEnabled selects whether the bot tries to describe images during summarization.
 type VisionEnabled string

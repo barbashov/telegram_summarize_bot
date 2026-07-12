@@ -13,7 +13,7 @@ import (
 const (
 	ChatGPTCodexBaseURL = "https://chatgpt.com/backend-api/codex"
 	ChatGPTWhamUsageURL = "https://chatgpt.com/backend-api/wham/usage"
-	CodexClientVersion  = "0.124.0"
+	CodexClientVersion  = "0.144.0"
 	CodexOriginator     = "codex-tui"
 	HeaderAccountID     = "ChatGPT-Account-ID"
 )

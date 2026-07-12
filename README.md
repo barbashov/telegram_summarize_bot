@@ -15,7 +15,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ a3f2b1c4: "quoted text"` (configurable via `REPLY_THREADS`)
 - **Privacy-preserving storage** — no Telegram user IDs or usernames are stored; messages are attributed with an 8-char anonymous hash (HMAC-SHA256, group-scoped, non-reversible)
-- **Image recognition** — when the configured model supports vision (e.g. `gpt-5.5` via OAuth, `gpt-4o`, `claude-3*`), photos and image documents (Twitter/Reddit/HN screenshots, cat pictures, etc.) are fed to the model at summarize time and inlined into the summary as short Russian descriptions. Results are cached by Telegram's content-stable `file_unique_id`, so the same image is described only once — even if it's re-forwarded across groups.
+- **Image recognition** — when the configured model supports vision (e.g. `gpt-5.6-sol` via OAuth, `gpt-4o`, `claude-3*`), photos and image documents (Twitter/Reddit/HN screenshots, cat pictures, etc.) are fed to the model at summarize time and inlined into the summary as short Russian descriptions. Results are cached by Telegram's content-stable `file_unique_id`, so the same image is described only once — even if it's re-forwarded across groups.
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
@@ -70,13 +70,13 @@ Uses an OpenAI Codex subscription with OAuth authentication. No API key needed �
 ./telegram_summarize_bot openai auth
 # Open the printed URL on any device, enter the printed code, then add to .env:
 LLM_MODE=oauth
-MODEL=gpt-4o
+MODEL=gpt-5.6-sol
 # Optional: override Codex client version header if a model requires newer client.
-# OAUTH_CODEX_VERSION=0.124.0
+# OAUTH_CODEX_VERSION=0.144.0
 ```
 
 The `openai auth` command uses the OpenAI Codex device authorization flow: it prints a verification URL (`https://auth.openai.com/codex/device`) and a one-time code, then waits while you open that URL on any device (phone, laptop) and enter the code. Because it needs no local browser and no inbound callback port, it works on headless/remote hosts over SSH. Once you sign in, the command saves tokens locally and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
-If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.124.0`).
+If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.144.0`). The ChatGPT backend gates models by this client version — e.g. the `gpt-5.6-*` family requires at least `0.144.0`.
 
 ## Running
 
@@ -228,7 +228,7 @@ All configuration is via environment variables (`.env` file):
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
 | `OAUTH_TOKEN_DIR` | `./data` | Directory for OAuth token storage |
 | `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
-| `OAUTH_CODEX_VERSION` | `0.124.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
+| `OAUTH_CODEX_VERSION` | `0.144.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
 | `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
 | `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts, `/groups`, `/instructions`). Falls back to `ALERT_USER_IDS` for backward compatibility. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
