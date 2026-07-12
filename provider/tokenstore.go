@@ -26,13 +26,35 @@ var OpenAITokenURL = "https://auth.openai.com/oauth/token" // #nosec G101 -- OAu
 
 // TokenResponse is the OAuth token endpoint response format.
 type TokenResponse struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	IDToken      string `json:"id_token"`
-	ExpiresIn    int    `json:"expires_in"`
-	TokenType    string `json:"token_type"`
-	Error        string `json:"error"`
-	ErrorDesc    string `json:"error_description"`
+	AccessToken  string     `json:"access_token"`
+	RefreshToken string     `json:"refresh_token"`
+	IDToken      string     `json:"id_token"`
+	ExpiresIn    int        `json:"expires_in"`
+	TokenType    string     `json:"token_type"`
+	Error        TokenError `json:"error"`
+	ErrorDesc    string     `json:"error_description"`
+}
+
+// TokenError is the "error" field of a token endpoint response. The endpoint
+// returns either the OAuth2 form (a bare code string, with the human-readable
+// text in error_description) or the OpenAI API form (an object with
+// code/message/type).
+type TokenError struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+func (e *TokenError) UnmarshalJSON(data []byte) error {
+	if len(data) > 0 && data[0] == '"' {
+		return json.Unmarshal(data, &e.Code)
+	}
+	type object TokenError // drop methods to avoid recursing into UnmarshalJSON
+	var obj object
+	if err := json.Unmarshal(data, &obj); err != nil {
+		return err
+	}
+	*e = TokenError(obj)
+	return nil
 }
 
 // OAuthTokens holds OAuth access and refresh tokens.
@@ -226,8 +248,10 @@ func PostTokenRequest(data url.Values) (*TokenResponse, error) {
 	if err := json.Unmarshal(body, &tr); err != nil {
 		return nil, fmt.Errorf("parse response: %w (body: %s)", err, string(body))
 	}
-	if tr.Error != "" {
-		return nil, fmt.Errorf("%s: %s", tr.Error, tr.ErrorDesc)
+	if tr.Error.Code != "" || tr.Error.Message != "" {
+		code := firstNonEmpty(tr.Error.Code, "token endpoint error")
+		desc := firstNonEmpty(tr.Error.Message, tr.ErrorDesc)
+		return nil, fmt.Errorf("%s: %s", code, desc)
 	}
 	if tr.AccessToken == "" {
 		return nil, fmt.Errorf("no access_token in response")

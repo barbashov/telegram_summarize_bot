@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -253,5 +254,48 @@ func TestTokenStoreAtomicWriteContentAndPerms(t *testing.T) {
 	}
 	if got.AccessToken != "access-xyz" || got.AccountID != "acct-xyz" {
 		t.Errorf("round-trip mismatch: %+v", got)
+	}
+}
+
+func TestPostTokenRequestStringError(t *testing.T) {
+	tokenServer(t, `{"error":"invalid_grant","error_description":"refresh token expired"}`)
+
+	_, err := PostTokenRequest(url.Values{"grant_type": {"refresh_token"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	want := "invalid_grant: refresh token expired"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestPostTokenRequestObjectError(t *testing.T) {
+	// The OpenAI API form: "error" is an object, not a string.
+	tokenServer(t, `{"error":{"message":"Your refresh token has already been used to generate a new access token. Please try signing in again.","type":"invalid_request_error","param":null,"code":"refresh_token_reused"}}`)
+
+	_, err := PostTokenRequest(url.Values{"grant_type": {"refresh_token"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	got := err.Error()
+	if !strings.HasPrefix(got, "refresh_token_reused: ") {
+		t.Errorf("error = %q, want prefix %q", got, "refresh_token_reused: ")
+	}
+	if !strings.Contains(got, "already been used") {
+		t.Errorf("error = %q, want it to carry the server message", got)
+	}
+}
+
+func TestPostTokenRequestObjectErrorWithoutCode(t *testing.T) {
+	tokenServer(t, `{"error":{"message":"something went wrong"}}`)
+
+	_, err := PostTokenRequest(url.Values{"grant_type": {"refresh_token"}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	want := "token endpoint error: something went wrong"
+	if err.Error() != want {
+		t.Errorf("error = %q, want %q", err.Error(), want)
 	}
 }
