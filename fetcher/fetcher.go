@@ -205,7 +205,7 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 		return "", fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
 
-	ct := resp.Header.Get("Content-Type")
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
 	if !isAllowedContentType(ct) {
 		return "", fmt.Errorf("unsupported content type: %s", ct)
 	}

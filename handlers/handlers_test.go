@@ -19,6 +19,8 @@ type fakeTelegram struct {
 	sentReplyTo []int
 	editTexts   []string
 	nextID      int
+	sendErr     error
+	editErr     error
 }
 
 func (f *fakeTelegram) GetMe(_ context.Context) (*telego.User, error) {
@@ -30,6 +32,9 @@ func (f *fakeTelegram) UpdatesViaLongPolling(_ context.Context, _ *telego.GetUpd
 }
 
 func (f *fakeTelegram) SendMessage(_ context.Context, params *telego.SendMessageParams) (*telego.Message, error) {
+	if f.sendErr != nil {
+		return nil, f.sendErr
+	}
 	f.sentTexts = append(f.sentTexts, params.Text)
 	replyTo := 0
 	if params.ReplyParameters != nil {
@@ -41,6 +46,9 @@ func (f *fakeTelegram) SendMessage(_ context.Context, params *telego.SendMessage
 }
 
 func (f *fakeTelegram) EditMessageText(_ context.Context, params *telego.EditMessageTextParams) (*telego.Message, error) {
+	if f.editErr != nil {
+		return nil, f.editErr
+	}
 	f.editTexts = append(f.editTexts, params.Text)
 	return &telego.Message{MessageID: params.MessageID}, nil
 }
@@ -69,6 +77,7 @@ type fakeSummarizer struct {
 	summary                *summarizer.StructuredSummary
 	err                    error
 	calls                  int
+	gotMessages            []db.Message
 	topicMax               int
 	additionalInstructions string
 	urlSummary             string
@@ -86,8 +95,9 @@ type fakeSummarizer struct {
 	imageSteering          string
 }
 
-func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error) {
+func (f *fakeSummarizer) SummarizeByTopics(_ context.Context, messages []db.Message, topicMax int, additionalInstructions string) (*summarizer.StructuredSummary, error) {
 	f.calls++
+	f.gotMessages = messages
 	f.topicMax = topicMax
 	f.additionalInstructions = additionalInstructions
 	if f.err != nil {

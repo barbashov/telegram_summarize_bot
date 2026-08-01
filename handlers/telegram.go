@@ -89,6 +89,13 @@ func (b *Bot) editMessage(ctx context.Context, chatID, messageID int64, text str
 }
 
 func (b *Bot) sendFormatted(ctx context.Context, chatID int64, text string) {
+	_ = b.sendFormattedFinal(ctx, chatID, text)
+}
+
+// sendFormattedFinal is like sendFormatted but returns the send error so the
+// caller can tell whether the message actually reached Telegram (e.g. before
+// committing a summarize checkpoint).
+func (b *Bot) sendFormattedFinal(ctx context.Context, chatID int64, text string) error {
 	defer b.metrics.TelegramSend.Start()()
 	_, err := b.telegram.SendMessage(ctx, tu.Message(
 		tu.ID(chatID),
@@ -98,6 +105,7 @@ func (b *Bot) sendFormatted(ctx context.Context, chatID int64, text string) {
 		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send formatted message")
 		b.metrics.RecordError("telegram_send", err.Error())
 	}
+	return err
 }
 
 func (b *Bot) editFormatted(ctx context.Context, chatID, messageID int64, text string) error {
@@ -136,12 +144,11 @@ func (b *Bot) editFormattedWithRetry(ctx context.Context, chatID, msgID int64, t
 func (b *Bot) editFormattedFinal(ctx context.Context, chatID, msgID int64, text string) error {
 	// A zero msgID means the status message was never sent; editing it can never
 	// succeed and would silently drop the (already paid-for) summary. Send a new
-	// message instead. sendFormatted is best-effort and swallows its own error,
-	// matching the fire-and-forget delivery of the remaining chunks; report
-	// success so the caller proceeds (e.g. commits the rate-limit slot).
+	// message instead — and propagate its error, so a Telegram outage doesn't
+	// report success and let the caller commit a checkpoint for a summary that
+	// never reached the chat.
 	if msgID == 0 {
-		b.sendFormatted(ctx, chatID, text)
-		return nil
+		return b.sendFormattedFinal(ctx, chatID, text)
 	}
 	var lastErr error
 	for range editRetries {

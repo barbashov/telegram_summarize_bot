@@ -665,6 +665,48 @@ func (db *DB) GetMessages(ctx context.Context, groupID int64, since time.Time, l
 	return messages, nil
 }
 
+// GetOldestMessages returns up to limit messages after since in chronological
+// order, oldest first. Unlike GetMessages (which keeps the newest batch), a
+// truncated result here is the oldest slice of the window, so a caller that
+// advances a checkpoint to the last returned message's timestamp never
+// permanently skips the overflow — the next call picks up where this one ended.
+func (db *DB) GetOldestMessages(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
+	defer db.metrics.DBGet.Start()()
+	rows, err := db.conn.QueryContext(ctx,
+		`SELECT id, group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id
+		 FROM messages
+		 WHERE group_id = ? AND timestamp > ?
+		 ORDER BY timestamp ASC
+		 LIMIT ?`,
+		groupID, since.UTC(), limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	var messages []Message
+	for rows.Next() {
+		var msg Message
+		var forwardedFrom sql.NullString
+		var tgMessageID, replyToTgID sql.NullInt64
+		if err := rows.Scan(&msg.ID, &msg.GroupID, &msg.UserHash, &msg.Text, &msg.Timestamp, &forwardedFrom, &tgMessageID, &replyToTgID); err != nil {
+			logger.Error().Err(err).Msg("failed to scan message")
+			continue
+		}
+		msg.ForwardedFrom = forwardedFrom.String
+		msg.TgMessageID = tgMessageID.Int64
+		msg.ReplyToTgID = replyToTgID.Int64
+		messages = append(messages, msg)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	return messages, nil
+}
+
 // GetMessageByTgID returns the stored message with the given Telegram message_id
 // in the group, or (nil, nil) when it is absent (e.g. retention-pruned, or never
 // ingested). Uses the idx_messages_dedup index on (group_id, tg_message_id).

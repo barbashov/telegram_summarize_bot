@@ -42,7 +42,10 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	}
 	upperBound := time.Now()
 
-	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
+	// Oldest-first: when the window holds more than MaxMessages, summarize the
+	// oldest batch and advance the checkpoint only through it, so the overflow
+	// is picked up by the next run instead of being skipped forever.
+	messages, err := b.db.GetOldestMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get messages")
 		b.sendMessage(ctx, groupID, "Ошибка получения сообщений.")
@@ -85,13 +88,27 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	}
 
 	if !b.sendSummary(ctx, groupID, statusMsgID, summary) {
+		b.editWithRetry(ctx, groupID, statusMsgID, "Не удалось отправить сводку в Telegram. Попробуйте позже.")
 		return
 	}
 
 	committed = true
 
-	if err := b.db.SetLastSummarizeTime(ctx, groupID, upperBound); err != nil {
+	// On a truncated window, commit only through the last summarized message so
+	// the next run continues from there instead of skipping the overflow.
+	checkpoint := upperBound
+	truncated := len(messages) == b.cfg.MaxMessages
+	if truncated {
+		checkpoint = messages[len(messages)-1].Timestamp
+	}
+	if err := b.db.SetLastSummarizeTime(ctx, groupID, checkpoint); err != nil {
 		logger.Error().Err(err).Msg("failed to set last summarize time")
+	}
+
+	if truncated {
+		b.sendMessage(ctx, groupID, fmt.Sprintf(
+			"⚠️ В периоде больше %d сообщений — просуммированы самые ранние. Запустите суммаризацию ещё раз для продолжения.",
+			b.cfg.MaxMessages))
 	}
 }
 

@@ -69,6 +69,14 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 	}
 	tgMessageID := int64(msg.MessageID)
 
+	// Use Telegram's send time, not ingestion time: after downtime the backlog
+	// is redelivered in one burst, and stamping time.Now() would collapse hours
+	// of history into one instant, corrupting summary windows downstream.
+	timestamp := time.Now().UTC()
+	if msg.Date > 0 {
+		timestamp = time.Unix(msg.Date, 0).UTC()
+	}
+
 	var replyToTgID int64
 	if msg.ReplyToMessage != nil {
 		replyToTgID = int64(msg.ReplyToMessage.MessageID)
@@ -126,7 +134,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 			GroupID:       groupID,
 			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 			Text:          text,
-			Timestamp:     time.Now().UTC(),
+			Timestamp:     timestamp,
 			ForwardedFrom: forwardedFrom,
 			TgMessageID:   tgMessageID,
 			ReplyToTgID:   replyToTgID,
@@ -153,7 +161,7 @@ func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
 		GroupID:     groupID,
 		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
 		Text:        text,
-		Timestamp:   time.Now().UTC(),
+		Timestamp:   timestamp,
 		TgMessageID: tgMessageID,
 		ReplyToTgID: replyToTgID,
 	})

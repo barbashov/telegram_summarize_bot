@@ -200,3 +200,85 @@ func TestHandleSummarizeCustomHours(t *testing.T) {
 
 // Message splitting is now handled by telegramify.Split; see the summarizer and
 // integration tests for end-to-end rendering coverage.
+
+func TestHandleSummarizeTruncatedWindowAdvancesCheckpointToLastMessage(t *testing.T) {
+	sum := &fakeSummarizer{summary: &summarizer.StructuredSummary{TLDR: "Итог"}}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.MaxMessages = 2
+
+	ctx := context.Background()
+	base := time.Now()
+	for i, age := range []time.Duration{3 * time.Hour, 2 * time.Hour, time.Hour} {
+		err := database.AddMessage(ctx, &db.Message{
+			GroupID:   42,
+			UserHash:  fmt.Sprintf("hash%d", i),
+			Text:      fmt.Sprintf("msg %d", i),
+			Timestamp: base.Add(-age),
+		})
+		if err != nil {
+			t.Fatalf("AddMessage error: %v", err)
+		}
+	}
+
+	b.handleSummarize(ctx, summarizeUpdate(), nil)
+
+	if len(sum.gotMessages) != 2 {
+		t.Fatalf("summarized message count = %d, want 2", len(sum.gotMessages))
+	}
+	if sum.gotMessages[0].Text != "msg 0" || sum.gotMessages[1].Text != "msg 1" {
+		t.Fatalf("expected the two oldest messages, got %q, %q", sum.gotMessages[0].Text, sum.gotMessages[1].Text)
+	}
+
+	last, err := database.GetLastSummarizeTime(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetLastSummarizeTime error: %v", err)
+	}
+	if last == nil {
+		t.Fatal("expected last summarize time to be set")
+	}
+	if got, want := last.Unix(), sum.gotMessages[1].Timestamp.Unix(); got != want {
+		t.Fatalf("checkpoint = %d, want last summarized message timestamp %d", got, want)
+	}
+
+	var warned bool
+	for _, txt := range tg.sentTexts {
+		if strings.Contains(txt, "⚠️") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("expected truncation warning, sent: %q", tg.sentTexts)
+	}
+}
+
+func TestHandleSummarizeDeliveryFailureDoesNotCommitCheckpoint(t *testing.T) {
+	sum := &fakeSummarizer{summary: &summarizer.StructuredSummary{TLDR: "Итог"}}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	err := database.AddMessage(ctx, &db.Message{
+		GroupID:   42,
+		UserHash:  "abcd1234",
+		Text:      "привет",
+		Timestamp: time.Now().Add(-time.Hour),
+	})
+	if err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	tg.editErr = fmt.Errorf("telegram down")
+	b.handleSummarize(ctx, summarizeUpdate(), nil)
+
+	last, err := database.GetLastSummarizeTime(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetLastSummarizeTime error: %v", err)
+	}
+	if last != nil {
+		t.Fatalf("checkpoint committed despite delivery failure: %v", last)
+	}
+	if !b.rateLimiter.Allow(42) {
+		t.Fatal("expected rate-limit slot to be released after delivery failure")
+	}
+}

@@ -234,7 +234,7 @@ All configuration is via environment variables (`.env` file):
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |
-| `MAX_MESSAGES` | `250` | Max messages to include in summary |
+| `MAX_MESSAGES` | `250` | Max messages per summary. When a window holds more, the oldest batch is summarized first, the checkpoint advances only through it, and the bot posts a warning suggesting another run for the remainder — nothing is skipped. |
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |

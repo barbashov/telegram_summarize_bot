@@ -299,3 +299,37 @@ func TestHandlePrivateChatInfo(t *testing.T) {
 		t.Fatalf("expected info about summarize, got: %q", tg.sentTexts[0])
 	}
 }
+
+func TestHandleUpdateStoresTelegramDate(t *testing.T) {
+	b, database, _ := newTestBot(t, &fakeSummarizer{})
+	defer func() { _ = database.Close() }()
+
+	const groupID int64 = -1002222222222
+	if err := database.AddAllowedGroup(context.Background(), groupID, 0); err != nil {
+		t.Fatalf("AddAllowedGroup: %v", err)
+	}
+
+	// Simulate backlog redelivery after downtime: the update arrives now, but
+	// Telegram's message date is three hours old.
+	sent := time.Now().Add(-3 * time.Hour)
+	update := telego.Update{Message: &telego.Message{
+		MessageID: 11,
+		Date:      sent.Unix(),
+		Text:      "backlog message",
+		Chat:      telego.Chat{ID: groupID, Type: "supergroup", Title: "g"},
+		From:      &telego.User{ID: 42},
+	}}
+
+	b.handleUpdate(context.Background(), update)
+
+	msgs, err := database.GetMessages(context.Background(), groupID, time.Now().Add(-4*time.Hour), 10)
+	if err != nil {
+		t.Fatalf("GetMessages: %v", err)
+	}
+	if len(msgs) != 1 {
+		t.Fatalf("expected 1 stored message, got %d", len(msgs))
+	}
+	if got, want := msgs[0].Timestamp.Unix(), sent.Unix(); got != want {
+		t.Errorf("stored timestamp = %d, want telegram date %d", got, want)
+	}
+}

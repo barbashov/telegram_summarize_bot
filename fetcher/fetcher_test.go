@@ -262,3 +262,34 @@ func TestFetchEmptyBody(t *testing.T) {
 		t.Fatalf("err = %v, want ErrNoReadableContent", err)
 	}
 }
+
+func TestFetchHTMLUppercaseContentType(t *testing.T) {
+	htmlContent := `<!DOCTYPE html>
+<html><head><title>Test Article</title></head>
+<body>
+<nav>Navigation menu</nav>
+<article>
+<h1>Test Article</h1>
+<p>This is the main article content that should be extracted by readability. It needs to be long enough to be considered the main content of the page, so here is some additional text to make it substantial enough for the readability algorithm to pick it up.</p>
+<p>Another paragraph with more content to ensure readability can identify this as the main article text. The more content we have here, the better readability can distinguish it from navigation and other boilerplate elements.</p>
+</article>
+<footer>Footer content</footer>
+</body></html>`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "TEXT/HTML; charset=utf-8")
+		_, _ = w.Write([]byte(htmlContent))
+	}))
+	defer srv.Close()
+
+	text, err := fetch(context.Background(), srv.URL, 0, false)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(text, "main article content") {
+		t.Fatalf("expected readability extraction for uppercase content type, got: %q", text)
+	}
+	if strings.Contains(text, "<article>") || strings.Contains(text, "Navigation menu") {
+		t.Fatalf("raw HTML leaked past the readability gate: %q", text)
+	}
+}

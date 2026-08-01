@@ -2,6 +2,7 @@ package db
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -1454,5 +1455,37 @@ func TestMessageTimestampZoneNormalization(t *testing.T) {
 	}
 	if len(msgs) != 0 {
 		t.Fatalf("expected message excluded for cutoff after instant, got %d", len(msgs))
+	}
+}
+
+func TestGetOldestMessages(t *testing.T) {
+	db := newTestDB(t)
+	ctx := context.Background()
+
+	base := time.Now()
+	for i, age := range []time.Duration{3 * time.Hour, 2 * time.Hour, time.Hour} {
+		err := db.AddMessage(ctx, &Message{
+			GroupID:   -100,
+			UserHash:  "hash",
+			Text:      fmt.Sprintf("msg %d", i),
+			Timestamp: base.Add(-age),
+		})
+		if err != nil {
+			t.Fatalf("AddMessage error: %v", err)
+		}
+	}
+
+	got, err := db.GetOldestMessages(ctx, -100, base.Add(-4*time.Hour), 2)
+	if err != nil {
+		t.Fatalf("GetOldestMessages error: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("message count = %d, want 2", len(got))
+	}
+	if got[0].Text != "msg 0" || got[1].Text != "msg 1" {
+		t.Fatalf("expected the two oldest messages in chronological order, got %q, %q", got[0].Text, got[1].Text)
+	}
+	if !got[0].Timestamp.Before(got[1].Timestamp) {
+		t.Fatalf("expected chronological order, got %v then %v", got[0].Timestamp, got[1].Timestamp)
 	}
 }

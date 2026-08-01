@@ -17,7 +17,9 @@ services:
         max-file: "3"
 
   watchtower:
-    image: nickfedor/watchtower:latest
+    # Pinned by digest: this container holds the Docker socket (host root), so
+    # an unpinned :latest would hand that to any future push of the tag.
+    image: nickfedor/watchtower@sha256:073b6bfa36527b9e03b8861cde636efac75a45c9b71e229c4f03bc5e803a9394
     container_name: watchtower
     restart: unless-stopped
     volumes:
