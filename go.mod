@@ -3,7 +3,7 @@ module telegram_summarize_bot
 go 1.26.5
 
 require (
-	github.com/barbashov/telegramify-markdown-go v0.0.0-20260523222050-c2f204e7de79
+	github.com/barbashov/telegramify-markdown-go v0.1.2
 	github.com/glebarez/sqlite v1.11.0
 	github.com/go-shiori/go-readability v0.0.0-20251205110129-5db1dc9836f0
 	github.com/joho/godotenv v1.5.1

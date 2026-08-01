@@ -4,8 +4,8 @@ github.com/andybalholm/cascadia v1.3.4 h1:vM2lgh0Vru9Vwyfm4cQqWP2HHMW0u0+2PAW7Q3
 github.com/andybalholm/cascadia v1.3.4/go.mod h1:BLRmbRjpEtNKieZOCCvYj4RqN+KRA41GBe/5O+G93kM=
 github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de h1:FxWPpzIjnTlhPwqqXc4/vE0f7GvRjuAsbW+HOIe8KnA=
 github.com/araddon/dateparse v0.0.0-20210429162001-6b43995a97de/go.mod h1:DCaWoUhZrYW9p1lxo/cm8EmUOOzAPSEZNGF2DK1dJgw=
-github.com/barbashov/telegramify-markdown-go v0.0.0-20260523222050-c2f204e7de79 h1:TcUTG58j807zKs7qgEAyfIqFqfi/McmNMPtGu/v315g=
-github.com/barbashov/telegramify-markdown-go v0.0.0-20260523222050-c2f204e7de79/go.mod h1:RX3Xk97twuLxvc5C+L7B7HwKOisg+/gYc/MqJphmUdg=
+github.com/barbashov/telegramify-markdown-go v0.1.2 h1:u8GAuu6km1RGESX25Bz/2+IlPYS0SajFW4pmfEG0mzY=
+github.com/barbashov/telegramify-markdown-go v0.1.2/go.mod h1:qWHhYzGneQkYZWb6CneNa5yKyZ3UeCuSYD7aR5gpTvY=
 github.com/bytedance/gopkg v0.1.4 h1:oZnQwnX82KAIWb7033bEwtxvTqXcYMxDBaQxo5JJHWM=
 github.com/bytedance/gopkg v0.1.4/go.mod h1:v1zWfPm21Fb+OsyXN2VAHdL6TBb2L88anLQgdyje6R4=
 github.com/bytedance/sonic v1.15.2 h1:90H+rcF/FwLXwfB1cudOLq/je83n683Utf4Cbp0xHCo=
