@@ -148,3 +148,6 @@ doesn't outlive the request timeout.
   page metadata; a panic there kills the process.
 - Boolean env spellings are inconsistent (`REPLY_THREADS` accepts only
   `false`/`0`; `VISION_STEERING` also accepts `no`/`off`) — unify.
+- `openai-go` major upgrade: v2/v3 exist (currently on v1.12.0, latest v1).
+  Breaking API migration for `provider/responses.go`; do deliberately, not as
+  part of routine dependency bumps.
