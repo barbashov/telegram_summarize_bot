@@ -333,6 +333,59 @@ func TestLoad_AdminUserIDsFallback(t *testing.T) {
 	}
 }
 
+func TestLoad_FullyInvalidAllowedGroupsFails(t *testing.T) {
+	clearEnv(t)
+	setRequired(t)
+	t.Setenv("ALLOWED_GROUPS", "abc,def")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for ALLOWED_GROUPS with no valid IDs")
+	}
+}
+
+func TestLoad_FullyInvalidAdminUserIDsFails(t *testing.T) {
+	clearEnv(t)
+	setRequired(t)
+	t.Setenv("ADMIN_USER_IDS", "oops")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("expected error for ADMIN_USER_IDS with no valid IDs")
+	}
+}
+
+func TestLoad_PartiallyInvalidAllowedGroupsKeepsValid(t *testing.T) {
+	clearEnv(t)
+	setRequired(t)
+	t.Setenv("ALLOWED_GROUPS", "-100123,typo,-100456")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := []int64{-100123, -100456}
+	if len(cfg.AllowedGroups) != len(want) {
+		t.Fatalf("AllowedGroups = %v, want %v", cfg.AllowedGroups, want)
+	}
+	for i, v := range want {
+		if cfg.AllowedGroups[i] != v {
+			t.Errorf("AllowedGroups[%d] = %d, want %d", i, cfg.AllowedGroups[i], v)
+		}
+	}
+}
+
+func TestLoad_EmptyAllowedGroupsOnlyWarns(t *testing.T) {
+	clearEnv(t)
+	setRequired(t)
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(cfg.AllowedGroups) != 0 {
+		t.Fatalf("AllowedGroups = %v, want empty", cfg.AllowedGroups)
+	}
+}
+
 // --- IsAdminUser ---
 
 func TestIsAdminUser(t *testing.T) {
@@ -389,7 +442,7 @@ func TestParseIDList(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := parseIDList(tt.input)
+			got := parseIDList("TEST_IDS", tt.input)
 			if len(got) != len(tt.want) {
 				t.Fatalf("parseIDList(%q) length = %d, want %d", tt.input, len(got), len(tt.want))
 			}

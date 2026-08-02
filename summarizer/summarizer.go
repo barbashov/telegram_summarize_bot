@@ -23,6 +23,7 @@ const (
 	urlMaxTokens        = 2000
 	maxLLMRetries       = 3
 	maxClusterTokensCap = 8000
+	maxSummaryTokensCap = 8000
 )
 
 const defaultRetryBaseDelay = 2 * time.Second
@@ -326,7 +327,11 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 
 		clusters, err := sanitizeClusters(parsed.Topics, len(messages), topicMax)
 		if err != nil {
-			return nil, err
+			// Hallucinated structure (1-based indexes, empty topics) is as
+			// retryable as unparseable JSON — don't abort the retry loop on it.
+			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("cluster sanitize failed, retrying")
+			lastErr = fmt.Errorf("failed to sanitize topic clusters: %w", err)
+			continue
 		}
 		return clusters, nil
 	}
@@ -339,9 +344,13 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 
 	systemPrompt := buildTopicSummarySystemPrompt(additionalInstructions)
 
+	// Start at the fixed budget but grow it across retries on truncation, like
+	// ClusterTopics — otherwise all retries fail identically on large topics.
+	summaryTokens := finalMaxTokens
+
 	var lastErr error
 	for attempt := range maxLLMRetries {
-		resp, err := s.complete(ctx, provider.OpSummarize, systemPrompt, prompt, finalMaxTokens, 0.3)
+		resp, err := s.complete(ctx, provider.OpSummarize, systemPrompt, prompt, summaryTokens, 0.3)
 		if err != nil {
 			logger.Error().Err(err).Int("attempt", attempt+1).Msg("failed to create topic summary completion")
 			s.metrics.RecordError("llm_summarize", err.Error())
@@ -358,6 +367,15 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 		}
 
 		content := strings.TrimSpace(resp.Content)
+
+		if resp.FinishReason == "length" {
+			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", summaryTokens).
+				Msg("summary response truncated by token limit")
+			summaryTokens = summaryTokens * 3 / 2
+			if summaryTokens > maxSummaryTokensCap {
+				summaryTokens = maxSummaryTokensCap
+			}
+		}
 
 		var summary StructuredSummary
 		if err := unmarshalJSONObject(content, &summary); err != nil {

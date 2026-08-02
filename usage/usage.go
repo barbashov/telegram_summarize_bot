@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"telegram_summarize_bot/db"
+	"telegram_summarize_bot/logger"
 )
 
 // Store is the read side of token-usage aggregation (satisfied by *db.DB).
@@ -32,6 +33,9 @@ type Report struct {
 	ContextUsed int
 	ContextMax  int // 0 => unknown, context line omitted
 	Quota       QuotaResult
+	// StoreErr marks that at least one store query failed, so the report may
+	// be incomplete — a locked DB must not render as a confident "no data".
+	StoreErr bool
 }
 
 // breakdownWindow is the lookback used for the per-model / per-operation tables.
@@ -53,16 +57,27 @@ func Build(ctx context.Context, src Store, model string, contextOverride int, qu
 	}
 
 	var r Report
+	noteErr := func(what string, err error) {
+		if err != nil {
+			logger.Error().Err(err).Str("query", what).Msg("usage report: store query failed")
+			r.StoreErr = true
+		}
+	}
 	for _, w := range windows {
-		totals, _ := src.SumTokenUsageSince(ctx, w.since)
+		totals, err := src.SumTokenUsageSince(ctx, w.since)
+		noteErr("sum_"+w.label, err)
 		r.Windows = append(r.Windows, Window{Label: w.label, Totals: totals})
 	}
 
 	breakdownSince := now.AddDate(0, 0, -breakdownDays)
-	r.ByModel, _ = src.TokenUsageByModelSince(ctx, breakdownSince)
-	r.ByOperation, _ = src.TokenUsageByOperationSince(ctx, breakdownSince)
+	var err error
+	r.ByModel, err = src.TokenUsageByModelSince(ctx, breakdownSince)
+	noteErr("by_model", err)
+	r.ByOperation, err = src.TokenUsageByOperationSince(ctx, breakdownSince)
+	noteErr("by_operation", err)
 
-	latestModel, prompt, _ := src.LatestPromptTokens(ctx)
+	latestModel, prompt, err := src.LatestPromptTokens(ctx)
+	noteErr("latest_prompt", err)
 	if latestModel == "" {
 		latestModel = model
 	}

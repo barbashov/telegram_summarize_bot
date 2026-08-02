@@ -100,7 +100,7 @@ func pickPublicIPs(addrs []string) []net.IP {
 // special-use/filtered records, e.g. an ISP-injected bogus AAAA); it errors only
 // when no public IP remains. SSRF safety is preserved because the caller dials
 // exactly the validated IPs returned here — never a blocked one.
-func resolveAllValidated(host string) ([]net.IP, error) {
+func resolveAllValidated(ctx context.Context, host string) ([]net.IP, error) {
 	if ip := net.ParseIP(host); ip != nil {
 		if isBlockedIP(ip) {
 			return nil, fmt.Errorf("blocked non-public IP: %s", ip)
@@ -108,7 +108,8 @@ func resolveAllValidated(host string) ([]net.IP, error) {
 		return []net.IP{ip}, nil
 	}
 
-	addrs, err := net.LookupHost(host)
+	// ctx-aware lookup so a stalled resolver can't outlive the request timeout.
+	addrs, err := net.DefaultResolver.LookupHost(ctx, host)
 	if err != nil {
 		return nil, fmt.Errorf("DNS lookup failed for %s: %w", host, err)
 	}
@@ -157,7 +158,7 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 				if err != nil {
 					return nil, err
 				}
-				ips, err := resolveAllValidated(h)
+				ips, err := resolveAllValidated(ctx, h)
 				if err != nil {
 					return nil, err
 				}
@@ -172,7 +173,12 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 				return nil, lastErr
 			},
 			TLSHandshakeTimeout: connectTimeout,
+			// The transport lives for a single fetch; without this, a server
+			// holding the connection open leaks a socket + two goroutines per
+			// fetch until it decides to close.
+			DisableKeepAlives: true,
 		}
+		defer transport.CloseIdleConnections()
 
 		client = &http.Client{
 			Transport: transport,

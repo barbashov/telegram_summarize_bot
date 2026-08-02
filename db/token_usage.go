@@ -83,6 +83,7 @@ func (db *DB) scanGroups(ctx context.Context, query string, since time.Time) ([]
 	for rows.Next() {
 		var g TokenUsageGroup
 		if err := rows.Scan(&g.Label, &g.TotalTokens, &g.Calls); err != nil {
+			logger.Warn().Err(err).Msg("skipping unreadable token_usage group row")
 			continue
 		}
 		groups = append(groups, g)

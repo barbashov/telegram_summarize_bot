@@ -93,7 +93,7 @@ type fakeRateLimiter struct {
 	allowed bool
 }
 
-func (f *fakeRateLimiter) Allow(_ int64) bool                  { return f.allowed }
+func (f *fakeRateLimiter) Allow(_ int64) (bool, time.Time)     { return f.allowed, time.Now() }
 func (f *fakeRateLimiter) RemainingTime(_ int64) time.Duration { return 30 * time.Second }
 
 func TestHandle_Help(t *testing.T) {

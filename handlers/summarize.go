@@ -61,7 +61,8 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		return
 	}
 
-	if !b.rateLimiter.Allow(groupID) {
+	allowed, grant := b.rateLimiter.Allow(groupID)
+	if !allowed {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessage(ctx, groupID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
@@ -71,7 +72,7 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	committed := false
 	defer func() {
 		if !committed {
-			b.rateLimiter.Release(groupID)
+			b.rateLimiter.Release(groupID, grant)
 		}
 	}()
 

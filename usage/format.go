@@ -13,11 +13,17 @@ import (
 // style. The account-limits block is included only when a quota snapshot exists.
 func (r Report) Format() string {
 	if !r.hasData() {
+		if r.StoreErr {
+			return "📊 Использование токенов\n\nДанные недоступны (ошибка базы данных)."
+		}
 		return "📊 Использование токенов\n\nНет данных."
 	}
 
 	var sb strings.Builder
 	sb.WriteString("📊 Использование токенов\n")
+	if r.StoreErr {
+		sb.WriteString("⚠️ Часть данных недоступна (ошибка базы данных).\n")
+	}
 	for i, w := range r.Windows {
 		label := padRight(w.Label+":", 9)
 		if i == 0 {

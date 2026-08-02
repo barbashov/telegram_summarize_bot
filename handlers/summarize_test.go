@@ -278,7 +278,7 @@ func TestHandleSummarizeDeliveryFailureDoesNotCommitCheckpoint(t *testing.T) {
 	if last != nil {
 		t.Fatalf("checkpoint committed despite delivery failure: %v", last)
 	}
-	if !b.rateLimiter.Allow(42) {
+	if allowed, _ := b.rateLimiter.Allow(42); !allowed {
 		t.Fatal("expected rate-limit slot to be released after delivery failure")
 	}
 }

@@ -21,7 +21,10 @@ func NewRateLimiter(limitSeconds int) *RateLimiter {
 	}
 }
 
-func (r *RateLimiter) Allow(groupID int64) bool {
+// Allow reports whether the group may run a summarize now. On success it
+// returns the grant timestamp it stored; pass it back to Release so a failed
+// slow request can only free its own slot.
+func (r *RateLimiter) Allow(groupID int64) (bool, time.Time) {
 	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -34,19 +37,24 @@ func (r *RateLimiter) Allow(groupID int64) bool {
 				Int64("group_id", groupID).
 				Dur("remaining", remaining).
 				Msg("rate limited")
-			return false
+			return false, time.Time{}
 		}
 	}
 
 	r.entries[key] = now
-	return true
+	return true, now
 }
 
-func (r *RateLimiter) Release(groupID int64) {
+// Release frees the slot taken by Allow, but only if the stored entry is still
+// the given grant — an unconditional delete would let a failed slow request
+// free an entry that a newer request has since claimed.
+func (r *RateLimiter) Release(groupID int64, grant time.Time) {
 	key := r.key(groupID)
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	delete(r.entries, key)
+	if stored, exists := r.entries[key]; exists && stored.Equal(grant) {
+		delete(r.entries, key)
+	}
 }
 
 func (r *RateLimiter) ClearOldEntries() {

@@ -211,8 +211,8 @@ Commands are triggered by mentioning the bot in a group message:
 | `@bot schedule` | Show current daily summary schedule |
 | `@bot schedule on` | Enable daily summary at the default time (admins only) |
 | `@bot schedule off` | Disable daily summary (admins only) |
-| `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only) |
-| `@bot schedule now` | Trigger an unscheduled summary immediately (admins only) |
+| `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only). If the bot was down (or a tick was missed) at that moment, the digest is caught up later the same day. |
+| `@bot schedule now` | Trigger an unscheduled summary immediately (admins only). Does not affect the daily digest — the scheduled run still fires at its usual time. |
 | `@bot help` | Show available commands |
 
 ## Configuration
@@ -229,8 +229,8 @@ All configuration is via environment variables (`.env` file):
 | `OAUTH_TOKEN_DIR` | `./data` | Directory for OAuth token storage |
 | `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
 | `OAUTH_CODEX_VERSION` | `0.144.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
-| `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. |
-| `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts, `/groups`, `/instructions`). Falls back to `ALERT_USER_IDS` for backward compatibility. |
+| `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. Malformed entries are dropped with a warning; if the value is set but contains no valid IDs, startup fails. |
+| `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts, `/groups`, `/instructions`). Falls back to `ALERT_USER_IDS` for backward compatibility. Same validation as `ALLOWED_GROUPS`. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |

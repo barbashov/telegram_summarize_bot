@@ -164,7 +164,11 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 		}
 	}
 
-	conn, err := sql.Open("sqlite", dbPath+"?_foreign_keys=on")
+	// glebarez/sqlite ignores the mattn-style _foreign_keys=on param; its
+	// _pragma form is applied on every new connection, so FK enforcement
+	// survives connection recycling (the pool can silently replace a broken
+	// connection, which would lose an Exec-level PRAGMA).
+	conn, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
 	if err != nil {
 		return nil, fmt.Errorf("failed to open db: %w", err)
 	}
@@ -202,10 +206,13 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	}
 
 	// The file now exists (created by Ping/migrate). Restrict it to owner-only
-	// since it stores chat history. Best-effort: don't fail startup if the
-	// filesystem doesn't support chmod.
-	if err := os.Chmod(dbPath, 0o600); err != nil {
-		logger.Warn().Err(err).Str("path", dbPath).Msg("failed to chmod db file to 0600")
+	// since it stores chat history — including the WAL sidecars, which carry
+	// the same data. Best-effort: don't fail startup if the filesystem doesn't
+	// support chmod (the -shm file may also not exist yet).
+	for _, p := range []string{dbPath, dbPath + "-wal", dbPath + "-shm"} {
+		if err := os.Chmod(p, 0o600); err != nil && !os.IsNotExist(err) {
+			logger.Warn().Err(err).Str("path", p).Msg("failed to chmod db file to 0600")
+		}
 	}
 
 	return db, nil
@@ -1097,6 +1104,7 @@ func (db *DB) QueryBotEvents(ctx context.Context, metric string, since time.Time
 	for rows.Next() {
 		var e BotEvent
 		if err := rows.Scan(&e.Metric, &e.Timestamp, &e.DurationNS); err != nil {
+			logger.Warn().Err(err).Str("metric", metric).Msg("skipping unreadable bot_events row")
 			continue
 		}
 		events = append(events, e)
@@ -1130,6 +1138,7 @@ func (db *DB) QueryErrorCounts(ctx context.Context, since time.Time) (map[string
 		var key string
 		var count int64
 		if err := rows.Scan(&key, &count); err != nil {
+			logger.Warn().Err(err).Msg("skipping unreadable bot_error_log count row")
 			continue
 		}
 		counts[key] = count

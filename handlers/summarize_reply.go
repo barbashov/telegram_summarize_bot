@@ -97,7 +97,8 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID, cmdMsgID int64,
 		return
 	}
 
-	if !b.rateLimiter.Allow(groupID) {
+	allowed, grant := b.rateLimiter.Allow(groupID)
+	if !allowed {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessageReply(ctx, groupID, cmdMsgID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
@@ -106,7 +107,7 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID, cmdMsgID int64,
 	committed := false
 	defer func() {
 		if !committed {
-			b.rateLimiter.Release(groupID)
+			b.rateLimiter.Release(groupID, grant)
 		}
 	}()
 
@@ -227,7 +228,8 @@ func combineInstructions(group, steering string) string {
 // links, described images) within chain-wide budgets, then the transcript is
 // summarized — honoring any steering prompt over the whole thread.
 func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64, reply *telego.Message, chain []db.Message, steering string) {
-	if !b.rateLimiter.Allow(groupID) {
+	allowed, grant := b.rateLimiter.Allow(groupID)
+	if !allowed {
 		b.metrics.RateLimit.Record(0)
 		remaining := b.rateLimiter.RemainingTime(groupID)
 		b.sendMessageReply(ctx, groupID, cmdMsgID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом суммаризации.")
@@ -236,7 +238,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 	committed := false
 	defer func() {
 		if !committed {
-			b.rateLimiter.Release(groupID)
+			b.rateLimiter.Release(groupID, grant)
 		}
 	}()
 

@@ -42,10 +42,12 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 
 	arg := strings.ToLower(args[0])
 
-	// "now" triggers an immediate unscheduled summary.
+	// "now" triggers an immediate unscheduled summary. It must not stamp the
+	// daily checkpoint, or the regular run would dedup against it and skip
+	// that day's digest.
 	if arg == "now" {
 		b.sendFormatted(ctx, groupID, "🔄 Запускаю внеплановую сводку\\.\\.\\.")
-		b.runScheduledSummary(ctx, groupID, time.Now())
+		b.runScheduledSummary(ctx, groupID, time.Now(), true)
 		return
 	}
 
@@ -103,6 +105,18 @@ func (b *Bot) handleSchedule(ctx context.Context, update telego.Update, args []s
 	}
 }
 
+// scheduleDue reports whether a schedule should fire at now (UTC): due today
+// and not yet run today — rather than strict minute equality, so a dropped
+// tick around HH:MM (slow DB call, host suspend, restart) can't skip the day.
+func scheduleDue(s db.GroupSchedule, now time.Time) bool {
+	schedTime := time.Date(now.Year(), now.Month(), now.Day(), s.Hour, s.Minute, 0, 0, time.UTC)
+	if now.Before(schedTime) {
+		return false
+	}
+	today := now.Truncate(24 * time.Hour)
+	return s.LastDailySummary == nil || s.LastDailySummary.UTC().Truncate(24*time.Hour).Before(today)
+}
+
 func (b *Bot) schedulerLoop(ctx context.Context) {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
@@ -119,21 +133,46 @@ func (b *Bot) schedulerLoop(ctx context.Context) {
 				continue
 			}
 			for _, s := range schedules {
-				if s.Hour != now.Hour() || s.Minute != now.Minute() {
-					continue
-				}
-				today := now.Truncate(24 * time.Hour)
-				if s.LastDailySummary != nil && !s.LastDailySummary.UTC().Truncate(24*time.Hour).Before(today) {
+				if !scheduleDue(s, now) {
 					continue
 				}
 				groupID := s.GroupID
-				go b.runScheduledSummary(ctx, groupID, now)
+				// Same slot/drain discipline as the update loop: the semaphore
+				// bounds the LLM burst when many groups share the default time, and
+				// inflight lets shutdown drain these before closing the DB.
+				select {
+				case b.sem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
+				b.inflight.Add(1)
+				go func() {
+					defer b.inflight.Done()
+					defer func() { <-b.sem }()
+					b.runScheduledSummary(ctx, groupID, now, false)
+				}()
 			}
 		}
 	}
 }
 
-func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.Time) {
+// runScheduledSummary produces the 24h digest for one group. manual marks an
+// admin-triggered "schedule now" run: it skips the daily checkpoint so the
+// regular scheduled run still fires that day.
+func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.Time, manual bool) {
+	// Re-check the allowlist: schedules are stored independently of
+	// allowed_groups, so a group revoked via /groups remove would otherwise
+	// keep receiving daily digests.
+	allowed, err := b.db.IsGroupAllowed(ctx, groupID)
+	if err != nil {
+		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: allowlist check failed")
+		return
+	}
+	if !allowed {
+		logger.Info().Int64("group_id", groupID).Msg("scheduled summary: group no longer allowed, skipping")
+		return
+	}
+
 	since := now.UTC().Add(-24 * time.Hour)
 	messages, err := b.db.GetMessages(ctx, groupID, since, b.cfg.MaxMessages)
 	if err != nil {
@@ -171,6 +210,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 		b.sendFormatted(ctx, groupID, chunk)
 	}
 
+	if manual {
+		return
+	}
 	if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to update last daily summary")
 	}

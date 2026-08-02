@@ -257,6 +257,198 @@ func TestTokenStoreAtomicWriteContentAndPerms(t *testing.T) {
 	}
 }
 
+func TestTokenStoreRefreshAdoptsNewerTokensFromDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	// A sibling process (CLI vs bot) already refreshed and persisted fresh
+	// tokens with a rotated refresh token.
+	other := NewTokenStore(dir, "client-id")
+	if err := other.Save(&OAuthTokens{
+		AccessToken:  "disk-access",
+		RefreshToken: "disk-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	// This store still holds the stale pre-rotation state in memory.
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "stale-access",
+		RefreshToken: "stale-refresh",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	// Refreshing with the stale refresh token would be invalid_grant (or trip
+	// reuse detection) — the endpoint must not be hit at all.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("token endpoint must not be called when disk already has fresh tokens")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	orig := OpenAITokenURL
+	OpenAITokenURL = srv.URL
+	t.Cleanup(func() { OpenAITokenURL = orig })
+
+	token, err := store.GetValidToken()
+	if err != nil {
+		t.Fatalf("GetValidToken: %v", err)
+	}
+	if token != "disk-access" {
+		t.Errorf("token = %q, want disk-access adopted from file", token)
+	}
+	if store.tokens.RefreshToken != "disk-refresh" {
+		t.Errorf("refresh token = %q, want disk-refresh adopted from file", store.tokens.RefreshToken)
+	}
+}
+
+func TestTokenStoreForceRefreshUsesRotatedRefreshTokenFromDisk(t *testing.T) {
+	dir := t.TempDir()
+
+	other := NewTokenStore(dir, "client-id")
+	if err := other.Save(&OAuthTokens{
+		AccessToken:  "disk-access",
+		RefreshToken: "disk-refresh",
+		ExpiresAt:    time.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "stale-access",
+		RefreshToken: "stale-refresh",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	// ForceRefresh always refreshes, but it must send the freshest (rotated)
+	// refresh token from disk, not the stale in-memory one.
+	var gotRefreshToken string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotRefreshToken = r.FormValue("refresh_token")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"new-access","expires_in":3600}`))
+	}))
+	t.Cleanup(srv.Close)
+	orig := OpenAITokenURL
+	OpenAITokenURL = srv.URL
+	t.Cleanup(func() { OpenAITokenURL = orig })
+
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if gotRefreshToken != "disk-refresh" {
+		t.Errorf("refresh request used token %q, want disk-refresh", gotRefreshToken)
+	}
+	if store.tokens.AccessToken != "new-access" {
+		t.Errorf("access token = %q, want new-access", store.tokens.AccessToken)
+	}
+}
+
+func TestGetValidTokenFallsBackToStillValidTokenOnRefreshFailure(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	// Inside the 5-minute refresh buffer but not yet expired.
+	store.tokens = &OAuthTokens{
+		AccessToken:  "current-access",
+		RefreshToken: "current-refresh",
+		ExpiresAt:    time.Now().Add(2 * time.Minute),
+	}
+
+	tokenServer(t, `{"error":"server_error","error_description":"try again later"}`)
+
+	token, err := store.GetValidToken()
+	if err != nil {
+		t.Fatalf("GetValidToken should fall back to the still-valid token, got error: %v", err)
+	}
+	if token != "current-access" {
+		t.Errorf("token = %q, want current-access", token)
+	}
+}
+
+func TestGetValidTokenErrorsWhenRefreshFailsAndTokenExpired(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "expired-access",
+		RefreshToken: "current-refresh",
+		ExpiresAt:    time.Now().Add(-time.Minute),
+	}
+
+	tokenServer(t, `{"error":"server_error","error_description":"try again later"}`)
+
+	if _, err := store.GetValidToken(); err == nil {
+		t.Fatal("expected error when refresh fails and token is expired")
+	}
+}
+
+func TestFlexIntUnmarshal(t *testing.T) {
+	tests := []struct {
+		name    string
+		json    string
+		want    int
+		wantErr bool
+	}{
+		{"number", `3600`, 3600, false},
+		{"string number", `"3600"`, 3600, false},
+		{"null", `null`, 0, false},
+		{"empty string", `""`, 0, false},
+		{"garbage", `"abc"`, 0, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var n FlexInt
+			err := json.Unmarshal([]byte(tt.json), &n)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tt.wantErr)
+			}
+			if !tt.wantErr && int(n) != tt.want {
+				t.Errorf("value = %d, want %d", int(n), tt.want)
+			}
+		})
+	}
+}
+
+func TestTokenStoreRefreshHandlesStringExpiresIn(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	tokenServer(t, `{"access_token":"new-access","expires_in":"3600"}`)
+
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if remaining := time.Until(store.tokens.ExpiresAt); remaining < 55*time.Minute || remaining > 65*time.Minute {
+		t.Errorf("ExpiresAt %v, want ~1h from now", store.tokens.ExpiresAt)
+	}
+}
+
+func TestTokenStoreRefreshDefaultsMissingExpiresIn(t *testing.T) {
+	dir := t.TempDir()
+	store := NewTokenStore(dir, "client-id")
+	store.tokens = &OAuthTokens{
+		AccessToken:  "old-access",
+		RefreshToken: "old-refresh",
+		ExpiresAt:    time.Now().Add(-time.Hour),
+	}
+
+	// No expires_in at all: the token must not be born expired (that would
+	// trigger a refresh POST on every LLM call).
+	tokenServer(t, `{"access_token":"new-access"}`)
+
+	if err := store.ForceRefresh(); err != nil {
+		t.Fatalf("ForceRefresh: %v", err)
+	}
+	if !store.tokens.ExpiresAt.After(time.Now().Add(refreshBuffer)) {
+		t.Errorf("ExpiresAt %v not beyond the refresh buffer; default lifetime not applied", store.tokens.ExpiresAt)
+	}
+}
+
 func TestPostTokenRequestStringError(t *testing.T) {
 	tokenServer(t, `{"error":"invalid_grant","error_description":"refresh token expired"}`)
 

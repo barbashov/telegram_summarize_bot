@@ -17,8 +17,11 @@ import (
 
 type fakeLLMClient struct {
 	responses []string
-	err       error
-	requests  []provider.CompletionRequest
+	// finishReasons is consumed in parallel with responses; empty entries
+	// (or a missing slice) default to "stop".
+	finishReasons []string
+	err           error
+	requests      []provider.CompletionRequest
 }
 
 func (f *fakeLLMClient) Complete(_ context.Context, req provider.CompletionRequest) (provider.CompletionResponse, error) {
@@ -32,9 +35,16 @@ func (f *fakeLLMClient) Complete(_ context.Context, req provider.CompletionReque
 
 	content := f.responses[0]
 	f.responses = f.responses[1:]
+	finishReason := "stop"
+	if len(f.finishReasons) > 0 {
+		if f.finishReasons[0] != "" {
+			finishReason = f.finishReasons[0]
+		}
+		f.finishReasons = f.finishReasons[1:]
+	}
 	return provider.CompletionResponse{
 		Content:      content,
-		FinishReason: "stop",
+		FinishReason: finishReason,
 	}, nil
 }
 
@@ -85,6 +95,78 @@ func TestClusterTopicsRejectsInvalidJSON(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parse topic clusters") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClusterTopicsRetriesOnSanitizeFailure(t *testing.T) {
+	// First response is a common LLM hallucination (1-based indexes → out of
+	// range); it must be retried like a parse failure, not abort the loop.
+	client := &fakeLLMClient{
+		responses: []string{
+			`{"topics":[{"title":"Тема","message_indexes":[1],"message_count":1}]}`,
+			`{"topics":[{"title":"Тема","message_indexes":[0],"message_count":1}]}`,
+		},
+	}
+	sum := New(client, "test-model", metrics.New(), true)
+
+	clusters, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5, nil)
+	if err != nil {
+		t.Fatalf("ClusterTopics returned error: %v", err)
+	}
+	if len(clusters) != 1 {
+		t.Fatalf("len(clusters) = %d, want 1", len(clusters))
+	}
+	if got, want := len(client.requests), 2; got != want {
+		t.Fatalf("request count = %d, want %d (one retry)", got, want)
+	}
+}
+
+func TestClusterTopicsExhaustsRetriesOnSanitizeFailure(t *testing.T) {
+	responses := make([]string, maxLLMRetries)
+	for i := range responses {
+		responses[i] = `{"topics":[{"title":"Тема","message_indexes":[9],"message_count":1}]}`
+	}
+	sum := New(&fakeLLMClient{responses: responses}, "test-model", metrics.New(), true)
+
+	_, err := sum.ClusterTopics(context.Background(), []db.Message{{Text: "msg", Timestamp: time.Unix(0, 0)}}, 5, nil)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sanitize topic clusters") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSummarizeTopicsGrowsBudgetOnTruncation(t *testing.T) {
+	// A truncated response (finish_reason=length → broken JSON) must retry
+	// with a bigger budget instead of failing identically three times.
+	client := &fakeLLMClient{
+		responses: []string{
+			`{"tldr":"Обсудили`, // truncated mid-JSON
+			`{"tldr":"Обсудили релиз.","topics":[{"title":"Релиз","summary":"Катим.","message_count":1}]}`,
+		},
+		finishReasons: []string{"length", "stop"},
+	}
+	sum := New(client, "test-model", metrics.New(), true)
+
+	messages := []db.Message{{Text: "катим релиз", Timestamp: time.Unix(0, 0)}}
+	clusters := []TopicCluster{{Title: "Релиз", MessageIndexes: []int{0}, MessageCount: 1}}
+	summary, err := sum.SummarizeTopics(context.Background(), messages, clusters, "", nil)
+	if err != nil {
+		t.Fatalf("SummarizeTopics returned error: %v", err)
+	}
+	if summary.TLDR != "Обсудили релиз." {
+		t.Fatalf("unexpected TLDR: %q", summary.TLDR)
+	}
+
+	if got, want := len(client.requests), 2; got != want {
+		t.Fatalf("request count = %d, want %d", got, want)
+	}
+	if got := client.requests[0].MaxTokens; got != finalMaxTokens {
+		t.Fatalf("first summary MaxTokens = %d, want %d", got, finalMaxTokens)
+	}
+	if got, want := client.requests[1].MaxTokens, finalMaxTokens*3/2; got != want {
+		t.Fatalf("retry summary MaxTokens = %d, want %d", got, want)
 	}
 }
 

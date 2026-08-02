@@ -184,13 +184,13 @@ func TestFetchHTTPError(t *testing.T) {
 }
 
 func TestResolveAllValidatedBlocksPrivateIP(t *testing.T) {
-	if _, err := resolveAllValidated("127.0.0.1"); err == nil {
+	if _, err := resolveAllValidated(context.Background(), "127.0.0.1"); err == nil {
 		t.Fatal("expected error for 127.0.0.1")
 	}
 }
 
 func TestResolveAllValidatedAllowsPublicIP(t *testing.T) {
-	ips, err := resolveAllValidated("8.8.8.8")
+	ips, err := resolveAllValidated(context.Background(), "8.8.8.8")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

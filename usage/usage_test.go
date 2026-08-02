@@ -2,6 +2,8 @@ package usage
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -14,19 +16,20 @@ type fakeStore struct {
 	byOperation []db.TokenUsageGroup
 	latestModel string
 	latestTok   int
+	err         error // returned from every query when set
 }
 
 func (f *fakeStore) SumTokenUsageSince(context.Context, time.Time) (db.TokenUsageTotals, error) {
-	return f.totals, nil
+	return f.totals, f.err
 }
 func (f *fakeStore) TokenUsageByModelSince(context.Context, time.Time) ([]db.TokenUsageGroup, error) {
-	return f.byModel, nil
+	return f.byModel, f.err
 }
 func (f *fakeStore) TokenUsageByOperationSince(context.Context, time.Time) ([]db.TokenUsageGroup, error) {
-	return f.byOperation, nil
+	return f.byOperation, f.err
 }
 func (f *fakeStore) LatestPromptTokens(context.Context) (model string, promptTokens int, err error) {
-	return f.latestModel, f.latestTok, nil
+	return f.latestModel, f.latestTok, f.err
 }
 
 func TestBuild(t *testing.T) {
@@ -55,6 +58,32 @@ func TestBuildContextOverride(t *testing.T) {
 	r := Build(context.Background(), src, "unknown-model", 8000, QuotaResult{})
 	if r.ContextMax != 8000 {
 		t.Errorf("context max = %d, want override 8000", r.ContextMax)
+	}
+}
+
+func TestBuildSurfacesStoreErrors(t *testing.T) {
+	// A locked DB must not render as a confident "Нет данных".
+	src := &fakeStore{err: errors.New("database is locked")}
+	r := Build(context.Background(), src, "gpt-5", 0, QuotaResult{})
+	if !r.StoreErr {
+		t.Fatal("StoreErr not set on failing store")
+	}
+	out := r.Format()
+	if !strings.Contains(out, "Данные недоступны") {
+		t.Errorf("Format() = %q, want unavailable notice", out)
+	}
+	if strings.Contains(out, "Нет данных") {
+		t.Errorf("Format() = %q, must not claim there is simply no data", out)
+	}
+}
+
+func TestBuildNoErrorsNoStoreErr(t *testing.T) {
+	r := Build(context.Background(), &fakeStore{}, "gpt-5", 0, QuotaResult{})
+	if r.StoreErr {
+		t.Fatal("StoreErr set on healthy store")
+	}
+	if out := r.Format(); !strings.Contains(out, "Нет данных") {
+		t.Errorf("Format() = %q, want plain no-data notice", out)
 	}
 }
 

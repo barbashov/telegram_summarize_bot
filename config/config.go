@@ -149,12 +149,28 @@ func Load() (*Config, error) {
 		oauthCodexVersion = defaultOAuthCodexVersion
 	}
 
-	allowedGroups := parseIDList(os.Getenv("ALLOWED_GROUPS"))
-	adminUserIDsRaw := os.Getenv("ADMIN_USER_IDS")
-	if adminUserIDsRaw == "" {
-		adminUserIDsRaw = os.Getenv("ALERT_USER_IDS")
+	// A typo'd security list must not silently start a bot that serves nothing
+	// or locks out the admin: fail startup when a non-empty value parses to
+	// zero IDs. An empty ALLOWED_GROUPS only warns — the DB allowlist may
+	// already be seeded from an earlier run (/groups add manages it since).
+	allowedGroupsRaw := os.Getenv("ALLOWED_GROUPS")
+	allowedGroups := parseIDList("ALLOWED_GROUPS", allowedGroupsRaw)
+	if strings.TrimSpace(allowedGroupsRaw) != "" && len(allowedGroups) == 0 {
+		return nil, fmt.Errorf("config: ALLOWED_GROUPS is set but contains no valid group IDs: %q", allowedGroupsRaw)
 	}
-	adminUserIDs := parseIDList(adminUserIDsRaw)
+	if strings.TrimSpace(allowedGroupsRaw) == "" {
+		logger.Warn().Msg("ALLOWED_GROUPS is empty; the bot will only serve groups already in the DB allowlist")
+	}
+	adminUserIDsKey := "ADMIN_USER_IDS"
+	adminUserIDsRaw := os.Getenv(adminUserIDsKey)
+	if adminUserIDsRaw == "" {
+		adminUserIDsKey = "ALERT_USER_IDS"
+		adminUserIDsRaw = os.Getenv(adminUserIDsKey)
+	}
+	adminUserIDs := parseIDList(adminUserIDsKey, adminUserIDsRaw)
+	if strings.TrimSpace(adminUserIDsRaw) != "" && len(adminUserIDs) == 0 {
+		return nil, fmt.Errorf("config: %s is set but contains no valid user IDs: %q", adminUserIDsKey, adminUserIDsRaw)
+	}
 
 	dailySummaryHour := 7
 	if v := os.Getenv("DAILY_SUMMARY_HOUR"); v != "" {
@@ -280,25 +296,32 @@ func envIntOr(key string, def int) int {
 		if parsed, err := strconv.Atoi(v); err == nil && parsed > 0 {
 			return parsed
 		}
+		// Don't silently fall back (e.g. RETENTION_DAYS=0 intending "forever"
+		// would quietly become 7 days).
+		logger.Warn().Str("key", key).Str("value", v).Int("default", def).
+			Msg("invalid value (must be a positive integer), using default")
 	}
 	return def
 }
 
-func parseIDList(value string) []int64 {
+func parseIDList(key, value string) []int64 {
 	if value == "" {
 		return nil
 	}
 
-	var admins []int64
+	var ids []int64
 	parts := strings.Split(value, ",")
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-		if id, err := strconv.ParseInt(part, 10, 64); err == nil {
-			admins = append(admins, id)
+		id, err := strconv.ParseInt(part, 10, 64)
+		if err != nil {
+			logger.Warn().Str("key", key).Str("entry", part).Msg("dropping malformed ID entry")
+			continue
 		}
+		ids = append(ids, id)
 	}
-	return admins
+	return ids
 }

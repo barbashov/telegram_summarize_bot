@@ -85,6 +85,23 @@ func TestResolveCodexQuotaProbeFailsKeepsStale(t *testing.T) {
 	}
 }
 
+func TestResolveCodexQuotaProbeWithoutCaptureStaysStale(t *testing.T) {
+	// Probe succeeds but the capture transport persisted nothing (onProbe nil):
+	// the reload returns the same stale snapshot, which must NOT be relabeled
+	// SourceLive — that would suppress the staleness footer.
+	stale := &provider.RateLimitSnapshot{CapturedAt: time.Now().Add(-time.Hour), PlanType: "old"}
+	store := &fakeQuotaStore{snap: stale}
+	client := &probeClient{store: store}
+
+	res := ResolveCodexQuota(context.Background(), store, client, "gpt-5", 15*time.Minute)
+	if res.Source != SourceCache {
+		t.Errorf("source = %q, want cache (stale)", res.Source)
+	}
+	if res.Snapshot == nil || res.Snapshot.PlanType != "old" {
+		t.Errorf("snapshot = %+v, want the stale one", res.Snapshot)
+	}
+}
+
 func TestResolveCodexQuotaNothingAvailable(t *testing.T) {
 	store := &fakeQuotaStore{}
 	client := &probeClient{store: store, fail: true}

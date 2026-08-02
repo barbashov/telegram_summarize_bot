@@ -29,9 +29,11 @@ type SummaryService interface {
 	SummarizeURL(ctx context.Context, pageURL string, content string, instructions string) (string, error)
 }
 
-// RateLimiterIface abstracts the rate limiter.
+// RateLimiterIface abstracts the rate limiter. Allow returns the grant
+// timestamp for a paired Release; admin callers don't release (the entry just
+// expires), so they discard it.
 type RateLimiterIface interface {
-	Allow(groupID int64) bool
+	Allow(groupID int64) (bool, time.Time)
 	RemainingTime(groupID int64) time.Duration
 }
 

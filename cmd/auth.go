@@ -280,7 +280,7 @@ func exchangeCode(clientID, code, redirectURI, verifier string) (*provider.OAuth
 		RefreshToken: tr.RefreshToken,
 		IDToken:      tr.IDToken,
 		AccountID:    accountID,
-		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresIn) * time.Second),
+		ExpiresAt:    time.Now().Add(time.Duration(tr.ExpiresInSeconds()) * time.Second),
 	}, nil
 }
 

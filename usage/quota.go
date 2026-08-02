@@ -68,10 +68,18 @@ func ResolveCodexQuota(ctx context.Context, store QuotaStore, client provider.LL
 			Messages:  []provider.Message{{Role: "user", Content: "ping"}},
 			MaxTokens: 16,
 		}); err == nil {
-			if snap, ok := store.LoadCodexRateLimits(ctx); ok {
+			// Only report SourceLive if the capture transport actually
+			// persisted a fresh snapshot — a reload that returns the same old
+			// one must keep its staleness footer.
+			var prevCaptured time.Time
+			if stale != nil {
+				prevCaptured = stale.CapturedAt
+			}
+			if snap, ok := store.LoadCodexRateLimits(ctx); ok && snap.CapturedAt.After(prevCaptured) {
 				s := snap
 				return QuotaResult{Snapshot: &s, Source: SourceLive}
 			}
+			logger.Debug().Msg("codex quota probe succeeded but no fresh snapshot was captured")
 		} else {
 			logger.Debug().Err(err).Msg("codex quota probe failed")
 		}

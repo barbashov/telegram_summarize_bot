@@ -12,6 +12,7 @@ require (
 	github.com/rs/zerolog v1.35.1
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/spf13/cobra v1.10.2
+	golang.org/x/sys v0.47.0
 )
 
 require (
@@ -49,7 +50,6 @@ require (
 	github.com/yuin/goldmark v1.8.5 // indirect
 	golang.org/x/arch v0.29.0 // indirect
 	golang.org/x/net v0.57.0 // indirect
-	golang.org/x/sys v0.47.0 // indirect
 	golang.org/x/text v0.40.0 // indirect
 	gorm.io/gorm v1.31.2 // indirect
 	modernc.org/libc v1.74.4 // indirect

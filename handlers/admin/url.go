@@ -23,7 +23,7 @@ func extractURL(text string, entities []telego.MessageEntity) string {
 }
 
 func (a *Admin) handleURLSummarize(ctx context.Context, chatID int64, rawURL string) {
-	if !a.rateLimiter.Allow(chatID) {
+	if allowed, _ := a.rateLimiter.Allow(chatID); !allowed {
 		a.metrics.RateLimit.Record(0)
 		remaining := a.rateLimiter.RemainingTime(chatID)
 		a.deps.SendMessage(ctx, chatID, "Подождите "+tgutil.FormatDuration(remaining)+" перед следующим запросом.")

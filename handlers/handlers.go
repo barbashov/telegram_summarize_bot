@@ -165,6 +165,12 @@ func (b *Bot) Start(ctx context.Context) error {
 			return nil
 		case update, ok := <-updates:
 			if !ok {
+				// On SIGINT both select cases can be ready at once and Go picks
+				// randomly, so this branch must drain too — otherwise ~half of
+				// shutdowns leave in-flight handlers writing to a closed DB.
+				logger.Info().Msg("Updates channel closed, stopping bot...")
+				cancelPolling()
+				b.drainHandlers(shutdownDrainTimeout)
 				return nil
 			}
 			// Acquire a slot before spawning so a flood applies backpressure to
