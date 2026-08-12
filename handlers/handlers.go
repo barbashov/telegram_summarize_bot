@@ -70,6 +70,13 @@ type Bot struct {
 	// bounds their concurrency (backpressure).
 	inflight sync.WaitGroup
 	sem      chan struct{}
+
+	// schedRunning marks groups whose scheduled digest is currently in flight.
+	// The daily checkpoint is stamped only after a successful send, so a run
+	// slower than one scheduler tick would otherwise still look due on the
+	// next tick and the digest would be posted twice.
+	schedMu      sync.Mutex
+	schedRunning map[int64]struct{}
 }
 
 func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics, llm provider.LLMClient) (*Bot, error) {

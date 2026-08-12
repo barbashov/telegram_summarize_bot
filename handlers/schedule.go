@@ -126,34 +126,66 @@ func (b *Bot) schedulerLoop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			now = now.UTC()
-			schedules, err := b.db.GetEnabledSchedules(ctx)
-			if err != nil {
-				logger.Error().Err(err).Msg("failed to get enabled schedules")
-				continue
-			}
-			for _, s := range schedules {
-				if !scheduleDue(s, now) {
-					continue
-				}
-				groupID := s.GroupID
-				// Same slot/drain discipline as the update loop: the semaphore
-				// bounds the LLM burst when many groups share the default time, and
-				// inflight lets shutdown drain these before closing the DB.
-				select {
-				case b.sem <- struct{}{}:
-				case <-ctx.Done():
-					return
-				}
-				b.inflight.Add(1)
-				go func() {
-					defer b.inflight.Done()
-					defer func() { <-b.sem }()
-					b.runScheduledSummary(ctx, groupID, now, false)
-				}()
-			}
+			b.runDueSchedules(ctx, now.UTC())
 		}
 	}
+}
+
+// runDueSchedules is one scheduler tick: it fires the daily digest for every
+// enabled schedule that is due at now.
+func (b *Bot) runDueSchedules(ctx context.Context, now time.Time) {
+	schedules, err := b.db.GetEnabledSchedules(ctx)
+	if err != nil {
+		logger.Error().Err(err).Msg("failed to get enabled schedules")
+		return
+	}
+	for _, s := range schedules {
+		if !scheduleDue(s, now) {
+			continue
+		}
+		groupID := s.GroupID
+		if !b.tryClaimScheduledRun(groupID) {
+			logger.Info().Int64("group_id", groupID).Msg("scheduled summary still in flight, skipping tick")
+			continue
+		}
+		// Same slot/drain discipline as the update loop: the semaphore
+		// bounds the LLM burst when many groups share the default time, and
+		// inflight lets shutdown drain these before closing the DB.
+		select {
+		case b.sem <- struct{}{}:
+		case <-ctx.Done():
+			b.releaseScheduledRun(groupID)
+			return
+		}
+		b.inflight.Add(1)
+		go func() {
+			defer b.inflight.Done()
+			defer func() { <-b.sem }()
+			defer b.releaseScheduledRun(groupID)
+			b.runScheduledSummary(ctx, groupID, now, false)
+		}()
+	}
+}
+
+// tryClaimScheduledRun claims the in-flight slot for a group's scheduled
+// digest; false means a previous run has not finished yet.
+func (b *Bot) tryClaimScheduledRun(groupID int64) bool {
+	b.schedMu.Lock()
+	defer b.schedMu.Unlock()
+	if _, running := b.schedRunning[groupID]; running {
+		return false
+	}
+	if b.schedRunning == nil {
+		b.schedRunning = make(map[int64]struct{})
+	}
+	b.schedRunning[groupID] = struct{}{}
+	return true
+}
+
+func (b *Bot) releaseScheduledRun(groupID int64) {
+	b.schedMu.Lock()
+	delete(b.schedRunning, groupID)
+	b.schedMu.Unlock()
 }
 
 // runScheduledSummary produces the 24h digest for one group. manual marks an

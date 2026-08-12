@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -195,6 +196,72 @@ func TestRunScheduledSummaryManualDoesNotStampCheckpoint(t *testing.T) {
 	}
 	if s.LastDailySummary == nil {
 		t.Fatal("scheduled run did not stamp the daily checkpoint")
+	}
+}
+
+// blockingSummarizer signals when SummarizeByTopics is entered and holds it
+// until release is closed, so a test can interleave scheduler ticks with a
+// run that is still in flight.
+type blockingSummarizer struct {
+	fakeSummarizer
+	started chan struct{}
+	release chan struct{}
+	calls   atomic.Int32
+}
+
+func (f *blockingSummarizer) SummarizeByTopics(_ context.Context, _ []db.Message, _ int, _ string) (*summarizer.StructuredSummary, error) {
+	f.calls.Add(1)
+	f.started <- struct{}{}
+	<-f.release
+	return &summarizer.StructuredSummary{TLDR: "Итог"}, nil
+}
+
+// A scheduled run that outlives one scheduler tick (slow LLM call, retries)
+// must not be fired again by the next tick: the daily checkpoint is stamped
+// only after a successful send, so while the run is in flight the schedule
+// still looks due and, without an in-flight guard, the digest is posted twice.
+func TestRunDueSchedulesDoesNotDoubleFireWhileRunInflight(t *testing.T) {
+	sum := &blockingSummarizer{
+		started: make(chan struct{}, 4),
+		release: make(chan struct{}),
+	}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	now := time.Date(2026, 8, 12, 7, 0, 47, 0, time.UTC)
+	if err := database.AddAllowedGroup(ctx, 42, 7); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+	if err := database.SetGroupSchedule(ctx, &db.GroupSchedule{GroupID: 42, Enabled: true, Hour: 7, Minute: 0}); err != nil {
+		t.Fatalf("SetGroupSchedule error: %v", err)
+	}
+	if err := database.AddMessage(ctx, &db.Message{
+		GroupID:   42,
+		UserHash:  "abc123",
+		Text:      "привет",
+		Timestamp: now.Add(-time.Hour),
+	}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	// Tick 1 fires the run; wait until it is inside the summarizer.
+	b.runDueSchedules(ctx, now)
+	select {
+	case <-sum.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("first scheduled run never reached the summarizer")
+	}
+
+	// Tick 2, one minute later: the first run is still in flight and the
+	// checkpoint is not stamped yet, so the schedule still looks due.
+	b.runDueSchedules(ctx, now.Add(time.Minute))
+
+	close(sum.release)
+	b.inflight.Wait()
+
+	if got := sum.calls.Load(); got != 1 {
+		t.Fatalf("scheduled summary ran %d times, want 1", got)
 	}
 }
 

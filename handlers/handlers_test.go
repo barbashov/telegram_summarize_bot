@@ -159,6 +159,7 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 		username:     "testbot",
 		metrics:      m,
 		userHashSalt: []byte("testsalt"),
+		sem:          make(chan struct{}, maxConcurrentUpdates),
 		// Default to a stub so tests never hit the network; link tests override.
 		fetchURL: func(_ context.Context, _ string, _ int) (string, error) {
 			return "", errors.New("fetchURL not stubbed in this test")
