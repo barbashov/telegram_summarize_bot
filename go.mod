@@ -1,6 +1,6 @@
 module telegram_summarize_bot
 
-go 1.26.5
+go 1.26.6
 
 require (
 	github.com/barbashov/telegramify-markdown-go v0.1.2
