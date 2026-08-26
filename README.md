@@ -8,7 +8,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
 - **Multiple LLM backends**: OpenAI-compatible Completions API (OpenRouter, LiteLLM, etc.), OpenAI Responses API, or OpenAI Codex subscription via OAuth
-- **Daily scheduled summaries** — bot automatically posts a morning digest; configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
+- **Daily scheduled summaries** — bot automatically posts a morning digest (skipped on quiet days, see `DAILY_SUMMARY_MIN_MESSAGES`); configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
 - Per-group additional summary instructions, managed from admin private DMs with `/instructions`
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
@@ -238,6 +238,7 @@ All configuration is via environment variables (`.env` file):
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
+| `DAILY_SUMMARY_MIN_MESSAGES` | `10` | Minimum messages in the last 24h for the daily scheduled digest to run; below it the day is skipped silently (a digest would be longer than the chat itself). `@bot schedule now` ignores this threshold. |
 | `REPLY_THREADS` | `true` | Follow reply relationships: show ancestry context in 24h summaries and walk the reply chain for `@bot` replies (`true`/`false`) |
 | `REPLY_THREAD_CONTEXT_DEPTH` | `3` | How many ancestor levels appear in the reply breadcrumb inside 24h-summary prompts |
 | `REPLY_CHAIN_MAX_DEPTH` | `25` | Max messages walked up a reply chain when summarizing a replied-to thread (hard ceiling 25) |

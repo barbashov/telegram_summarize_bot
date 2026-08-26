@@ -295,3 +295,98 @@ func TestScheduleDueCatchesUpAfterMissedTick(t *testing.T) {
 }
 
 func timePtr(t time.Time) *time.Time { return &t }
+
+// A quiet day must not produce a digest longer than the chat itself: below
+// DAILY_SUMMARY_MIN_MESSAGES the scheduled run skips silently and stamps the
+// day, while a manual "schedule now" ignores the threshold.
+func TestRunScheduledSummaryMinMessagesThreshold(t *testing.T) {
+	sum := &fakeSummarizer{summary: &summarizer.StructuredSummary{TLDR: "Итог"}}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.DailySummaryMinMessages = 3
+
+	ctx := context.Background()
+	now := time.Now()
+	if err := database.AddAllowedGroup(ctx, 42, 7); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+	if err := database.SetGroupSchedule(ctx, &db.GroupSchedule{GroupID: 42, Enabled: true, Hour: 7}); err != nil {
+		t.Fatalf("SetGroupSchedule error: %v", err)
+	}
+	for i := 0; i < 2; i++ {
+		if err := database.AddMessage(ctx, &db.Message{
+			GroupID:   42,
+			UserHash:  "abc123",
+			Text:      "привет",
+			Timestamp: now.Add(-time.Duration(i+1) * time.Hour),
+		}); err != nil {
+			t.Fatalf("AddMessage error: %v", err)
+		}
+	}
+
+	b.runScheduledSummary(ctx, 42, now, false)
+	if sum.calls != 0 {
+		t.Fatal("scheduled run must skip below the threshold")
+	}
+	s, err := database.GetGroupSchedule(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetGroupSchedule error: %v", err)
+	}
+	if s.LastDailySummary == nil {
+		t.Fatal("skipped day must be stamped so the digest doesn't fire later that day")
+	}
+
+	b.runScheduledSummary(ctx, 42, now, true)
+	if sum.calls != 1 {
+		t.Fatalf("manual run must ignore the threshold, calls = %d", sum.calls)
+	}
+
+	// At the threshold the scheduled run fires.
+	if err := database.AddMessage(ctx, &db.Message{GroupID: 42, UserHash: "abc123", Text: "ещё", Timestamp: now.Add(-time.Minute)}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+	b.runScheduledSummary(ctx, 42, now, false)
+	if sum.calls != 2 {
+		t.Fatalf("scheduled run must fire at the threshold, calls = %d", sum.calls)
+	}
+}
+
+// Below the threshold the scheduled run must leave no trace in the chat: no
+// status placeholder, no "too few messages" notice, no edits.
+func TestRunScheduledSummaryBelowThresholdIsSilent(t *testing.T) {
+	sum := &fakeSummarizer{summary: &summarizer.StructuredSummary{TLDR: "Итог"}}
+	b, database, tg := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+	b.cfg.DailySummaryMinMessages = 10
+
+	ctx := context.Background()
+	now := time.Now()
+	if err := database.AddAllowedGroup(ctx, 42, 7); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+	if err := database.SetGroupSchedule(ctx, &db.GroupSchedule{GroupID: 42, Enabled: true, Hour: 7}); err != nil {
+		t.Fatalf("SetGroupSchedule error: %v", err)
+	}
+	for i := 0; i < 9; i++ {
+		if err := database.AddMessage(ctx, &db.Message{
+			GroupID:   42,
+			UserHash:  "abc123",
+			Text:      "привет",
+			Timestamp: now.Add(-time.Duration(i+1) * time.Minute),
+		}); err != nil {
+			t.Fatalf("AddMessage error: %v", err)
+		}
+	}
+
+	b.runScheduledSummary(ctx, 42, now, false)
+
+	if sum.calls != 0 {
+		t.Fatalf("summarizer must not be called, calls = %d", sum.calls)
+	}
+	if len(tg.sentTexts) != 0 {
+		t.Fatalf("no messages must be sent, got: %v", tg.sentTexts)
+	}
+	if len(tg.editTexts) != 0 {
+		t.Fatalf("no messages must be edited, got: %v", tg.editTexts)
+	}
+}

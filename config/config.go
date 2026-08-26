@@ -47,6 +47,7 @@ type Config struct {
 	AllowedGroups            []int64
 	AdminUserIDs             []int64
 	DailySummaryHour         int
+	DailySummaryMinMessages  int
 	ReplyThreads             bool
 	ReplyThreadContextDepth  int
 	URLMaxChars              int
@@ -212,6 +213,7 @@ func Load() (*Config, error) {
 		AllowedGroups:            allowedGroups,
 		AdminUserIDs:             adminUserIDs,
 		DailySummaryHour:         dailySummaryHour,
+		DailySummaryMinMessages:  envIntOr("DAILY_SUMMARY_MIN_MESSAGES", 10),
 		ReplyThreads:             replyThreads,
 		ReplyThreadContextDepth:  envIntOr("REPLY_THREAD_CONTEXT_DEPTH", 3),
 		URLMaxChars:              envIntOr("URL_MAX_CHARS", 64000),

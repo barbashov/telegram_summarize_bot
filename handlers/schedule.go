@@ -211,8 +211,16 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to get messages")
 		return
 	}
-	if len(messages) == 0 {
-		logger.Info().Int64("group_id", groupID).Msg("scheduled summary: no messages, skipping")
+	// Below the threshold a digest would be longer than the chat itself, so
+	// the scheduled run skips the day (and stamps it, so the digest doesn't
+	// fire later once a few more messages trickle in). A manual
+	// "schedule now" is an explicit request and ignores the threshold.
+	if len(messages) == 0 || (!manual && len(messages) < b.cfg.DailySummaryMinMessages) {
+		logger.Info().Int64("group_id", groupID).Int("count", len(messages)).
+			Int("min", b.cfg.DailySummaryMinMessages).Msg("scheduled summary: too few messages, skipping")
+		if !manual {
+			b.stampDailySummary(ctx, groupID, now)
+		}
 		return
 	}
 
@@ -245,6 +253,12 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if manual {
 		return
 	}
+	b.stampDailySummary(ctx, groupID, now)
+}
+
+// stampDailySummary records that the daily digest for this group is done for
+// the day of now, so scheduleDue stops firing until tomorrow.
+func (b *Bot) stampDailySummary(ctx context.Context, groupID int64, now time.Time) {
 	if err := b.db.UpdateLastDailySummary(ctx, groupID, now); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to update last daily summary")
 	}
