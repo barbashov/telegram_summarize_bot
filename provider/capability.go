@@ -13,6 +13,7 @@ var visionModelPrefixes = []string{
 	"gpt-4-vision",
 	"gpt-4-turbo",
 	"gpt-5",
+	"gpt-6",
 	"o1",
 	"o3",
 	"o4",
