@@ -18,6 +18,8 @@ const codexStreamWithKeepalives = "event: response.created\n" +
 	"data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n" +
 	": keepalive\n\n" +
 	"event: ping\n\n" +
+	"data: \n\n" +
+	"event: ping\ndata: ping\n\n" +
 	"\n" +
 	"event: response.output_text.delta\n" +
 	"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n" +
@@ -51,7 +53,7 @@ func newStreamingTestClient(t *testing.T, contentType, body string) *responsesCl
 }
 
 func TestStreamingToleratesKeepaliveBlocks(t *testing.T) {
-	for _, contentType := range []string{"text/event-stream", "text/event-stream; charset=utf-8"} {
+	for _, contentType := range []string{"text/event-stream", "text/event-stream; charset=utf-8", "Text/Event-Stream;charset=UTF-8"} {
 		t.Run(contentType, func(t *testing.T) {
 			rc := newStreamingTestClient(t, contentType, codexStreamWithKeepalives)
 			resp, err := rc.Complete(context.Background(), CompletionRequest{

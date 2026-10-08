@@ -3,6 +3,7 @@ package provider
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"io"
 
 	"github.com/openai/openai-go/packages/ssestream"
@@ -50,15 +51,24 @@ func (d *tolerantSSEDecoder) Next() bool {
 		// (comments, "event: ping", stray blank lines) are keepalives: drop
 		// them instead of handing empty JSON to the SDK.
 		if len(line) == 0 {
-			if len(data) == 0 {
+			switch {
+			case len(bytes.TrimSpace(data)) == 0:
+				// ": keepalive", "event: ping", "data: " — nothing to parse.
 				if event != "" {
 					logger.Debug().Str("event_type", event).Msg("skipping SSE block without data")
 				}
-				event = ""
-				continue
+			case !json.Valid(data):
+				// Keep the raw bytes in the log: the SDK would otherwise
+				// report a bare "unexpected end of JSON input" and drop the
+				// whole stream.
+				logger.Warn().Str("event_type", event).Str("raw", truncateBytes(data, 1024)).
+					Msg("skipping SSE block with non-JSON data")
+			default:
+				d.evt = ssestream.Event{Type: event, Data: data}
+				return true
 			}
-			d.evt = ssestream.Event{Type: event, Data: data}
-			return true
+			event, data = "", nil
+			continue
 		}
 
 		name, value, _ := bytes.Cut(line, []byte(":"))
@@ -87,3 +97,10 @@ func (d *tolerantSSEDecoder) Event() ssestream.Event { return d.evt }
 func (d *tolerantSSEDecoder) Close() error { return d.rc.Close() }
 
 func (d *tolerantSSEDecoder) Err() error { return d.err }
+
+func truncateBytes(b []byte, n int) string {
+	if len(b) <= n {
+		return string(b)
+	}
+	return string(b[:n]) + "…"
+}

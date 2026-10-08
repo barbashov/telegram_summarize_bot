@@ -24,6 +24,16 @@ func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		logger.Debug().Str("url", req.URL.String()).Str("body", string(body)).Msg("LLM request")
 	}
 	resp, err := d.inner.RoundTrip(req)
+	if resp != nil {
+		ct := resp.Header.Get("Content-Type")
+		logger.Debug().Int("status", resp.StatusCode).Str("content_type", ct).Str("url", req.URL.String()).Msg("LLM response headers")
+		// openai-go picks a registered SSE decoder by exact Content-Type
+		// match; collapse parameters/casing so the tolerant decoder in
+		// ssedecoder.go always handles event streams.
+		if strings.HasPrefix(strings.ToLower(ct), "text/event-stream") {
+			resp.Header.Set("Content-Type", "text/event-stream")
+		}
+	}
 	if resp != nil && resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
