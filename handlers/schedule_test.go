@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -388,5 +389,102 @@ func TestRunScheduledSummaryBelowThresholdIsSilent(t *testing.T) {
 	}
 	if len(tg.editTexts) != 0 {
 		t.Fatalf("no messages must be edited, got: %v", tg.editTexts)
+	}
+}
+
+func TestRunDueSchedulesBacksOffAfterFailure(t *testing.T) {
+	sum := &fakeSummarizer{err: errors.New("llm down")}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	now := time.Date(2026, 10, 8, 7, 0, 3, 0, time.UTC)
+	if err := database.AddAllowedGroup(ctx, 42, 7); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+	if err := database.SetGroupSchedule(ctx, &db.GroupSchedule{GroupID: 42, Enabled: true, Hour: 7, Minute: 0}); err != nil {
+		t.Fatalf("SetGroupSchedule error: %v", err)
+	}
+	if err := database.AddMessage(ctx, &db.Message{GroupID: 42, UserHash: "abc123", Text: "привет", Timestamp: now.Add(-time.Hour)}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	tick := func(at time.Time) {
+		t.Helper()
+		b.runDueSchedules(ctx, at)
+		b.inflight.Wait()
+	}
+
+	// Attempt 1 fails; the next minute ticks must not retry.
+	tick(now)
+	tick(now.Add(time.Minute))
+	tick(now.Add(10 * time.Minute))
+	if sum.calls != 1 {
+		t.Fatalf("summarizer called %d times within the backoff window, want 1", sum.calls)
+	}
+
+	// Attempt 2 after the backoff, attempt 3 after another one.
+	tick(now.Add(scheduledRetryDelay))
+	tick(now.Add(2 * scheduledRetryDelay))
+	if sum.calls != 3 {
+		t.Fatalf("summarizer called %d times, want 3", sum.calls)
+	}
+
+	// After scheduledMaxAttempts the day is stamped: no more runs today.
+	s, err := database.GetGroupSchedule(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetGroupSchedule error: %v", err)
+	}
+	if s.LastDailySummary == nil {
+		t.Fatal("LastDailySummary not stamped after giving up")
+	}
+	tick(now.Add(3 * scheduledRetryDelay))
+	tick(now.Add(12 * time.Hour))
+	if sum.calls != 3 {
+		t.Fatalf("summarizer called %d times after giving up, want 3", sum.calls)
+	}
+}
+
+func TestRunDueSchedulesSuccessResetsFailureBackoff(t *testing.T) {
+	sum := &fakeSummarizer{err: errors.New("llm down")}
+	b, database, _ := newTestBot(t, sum)
+	defer func() { _ = database.Close() }()
+
+	ctx := context.Background()
+	now := time.Date(2026, 10, 8, 7, 0, 3, 0, time.UTC)
+	if err := database.AddAllowedGroup(ctx, 42, 7); err != nil {
+		t.Fatalf("AddAllowedGroup error: %v", err)
+	}
+	if err := database.SetGroupSchedule(ctx, &db.GroupSchedule{GroupID: 42, Enabled: true, Hour: 7, Minute: 0}); err != nil {
+		t.Fatalf("SetGroupSchedule error: %v", err)
+	}
+	if err := database.AddMessage(ctx, &db.Message{GroupID: 42, UserHash: "abc123", Text: "привет", Timestamp: now.Add(-time.Hour)}); err != nil {
+		t.Fatalf("AddMessage error: %v", err)
+	}
+
+	b.runDueSchedules(ctx, now)
+	b.inflight.Wait()
+
+	// The LLM recovers before the retry: the retry succeeds, stamps the day,
+	// and the failure state is dropped.
+	sum.err = nil
+	sum.summary = &summarizer.StructuredSummary{Topics: []summarizer.TopicSummary{{Title: "t", Summary: "s"}}}
+	b.runDueSchedules(ctx, now.Add(scheduledRetryDelay))
+	b.inflight.Wait()
+	if sum.calls != 2 {
+		t.Fatalf("summarizer called %d times, want 2", sum.calls)
+	}
+	b.schedMu.Lock()
+	_, stillFailing := b.schedFailures[42]
+	b.schedMu.Unlock()
+	if stillFailing {
+		t.Fatal("failure state kept after a successful digest")
+	}
+	s, err := database.GetGroupSchedule(ctx, 42)
+	if err != nil {
+		t.Fatalf("GetGroupSchedule error: %v", err)
+	}
+	if s.LastDailySummary == nil {
+		t.Fatal("LastDailySummary not stamped after success")
 	}
 }

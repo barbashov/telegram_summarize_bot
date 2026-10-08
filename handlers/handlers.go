@@ -77,6 +77,9 @@ type Bot struct {
 	// next tick and the digest would be posted twice.
 	schedMu      sync.Mutex
 	schedRunning map[int64]struct{}
+	// schedFailures tracks failed daily-digest attempts per group so a broken
+	// LLM or a muted bot is retried on a backoff, not on every tick.
+	schedFailures map[int64]scheduledFailure
 }
 
 func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics, llm provider.LLMClient) (*Bot, error) {

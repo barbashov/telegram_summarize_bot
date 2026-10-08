@@ -144,6 +144,9 @@ func (b *Bot) runDueSchedules(ctx context.Context, now time.Time) {
 			continue
 		}
 		groupID := s.GroupID
+		if !b.scheduledRetryDue(groupID, now) {
+			continue
+		}
 		if !b.tryClaimScheduledRun(groupID) {
 			logger.Info().Int64("group_id", groupID).Msg("scheduled summary still in flight, skipping tick")
 			continue
@@ -165,6 +168,67 @@ func (b *Bot) runDueSchedules(ctx context.Context, now time.Time) {
 			b.runScheduledSummary(ctx, groupID, now, false)
 		}()
 	}
+}
+
+// A failed daily digest (LLM outage, bot muted in the group) is retried every
+// scheduledRetryDelay, at most scheduledMaxAttempts times per day; then the
+// day is stamped so the group is not spammed with status/error messages
+// every scheduler tick until midnight.
+const (
+	scheduledRetryDelay  = 30 * time.Minute
+	scheduledMaxAttempts = 3
+)
+
+// scheduledFailure is the per-group retry state of a failing daily digest.
+type scheduledFailure struct {
+	attempts int
+	lastAt   time.Time
+}
+
+// scheduledRetryDue reports whether a due schedule may fire at now given the
+// group's recent failures.
+func (b *Bot) scheduledRetryDue(groupID int64, now time.Time) bool {
+	b.schedMu.Lock()
+	defer b.schedMu.Unlock()
+	f, ok := b.schedFailures[groupID]
+	if !ok {
+		return true
+	}
+	return !now.Before(f.lastAt.Add(scheduledRetryDelay))
+}
+
+// recordScheduledFailure counts a failed attempt; after scheduledMaxAttempts
+// the day is stamped and the digest is given up until tomorrow.
+func (b *Bot) recordScheduledFailure(ctx context.Context, groupID int64, now time.Time) {
+	b.schedMu.Lock()
+	if b.schedFailures == nil {
+		b.schedFailures = make(map[int64]scheduledFailure)
+	}
+	f := b.schedFailures[groupID]
+	f.attempts++
+	f.lastAt = now
+	giveUp := f.attempts >= scheduledMaxAttempts
+	if giveUp {
+		delete(b.schedFailures, groupID)
+	} else {
+		b.schedFailures[groupID] = f
+	}
+	b.schedMu.Unlock()
+
+	if giveUp {
+		logger.Error().Int64("group_id", groupID).Int("attempts", f.attempts).
+			Msg("scheduled summary: giving up for today")
+		b.stampDailySummary(ctx, groupID, now)
+		return
+	}
+	logger.Warn().Int64("group_id", groupID).Int("attempts", f.attempts).
+		Dur("retry_in", scheduledRetryDelay).Msg("scheduled summary: will retry")
+}
+
+func (b *Bot) clearScheduledFailure(groupID int64) {
+	b.schedMu.Lock()
+	delete(b.schedFailures, groupID)
+	b.schedMu.Unlock()
 }
 
 // tryClaimScheduledRun claims the in-flight slot for a group's scheduled
@@ -233,6 +297,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to summarize")
 		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
+		if !manual {
+			b.recordScheduledFailure(ctx, groupID, now)
+		}
 		return
 	}
 
@@ -244,6 +311,9 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	}
 	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, chunks[0]); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("scheduled summary: failed to send to Telegram")
+		if !manual {
+			b.recordScheduledFailure(ctx, groupID, now)
+		}
 		return
 	}
 	for _, chunk := range chunks[1:] {
@@ -253,6 +323,7 @@ func (b *Bot) runScheduledSummary(ctx context.Context, groupID int64, now time.T
 	if manual {
 		return
 	}
+	b.clearScheduledFailure(groupID)
 	b.stampDailySummary(ctx, groupID, now)
 }
 

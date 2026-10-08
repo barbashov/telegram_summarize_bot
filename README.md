@@ -8,7 +8,7 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Summarizes messages from a configurable time window (default: last 24 hours)
 - Optional per-request override: `@bot summarize 12`
 - **Multiple LLM backends**: OpenAI-compatible Completions API (OpenRouter, LiteLLM, etc.), OpenAI Responses API, or OpenAI Codex subscription via OAuth
-- **Daily scheduled summaries** — bot automatically posts a morning digest (skipped on quiet days, see `DAILY_SUMMARY_MIN_MESSAGES`); configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`
+- **Daily scheduled summaries** — bot automatically posts a morning digest (skipped on quiet days, see `DAILY_SUMMARY_MIN_MESSAGES`); configurable per group (`@bot schedule HH:MM`); admins can also trigger an immediate unscheduled summary with `@bot schedule now`. A failed digest (LLM outage, bot can't post) is retried every 30 minutes, at most 3 attempts per day
 - Per-group additional summary instructions, managed from admin private DMs with `/instructions`
 - Group allowlist (bot ignores non-configured groups)
 - Rate limiting (1 request per minute per group)
@@ -211,7 +211,7 @@ Commands are triggered by mentioning the bot in a group message:
 | `@bot schedule` | Show current daily summary schedule |
 | `@bot schedule on` | Enable daily summary at the default time (admins only) |
 | `@bot schedule off` | Disable daily summary (admins only) |
-| `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only). If the bot was down (or a tick was missed) at that moment, the digest is caught up later the same day. |
+| `@bot schedule HH:MM` | Enable daily summary at the given UTC time, e.g. `08:00` (admins only). If the bot was down (or a tick was missed) at that moment, the digest is caught up later the same day. If the run fails (LLM error, bot has no rights to post), it is retried every 30 minutes, up to 3 attempts; after that the day is skipped. |
 | `@bot schedule now` | Trigger an unscheduled summary immediately (admins only). Does not affect the daily digest — the scheduled run still fires at its usual time. |
 | `@bot help` | Show available commands |
 
