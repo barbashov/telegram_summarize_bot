@@ -72,11 +72,11 @@ Uses an OpenAI Codex subscription with OAuth authentication. No API key needed �
 LLM_MODE=oauth
 MODEL=gpt-5.6-sol
 # Optional: override Codex client version header if a model requires newer client.
-# OAUTH_CODEX_VERSION=0.144.0
+# OAUTH_CODEX_VERSION=0.161.0
 ```
 
 The `openai auth` command uses the OpenAI Codex device authorization flow: it prints a verification URL (`https://auth.openai.com/codex/device`) and a one-time code, then waits while you open that URL on any device (phone, laptop) and enter the code. Because it needs no local browser and no inbound callback port, it works on headless/remote hosts over SSH. Once you sign in, the command saves tokens locally and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
-If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.144.0`). The ChatGPT backend gates models by this client version — e.g. the `gpt-5.6-*` family requires at least `0.144.0`.
+If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.161.0`). The ChatGPT backend gates models by this client version — e.g. the `gpt-5.6-*` family requires at least `0.144.0`, the `gpt-6*` family at least `0.161.0`.
 
 ## Running
 
@@ -228,7 +228,7 @@ All configuration is via environment variables (`.env` file):
 | `MODEL` | `meta-llama/llama-3.3-70b-instruct` | LLM model |
 | `OAUTH_TOKEN_DIR` | `./data` | Directory for OAuth token storage |
 | `OAUTH_CLIENT_ID` | *(Codex CLI default)* | OAuth client ID (override for custom OAuth apps) |
-| `OAUTH_CODEX_VERSION` | `0.144.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
+| `OAUTH_CODEX_VERSION` | `0.161.0` | Codex client version header for `LLM_MODE=oauth`; increase if newer models require a newer Codex client |
 | `ALLOWED_GROUPS` | *(optional)* | Comma-separated group IDs used to seed the `allowed_groups` DB table on first run. Ignored on subsequent starts. Malformed entries are dropped with a warning; if the value is set but contains no valid IDs, startup fails. |
 | `ADMIN_USER_IDS` | *(optional)* | Comma-separated Telegram user IDs for admin users (alerts, `/groups`, `/instructions`). Falls back to `ALERT_USER_IDS` for backward compatibility. Same validation as `ALLOWED_GROUPS`. |
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |

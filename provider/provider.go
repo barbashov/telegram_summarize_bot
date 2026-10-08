@@ -2,7 +2,6 @@ package provider
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,26 +18,14 @@ import (
 type debugTransport struct{ inner http.RoundTripper }
 
 func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	streaming := false
 	if req.Body != nil {
 		body, _ := io.ReadAll(req.Body)
 		req.Body = io.NopCloser(strings.NewReader(string(body)))
-		streaming = isStreamingRequestBody(body)
 		logger.Debug().Str("url", req.URL.String()).Str("body", string(body)).Msg("LLM request")
 	}
 	resp, err := d.inner.RoundTrip(req)
 	if resp != nil {
-		ct := resp.Header.Get("Content-Type")
-		logger.Debug().Int("status", resp.StatusCode).Str("content_type", ct).Str("url", req.URL.String()).Msg("LLM response headers")
-		// openai-go picks a registered SSE decoder by exact Content-Type
-		// match and falls back to its own (keepalive-intolerant) decoder
-		// otherwise. The Codex backend sends event streams with no
-		// Content-Type at all, so pin the header on successful streaming
-		// responses to make the tolerant decoder in ssedecoder.go the one
-		// that runs.
-		if streaming && resp.StatusCode < 400 {
-			resp.Header.Set("Content-Type", "text/event-stream")
-		}
+		logger.Debug().Int("status", resp.StatusCode).Str("content_type", resp.Header.Get("Content-Type")).Str("url", req.URL.String()).Msg("LLM response headers")
 	}
 	if resp != nil && resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
@@ -46,15 +33,6 @@ func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 		logger.Debug().Int("status", resp.StatusCode).Str("body", string(respBody)).Str("url", req.URL.String()).Msg("LLM error response")
 	}
 	return resp, err
-}
-
-// isStreamingRequestBody reports whether a JSON request body asks for an SSE
-// response ("stream": true).
-func isStreamingRequestBody(body []byte) bool {
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	return json.Unmarshal(body, &probe) == nil && probe.Stream
 }
 
 // HTTPClient creates an HTTP client with proxy support and the given timeout.

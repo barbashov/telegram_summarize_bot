@@ -9,7 +9,7 @@ import (
 	"sync"
 	"testing"
 
-	oaierr "github.com/openai/openai-go"
+	oaierr "github.com/openai/openai-go/v3"
 )
 
 func TestResponsesClientComplete(t *testing.T) {

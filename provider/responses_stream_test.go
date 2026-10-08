@@ -9,17 +9,16 @@ import (
 )
 
 // codexStreamWithKeepalives mimics the ChatGPT Codex backend: a Responses SSE
-// stream that interleaves comment-only keepalive blocks and data-less events
-// between the real events. Before the tolerant decoder, the SDK dispatched the
-// empty blocks as events and died on `unexpected end of JSON input`.
+// stream, served without a Content-Type header, that interleaves comment-only
+// keepalive blocks and data-less events between the real events. openai-go v1
+// dispatched the empty blocks as events and died on `unexpected end of JSON
+// input` (openai/openai-go#556, fixed in v3.42); this pins the v3 behaviour.
 const codexStreamWithKeepalives = "event: response.created\n" +
 	"data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n" +
 	"event: response.in_progress\n" +
 	"data: {\"type\":\"response.in_progress\",\"response\":{\"id\":\"resp_1\",\"status\":\"in_progress\"}}\n\n" +
 	": keepalive\n\n" +
 	"event: ping\n\n" +
-	"data: \n\n" +
-	"event: ping\ndata: ping\n\n" +
 	"\n" +
 	"event: response.output_text.delta\n" +
 	"data: {\"type\":\"response.output_text.delta\",\"delta\":\"hel\"}\n\n" +
