@@ -34,7 +34,13 @@ const codexStreamWithKeepalives = "event: response.created\n" +
 func newStreamingTestClient(t *testing.T, contentType, body string) *responsesClient {
 	t.Helper()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", contentType)
+		if contentType == "" {
+			// Like the Codex backend: no Content-Type at all (and stop
+			// net/http from sniffing one).
+			w.Header()["Content-Type"] = nil
+		} else {
+			w.Header().Set("Content-Type", contentType)
+		}
 		_, _ = w.Write([]byte(body))
 	}))
 	t.Cleanup(server.Close)
@@ -53,8 +59,8 @@ func newStreamingTestClient(t *testing.T, contentType, body string) *responsesCl
 }
 
 func TestStreamingToleratesKeepaliveBlocks(t *testing.T) {
-	for _, contentType := range []string{"text/event-stream", "text/event-stream; charset=utf-8", "Text/Event-Stream;charset=UTF-8"} {
-		t.Run(contentType, func(t *testing.T) {
+	for _, contentType := range []string{"", "text/event-stream", "text/event-stream; charset=utf-8", "Text/Event-Stream;charset=UTF-8"} {
+		t.Run("content-type="+contentType, func(t *testing.T) {
 			rc := newStreamingTestClient(t, contentType, codexStreamWithKeepalives)
 			resp, err := rc.Complete(context.Background(), CompletionRequest{
 				Model:    "gpt-5-codex",
