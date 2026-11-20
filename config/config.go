@@ -85,7 +85,7 @@ func Load() (*Config, error) {
 
 	// LLM_TOKEN with fallback to deprecated OPENROUTER_API_KEY
 	llmToken := os.Getenv("LLM_TOKEN")
-	if llmToken == "" {
+	if llmMode == LLMModeCompletions && llmToken == "" {
 		if legacy := os.Getenv("OPENROUTER_API_KEY"); legacy != "" {
 			logger.Warn().Msg("DEPRECATED: OPENROUTER_API_KEY is deprecated, use LLM_TOKEN instead")
 			llmToken = legacy
@@ -94,7 +94,7 @@ func Load() (*Config, error) {
 
 	// LLM_ENDPOINT with fallback to deprecated OPENROUTER_URL
 	llmEndpoint := os.Getenv("LLM_ENDPOINT")
-	if llmEndpoint == "" {
+	if llmMode == LLMModeCompletions && llmEndpoint == "" {
 		if legacy := os.Getenv("OPENROUTER_URL"); legacy != "" {
 			logger.Warn().Msg("DEPRECATED: OPENROUTER_URL is deprecated, use LLM_ENDPOINT instead")
 			llmEndpoint = legacy
@@ -181,7 +181,7 @@ func Load() (*Config, error) {
 	}
 
 	replyThreads := true
-	if v := strings.TrimSpace(strings.ToLower(os.Getenv("REPLY_THREADS"))); v == "false" || v == "0" {
+	if v := strings.TrimSpace(strings.ToLower(os.Getenv("REPLY_THREADS"))); v == "false" || v == "0" || v == "no" || v == "off" {
 		replyThreads = false
 	}
 

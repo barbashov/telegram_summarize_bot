@@ -65,6 +65,11 @@ func NewResponsesClient(token, endpoint string, timeout time.Duration, opts ...C
 }
 
 func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
+	token, accountID := c.credentials()
+	return c.complete(ctx, req, token, accountID)
+}
+
+func (c *responsesClient) complete(ctx context.Context, req CompletionRequest, token, accountID string) (CompletionResponse, error) {
 	// Separate system message as instructions, rest as input
 	var instructions string
 	var inputItems []responses.ResponseInputItemUnionParam
@@ -90,6 +95,7 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 
 	params := responses.ResponseNewParams{
 		Model:        req.Model,
+		Store:        openai.Bool(false),
 		Instructions: openai.String(instructions),
 		Input: responses.ResponseNewParamsInputUnion{
 			OfInputItemList: responses.ResponseInputParam(inputItems),
@@ -101,12 +107,9 @@ func (c *responsesClient) Complete(ctx context.Context, req CompletionRequest) (
 		},
 	}
 
-	// Build per-request options: token + optional account ID header for OAuth mode.
-	// Snapshot the mutable credentials once so concurrent setCredentials writes
-	// can't tear a request mid-build.
-	token, accountID := c.credentials()
+	// Use the credentials of this request, including after an OAuth refresh.
 	reqOpts := []option.RequestOption{option.WithAPIKey(token)}
-	if accountID != "" {
+	if c.codexClientVersion != "" || accountID != "" {
 		// ChatGPT backend requires store=false; rejects max_output_tokens and temperature.
 		params.Store = openai.Bool(false)
 		version := c.codexClientVersion
@@ -148,6 +151,15 @@ func (c *responsesClient) completeStreaming(ctx context.Context, params response
 		case "response.completed":
 			completed := event.AsResponseCompleted()
 			finalResp = &completed.Response
+		case "response.failed":
+			failed := event.AsResponseFailed()
+			finalResp = &failed.Response
+		case "response.incomplete":
+			incomplete := event.AsResponseIncomplete()
+			finalResp = &incomplete.Response
+		}
+		if finalResp != nil {
+			break
 		}
 	}
 	if err := stream.Err(); err != nil {
@@ -162,7 +174,7 @@ func (c *responsesClient) completeStreaming(ctx context.Context, params response
 
 	resp, err := buildResponse(finalResp)
 	if err != nil {
-		return CompletionResponse{}, err
+		return resp, err
 	}
 
 	if resp.Content == "" && accumulated.Len() > 0 {
@@ -173,14 +185,6 @@ func (c *responsesClient) completeStreaming(ctx context.Context, params response
 }
 
 func buildResponse(resp *responses.Response) (CompletionResponse, error) {
-	if resp.Status == "failed" {
-		return CompletionResponse{}, &APIError{
-			HTTPStatusCode: 500,
-			Message:        fmt.Sprintf("%s: %s", resp.Error.Code, resp.Error.Message),
-		}
-	}
-
-	logger.Debug().RawJSON("raw_response", []byte(resp.RawJSON())).Msg("API response")
 
 	text := resp.OutputText()
 	finishReason := "stop"
@@ -188,7 +192,7 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 		finishReason = "length"
 	}
 
-	return CompletionResponse{
+	result := CompletionResponse{
 		Content:        text,
 		FinishReason:   finishReason,
 		HTTPStatusCode: 200,
@@ -198,7 +202,14 @@ func buildResponse(resp *responses.Response) (CompletionResponse, error) {
 			CompletionTokens:  int(resp.Usage.OutputTokens),
 			TotalTokens:       int(resp.Usage.TotalTokens),
 		},
-	}, nil
+	}
+	if resp.Status == "failed" {
+		return result, &APIError{HTTPStatusCode: 500, Message: fmt.Sprintf("response failed (%s)", resp.Error.Code)}
+	}
+	if resp.Status == "incomplete" && resp.IncompleteDetails.Reason != "" && resp.IncompleteDetails.Reason != "max_output_tokens" {
+		return result, &APIError{HTTPStatusCode: 422, Message: fmt.Sprintf("response incomplete (%s)", resp.IncompleteDetails.Reason)}
+	}
+	return result, nil
 }
 
 // buildEasyInputContent returns a text-only string content when no images are
@@ -229,13 +240,10 @@ func buildEasyInputContent(m Message) responses.EasyInputMessageContentUnionPara
 func wrapResponsesError(err error) error {
 	var apiErr *openai.Error
 	if errors.As(err, &apiErr) {
-		msg := apiErr.Message
-		if msg == "" {
-			msg = apiErr.Error()
-		}
+
 		return &APIError{
 			HTTPStatusCode: apiErr.StatusCode,
-			Message:        msg,
+			Message:        "Responses API request rejected",
 		}
 	}
 	return err

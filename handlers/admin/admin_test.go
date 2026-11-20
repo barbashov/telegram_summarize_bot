@@ -502,14 +502,15 @@ func TestHandle_InstructionsPendingSaveAndClear(t *testing.T) {
 			Chat: chat,
 		},
 	})
-	if len(deps.sentTexts) != 1 || !strings.Contains(deps.sentTexts[0], "Отправьте новые") {
+	if len(deps.sentTexts) != 1 || !strings.Contains(deps.sentTexts[0], "Ответьте на это сообщение") {
 		t.Fatalf("expected edit prompt, got: %v", deps.sentTexts)
 	}
 
 	a.Handle(ctx, telego.Update{Message: &telego.Message{
-		Text: "выделяй решения",
-		Chat: chat,
-		From: user,
+		Text:           "выделяй решения",
+		ReplyToMessage: &telego.Message{MessageID: int(deps.nextID)},
+		Chat:           chat,
+		From:           user,
 	}})
 	got, err := database.GetGroupSummaryInstructions(ctx, -100123)
 	if err != nil {
@@ -544,7 +545,7 @@ func TestHandle_InstructionsCancelAndSlashCommandDoesNotSave(t *testing.T) {
 	chat := telego.Chat{ID: 999, Type: "private"}
 	user := &telego.User{ID: 999}
 
-	a.setPendingInstructions(999, -100123)
+	a.setPendingInstructions(999, -100123, 1)
 	a.Handle(ctx, telego.Update{Message: &telego.Message{
 		Text: "/help",
 		Chat: chat,

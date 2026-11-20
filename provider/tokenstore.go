@@ -105,10 +105,13 @@ type OAuthTokens struct {
 
 // TokenStore manages OAuth token persistence and refresh.
 type TokenStore struct {
-	dir      string
-	clientID string
-	mu       sync.Mutex
-	tokens   *OAuthTokens
+	dir              string
+	clientID         string
+	codexVersion     string
+	mu               sync.Mutex
+	tokens           *OAuthTokens
+	contextWindows   map[string]int
+	contextWindowsAt time.Time
 }
 
 // NewTokenStore creates a token store. Call Load() to read existing tokens.
@@ -170,7 +173,7 @@ func (s *TokenStore) persistLocked(tokens *OAuthTokens) error {
 		return fmt.Errorf("create token dir: %w", err)
 	}
 
-	data, err := json.MarshalIndent(tokens, "", "  ")
+	data, err := json.MarshalIndent(tokens, "", "  ") // #nosec G117 -- intentionally persist credentials to a 0600 file
 	if err != nil {
 		return fmt.Errorf("marshal tokens: %w", err)
 	}
@@ -214,7 +217,7 @@ func (s *TokenStore) GetValidToken() (string, error) {
 	}
 
 	logger.Info().Msg("OAuth access token expiring soon, refreshing...")
-	if err := s.refreshLocked(true); err != nil {
+	if err := s.refreshLocked(true, ""); err != nil {
 		// Inside the refresh buffer the current token may still be valid;
 		// prefer serving it over failing the call outright.
 		if time.Now().Before(s.tokens.ExpiresAt) {
@@ -231,7 +234,7 @@ func (s *TokenStore) GetValidToken() (string, error) {
 func (s *TokenStore) ForceRefresh() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.refreshLocked(false)
+	return s.refreshLocked(false, "")
 }
 
 // lockTokenFile takes an exclusive advisory lock serializing token refreshes
@@ -264,18 +267,29 @@ func (s *TokenStore) lockTokenFile() (func(), error) {
 // So: take a cross-process file lock, re-read the file to adopt tokens a
 // sibling process may have rotated, and only then refresh. With skipIfFresh,
 // an adopted still-valid token short-circuits the network refresh entirely.
-func (s *TokenStore) refreshLocked(skipIfFresh bool) error {
+func (s *TokenStore) refreshRejected(rejected string) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens != nil && s.tokens.AccessToken != rejected && time.Now().Before(s.tokens.ExpiresAt) {
+		return s.tokens.AccessToken, nil
+	}
+	if err := s.refreshLocked(true, rejected); err != nil {
+		return "", err
+	}
+	return s.tokens.AccessToken, nil
+}
+
+func (s *TokenStore) refreshLocked(skipIfFresh bool, rejected string) error {
 	unlock, err := s.lockTokenFile()
 	if err != nil {
-		logger.Warn().Err(err).Msg("could not acquire token file lock; refreshing without it")
-	} else {
-		defer unlock()
+		return err
 	}
+	defer unlock()
 
 	if disk, err := s.readTokenFile(); err == nil {
 		if s.tokens == nil || disk.ExpiresAt.After(s.tokens.ExpiresAt) || disk.RefreshToken != s.tokens.RefreshToken {
 			s.tokens = disk
-			if skipIfFresh && time.Now().Add(refreshBuffer).Before(disk.ExpiresAt) {
+			if skipIfFresh && disk.AccessToken != rejected && time.Now().Add(refreshBuffer).Before(disk.ExpiresAt) {
 				logger.Info().Time("expires_at", disk.ExpiresAt).Msg("adopted newer OAuth tokens from disk; skipping refresh")
 				return nil
 			}
@@ -310,7 +324,9 @@ func (s *TokenStore) refreshLocked(skipIfFresh bool) error {
 	// values would lose the account ID needed for the ChatGPT-Account-ID header.
 	if tr.IDToken != "" {
 		newTokens.IDToken = tr.IDToken
-		newTokens.AccountID = ExtractAccountID(tr.IDToken)
+		if accountID := ExtractAccountID(tr.IDToken); accountID != "" {
+			newTokens.AccountID = accountID
+		}
 	}
 	// Store rotated refresh token if provided
 	if tr.RefreshToken != "" {
@@ -341,14 +357,14 @@ func PostTokenRequest(data url.Values) (*TokenResponse, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
 		return nil, fmt.Errorf("read response: %w", err)
 	}
 
 	var tr TokenResponse
 	if err := json.Unmarshal(body, &tr); err != nil {
-		return nil, fmt.Errorf("parse response: %w (body: %s)", err, string(body))
+		return nil, fmt.Errorf("parse token response: %w", err)
 	}
 	if tr.Error.Code != "" || tr.Error.Message != "" {
 		code := firstNonEmpty(tr.Error.Code, "token endpoint error")

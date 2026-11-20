@@ -187,13 +187,10 @@ func TestTokenStoreRefreshKeepsTokensWhenPersistFails(t *testing.T) {
 		RefreshToken: "old-refresh",
 		ExpiresAt:    time.Now().Add(-time.Hour),
 	}
-	// Make the store dir unwritable by pointing it at a path whose parent is a
-	// file, so MkdirAll/temp-file creation fails.
-	blocker := filepath.Join(dir, "blocker")
-	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
-		t.Fatalf("write blocker: %v", err)
+	// Block atomic rename without preventing the cross-process lock.
+	if err := os.Mkdir(store.filePath(), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	store.dir = filepath.Join(blocker, "sub")
 
 	tokenServer(t, `{"access_token":"new-access","refresh_token":"rotated","expires_in":3600}`)
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"time"
 
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
@@ -80,11 +81,13 @@ func (a *Admin) handleInstructionsCallback(ctx context.Context, cq *telego.Callb
 		if !a.ensureInstructionsGroupAllowed(ctx, chatID, groupID) {
 			return
 		}
-		a.setPendingInstructions(chatID, groupID)
-		a.deps.SendMessage(ctx, chatID, fmt.Sprintf(
-			"Отправьте новые дополнительные инструкции для группы %d одним сообщением. Максимум %d символов. Для отмены: /cancel",
+		promptID := a.deps.SendMessage(ctx, chatID, fmt.Sprintf(
+			"Ответьте на это сообщение новыми инструкциями для группы %d в течение 10 минут. Максимум %d символов. Для отмены: /cancel",
 			groupID, db.MaxGroupSummaryInstructionsLength,
 		))
+		if promptID != 0 {
+			a.setPendingInstructions(chatID, groupID, promptID)
+		}
 	case strings.HasPrefix(data, "clear:"):
 		groupID, ok := parseInstructionGroupID(strings.TrimPrefix(data, "clear:"))
 		if !ok {
@@ -145,7 +148,7 @@ func (a *Admin) showInstructionsGroup(ctx context.Context, chatID, groupID int64
 }
 
 func (a *Admin) handlePendingSummaryInstructions(ctx context.Context, msg *telego.Message, cmd string) bool {
-	groupID, ok := a.pendingInstructionsGroup(msg.Chat.ID)
+	pending, ok := a.pendingInstructionsGroup(msg.Chat.ID)
 	if !ok {
 		return false
 	}
@@ -155,13 +158,18 @@ func (a *Admin) handlePendingSummaryInstructions(ctx context.Context, msg *teleg
 		a.deps.SendMessage(ctx, msg.Chat.ID, "Настройка инструкций отменена.")
 		return true
 	}
-	if strings.HasPrefix(cmd, "/") {
+	if strings.HasPrefix(cmd, "/") || msg.ReplyToMessage == nil || int64(msg.ReplyToMessage.MessageID) != pending.promptID {
 		return false
 	}
 
+	groupID := pending.groupID
+	if !a.ensureInstructionsGroupAllowed(ctx, msg.Chat.ID, groupID) {
+		a.clearPendingInstructions(msg.Chat.ID)
+		return true
+	}
 	if err := a.db.SetGroupSummaryInstructions(ctx, groupID, msg.From.ID, msg.Text); err != nil {
 		logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to save group summary instructions")
-		a.deps.SendMessage(ctx, msg.Chat.ID, "Ошибка сохранения инструкций: "+err.Error())
+		a.deps.SendMessage(ctx, msg.Chat.ID, "Ошибка сохранения инструкций. Проверьте длину сообщения.")
 		return true
 	}
 
@@ -184,10 +192,15 @@ func (a *Admin) sendInstructionsKeyboard(ctx context.Context, chatID int64, text
 	}
 }
 
-func (a *Admin) setPendingInstructions(chatID, groupID int64) {
+type pendingInstructions struct {
+	groupID, promptID int64
+	expires           time.Time
+}
+
+func (a *Admin) setPendingInstructions(chatID, groupID, promptID int64) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.pendingSummaryInstructions[chatID] = groupID
+	a.pendingSummaryInstructions[chatID] = pendingInstructions{groupID: groupID, promptID: promptID, expires: time.Now().Add(10 * time.Minute)}
 }
 
 func (a *Admin) clearPendingInstructions(chatID int64) {
@@ -196,11 +209,15 @@ func (a *Admin) clearPendingInstructions(chatID int64) {
 	delete(a.pendingSummaryInstructions, chatID)
 }
 
-func (a *Admin) pendingInstructionsGroup(chatID int64) (int64, bool) {
+func (a *Admin) pendingInstructionsGroup(chatID int64) (pendingInstructions, bool) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	groupID, ok := a.pendingSummaryInstructions[chatID]
-	return groupID, ok
+	pending, ok := a.pendingSummaryInstructions[chatID]
+	if ok && !time.Now().Before(pending.expires) {
+		delete(a.pendingSummaryInstructions, chatID)
+		return pendingInstructions{}, false
+	}
+	return pending, ok
 }
 
 func parseInstructionGroupID(raw string) (int64, bool) {

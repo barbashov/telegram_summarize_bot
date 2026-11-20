@@ -132,7 +132,9 @@ func TestRunScheduledSummarySkipsRevokedGroup(t *testing.T) {
 
 	ctx := context.Background()
 	now := time.Now()
-	// Group 42 is NOT in allowed_groups.
+	if err := database.RemoveAllowedGroup(ctx, 42); err != nil {
+		t.Fatal(err)
+	}
 	if err := database.AddMessage(ctx, &db.Message{
 		GroupID:   42,
 		UserHash:  "abc123",
@@ -329,12 +331,8 @@ func TestRunScheduledSummaryMinMessagesThreshold(t *testing.T) {
 	if sum.calls != 0 {
 		t.Fatal("scheduled run must skip below the threshold")
 	}
-	s, err := database.GetGroupSchedule(ctx, 42)
-	if err != nil {
-		t.Fatalf("GetGroupSchedule error: %v", err)
-	}
-	if s.LastDailySummary == nil {
-		t.Fatal("skipped day must be stamped so the digest doesn't fire later that day")
+	if due, err := database.DailyRetryDue(ctx, 42, now, scheduledRetryDelay, scheduledMaxAttempts); err != nil || due {
+		t.Fatalf("quiet day must be terminal, due=%t err=%v", due, err)
 	}
 
 	b.runScheduledSummary(ctx, 42, now, true)
@@ -346,7 +344,13 @@ func TestRunScheduledSummaryMinMessagesThreshold(t *testing.T) {
 	if err := database.AddMessage(ctx, &db.Message{GroupID: 42, UserHash: "abc123", Text: "ещё", Timestamp: now.Add(-time.Minute)}); err != nil {
 		t.Fatalf("AddMessage error: %v", err)
 	}
-	b.runScheduledSummary(ctx, 42, now, false)
+	next := now.Add(24 * time.Hour)
+	for range 3 {
+		if err := database.AddMessage(ctx, &db.Message{GroupID: 42, Text: "новые сообщения", Timestamp: next.Add(-time.Minute)}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	b.runScheduledSummary(ctx, 42, next, false)
 	if sum.calls != 2 {
 		t.Fatalf("scheduled run must fire at the threshold, calls = %d", sum.calls)
 	}
@@ -430,14 +434,10 @@ func TestRunDueSchedulesBacksOffAfterFailure(t *testing.T) {
 		t.Fatalf("summarizer called %d times, want 3", sum.calls)
 	}
 
-	// After scheduledMaxAttempts the day is stamped: no more runs today.
-	s, err := database.GetGroupSchedule(ctx, 42)
-	if err != nil {
-		t.Fatalf("GetGroupSchedule error: %v", err)
+	if due, err := database.DailyRetryDue(ctx, 42, now.Add(3*scheduledRetryDelay), scheduledRetryDelay, scheduledMaxAttempts); err != nil || due {
+		t.Fatalf("after three failures due=%t err=%v", due, err)
 	}
-	if s.LastDailySummary == nil {
-		t.Fatal("LastDailySummary not stamped after giving up")
-	}
+
 	tick(now.Add(3 * scheduledRetryDelay))
 	tick(now.Add(12 * time.Hour))
 	if sum.calls != 3 {
@@ -474,12 +474,7 @@ func TestRunDueSchedulesSuccessResetsFailureBackoff(t *testing.T) {
 	if sum.calls != 2 {
 		t.Fatalf("summarizer called %d times, want 2", sum.calls)
 	}
-	b.schedMu.Lock()
-	_, stillFailing := b.schedFailures[42]
-	b.schedMu.Unlock()
-	if stillFailing {
-		t.Fatal("failure state kept after a successful digest")
-	}
+
 	s, err := database.GetGroupSchedule(ctx, 42)
 	if err != nil {
 		t.Fatalf("GetGroupSchedule error: %v", err)

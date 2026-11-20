@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 	"unicode/utf16"
 	"unicode/utf8"
 
@@ -177,6 +178,7 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID, cmdMsgID int64,
 		// Text-only, or multiple parts → blend into one unified summary.
 		summary, serr := b.summarizer.SummarizeText(ctx, buildReplyMaterial(parts, prose, includeText), instructions)
 		if serr != nil {
+			_ = b.db.InsertBotEvent(ctx, "summary_failed", time.Now(), 0)
 			logger.Error().Err(serr).Msg("reply-summarize: failed to summarize")
 			b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 			return
@@ -192,19 +194,8 @@ func (b *Bot) summarizeSingleReply(ctx context.Context, groupID, cmdMsgID int64,
 	// The LLM result is Markdown; convert it (plus our header) to Telegram
 	// MarkdownV2 so **bold**, lists, links etc. render instead of leaking as
 	// literal markers.
-	chunks := renderMarkdown("📝 **Суммаризация:**\n\n" + result)
-	if len(chunks) == 0 {
-		b.editWithRetry(ctx, groupID, statusMsgID, "Нет данных для суммаризации.")
-		return
-	}
-	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, chunks[0]); err != nil {
-		logger.Error().Err(err).Int64("chat_id", groupID).Msg("reply-summarize: failed to send result")
-		return
-	}
-	for _, chunk := range chunks[1:] {
-		b.sendFormatted(ctx, groupID, chunk)
-	}
-	committed = true
+	committed = b.deliver(ctx, db.Delivery{Key: deliveryKey(ctx, groupID, statusMsgID),
+		ChatID: groupID, StatusID: statusMsgID, Group: true}, "📝 **Суммаризация:**\n\n"+result)
 }
 
 // combineInstructions merges a group's saved summarization instructions with a
@@ -291,6 +282,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 				if imageBudget <= 0 {
 					continue
 				}
+				imageBudget--
 				d, derr := b.summarizer.DescribeImage(ctx, p, steering)
 				if errors.Is(derr, summarizer.ErrVisionDisabled) {
 					break
@@ -300,9 +292,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 					desc = strings.TrimSpace(d)
 				}
 				seenImg[p.FileUniqueID] = desc // cache result (incl. empty) for this request
-				if desc != "" {
-					imageBudget--
-				}
+
 			}
 			if desc != "" {
 				fmt.Fprintf(&sb, "\n  [изображение: %s]", desc)
@@ -313,6 +303,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 			if linkBudget <= 0 {
 				break
 			}
+			linkBudget--
 			content, ferr := b.fetchURL(ctx, link, b.cfg.URLMaxChars)
 			if ferr != nil {
 				continue
@@ -321,7 +312,6 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 			if serr != nil || strings.TrimSpace(summary) == "" {
 				continue
 			}
-			linkBudget--
 			fmt.Fprintf(&sb, "\n  [ссылка %s: %s]", link, strings.TrimSpace(summary))
 		}
 
@@ -337,6 +327,7 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 
 	summary, err := b.summarizer.SummarizeText(ctx, strings.TrimSpace(material.String()), instructions)
 	if err != nil {
+		_ = b.db.InsertBotEvent(ctx, "summary_failed", time.Now(), 0)
 		logger.Error().Err(err).Msg("reply-summarize: failed to summarize thread")
 		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
@@ -347,19 +338,8 @@ func (b *Bot) summarizeReplyThread(ctx context.Context, groupID, cmdMsgID int64,
 		return
 	}
 
-	chunks := renderMarkdown("📝 **Суммаризация ветки:**\n\n" + result)
-	if len(chunks) == 0 {
-		b.editWithRetry(ctx, groupID, statusMsgID, "Нет данных для суммаризации.")
-		return
-	}
-	if err := b.editFormattedFinal(ctx, groupID, statusMsgID, chunks[0]); err != nil {
-		logger.Error().Err(err).Int64("chat_id", groupID).Msg("reply-summarize: failed to send thread result")
-		return
-	}
-	for _, chunk := range chunks[1:] {
-		b.sendFormatted(ctx, groupID, chunk)
-	}
-	committed = true
+	committed = b.deliver(ctx, db.Delivery{Key: deliveryKey(ctx, groupID, statusMsgID),
+		ChatID: groupID, StatusID: statusMsgID, Group: true}, "📝 **Суммаризация ветки:**\n\n"+result)
 }
 
 // aliasOrAnon returns the alias for a user hash, or "anon" when unknown/empty.

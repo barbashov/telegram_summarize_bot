@@ -134,7 +134,7 @@ func (d *CachedDescriber) Describe(ctx context.Context, photo db.PhotoRecord, st
 	cached, err := d.db.GetImageDescription(ctx, cacheKey)
 	if err != nil {
 		logger.Warn().Err(err).Str("cache_key", cacheKey).Msg("image cache lookup failed; proceeding without cache")
-	} else if cached != nil {
+	} else if cached != nil && cached.Model == d.model {
 		if cached.Error == "" {
 			_ = d.db.TouchImageDescription(ctx, cacheKey)
 			return cached.Description, nil

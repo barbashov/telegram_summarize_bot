@@ -1,4 +1,4 @@
-FROM golang:1.26-alpine AS builder
+FROM golang:1.27.4-alpine3.24 AS builder
 
 RUN apk add --no-cache git
 
@@ -11,7 +11,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o telegram_summarize_bot .
 
-FROM alpine:3.21
+FROM alpine:3.24.4
 
 RUN apk add --no-cache ca-certificates tzdata
 
@@ -29,3 +29,6 @@ ENV TZ=UTC
 USER bot
 
 ENTRYPOINT ["./telegram_summarize_bot"]
+
+HEALTHCHECK --interval=30s --timeout=5s --start-period=90s --retries=3 \
+  CMD test -n "$(find /tmp/telegram_summarize_bot.heartbeat -mmin -3 -print 2>/dev/null)"

@@ -10,12 +10,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
 
-	_ "github.com/glebarez/sqlite"
+	_ "modernc.org/sqlite"
 	"telegram_summarize_bot/logger"
 	"telegram_summarize_bot/metrics"
 )
@@ -158,17 +159,14 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 		if err := os.MkdirAll(dir, 0o700); err != nil {
 			return nil, fmt.Errorf("failed to create db directory: %w", err)
 		}
-		// #nosec G302 -- a directory needs the execute bit (0700) to be traversable
-		if err := os.Chmod(dir, 0o700); err != nil {
-			logger.Warn().Err(err).Str("dir", dir).Msg("failed to chmod db directory to 0700")
-		}
 	}
-
-	// glebarez/sqlite ignores the mattn-style _foreign_keys=on param; its
-	// _pragma form is applied on every new connection, so FK enforcement
-	// survives connection recycling (the pool can silently replace a broken
-	// connection, which would lose an Exec-level PRAGMA).
-	conn, err := sql.Open("sqlite", dbPath+"?_pragma=foreign_keys(1)")
+	path, err := filepath.Abs(dbPath)
+	if err != nil {
+		return nil, err
+	}
+	dsn := url.URL{Scheme: "file", Path: path}
+	dsn.RawQuery = url.Values{"_pragma": {"busy_timeout(5000)", "foreign_keys(1)"}}.Encode()
+	conn, err := sql.Open("sqlite", dsn.String())
 	if err != nil {
 		return nil, fmt.Errorf("failed to open db: %w", err)
 	}
@@ -181,27 +179,17 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 	conn.SetMaxOpenConns(1)
 
 	if err := conn.Ping(); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to ping db: %w", err)
 	}
 
-	// Foreign-key enforcement is per-connection in SQLite and the URL-style
-	// query is silently ignored by some drivers. Force it on at the pool
-	// level so ON DELETE CASCADE on message_photos actually fires.
-	if _, err := conn.Exec(`PRAGMA foreign_keys = ON`); err != nil {
-		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
-	}
-
-	// WAL improves write latency and crash safety; busy_timeout is cheap insurance
-	// (with a single connection there is never contention, but it costs nothing).
+	db := &DB{conn: conn, dbPath: dbPath, metrics: m}
 	if _, err := conn.Exec(`PRAGMA journal_mode = WAL`); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to enable WAL: %w", err)
 	}
-	if _, err := conn.Exec(`PRAGMA busy_timeout = 5000`); err != nil {
-		return nil, fmt.Errorf("failed to set busy_timeout: %w", err)
-	}
-
-	db := &DB{conn: conn, dbPath: dbPath, metrics: m}
 	if err := db.migrate(); err != nil {
+		_ = conn.Close()
 		return nil, fmt.Errorf("failed to migrate db: %w", err)
 	}
 
@@ -219,6 +207,10 @@ func New(dbPath string, m *metrics.Metrics) (*DB, error) {
 }
 
 func (db *DB) migrate() error {
+	var existingAllowlist bool
+	if err := db.conn.QueryRow(`SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE name = 'allowed_groups' AND type = 'table')`).Scan(&existingAllowlist); err != nil {
+		return err
+	}
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -247,11 +239,20 @@ func (db *DB) migrate() error {
 			title TEXT NOT NULL DEFAULT '',
 			last_seen DATETIME NOT NULL
 		)`,
-		`CREATE TABLE IF NOT EXISTS allowed_groups (
-			group_id INTEGER PRIMARY KEY,
-			added_at DATETIME NOT NULL,
-			added_by INTEGER
-		)`,
+
+		`CREATE TABLE IF NOT EXISTS update_jobs (
+			update_id INTEGER PRIMARY KEY, payload BLOB, created_at INTEGER NOT NULL)`,
+		`CREATE TABLE IF NOT EXISTS summary_cursors (
+			group_id INTEGER PRIMARY KEY, last_id INTEGER NOT NULL, legacy_max_id INTEGER NOT NULL, legacy_since DATETIME)`,
+		`CREATE TABLE IF NOT EXISTS daily_runs (
+			group_id INTEGER NOT NULL, day TEXT NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+			last_at INTEGER NOT NULL, state TEXT NOT NULL,
+			PRIMARY KEY (group_id, day))`,
+		`CREATE TABLE IF NOT EXISTS summary_deliveries (
+			delivery_key TEXT PRIMARY KEY, chat_id INTEGER NOT NULL, status_id INTEGER NOT NULL,
+			parts BLOB NOT NULL, next_part INTEGER NOT NULL DEFAULT 0, next_at INTEGER NOT NULL DEFAULT 0,
+			attempts INTEGER NOT NULL DEFAULT 0, created_at INTEGER NOT NULL,
+			cursor_id INTEGER NOT NULL DEFAULT 0, checkpoint DATETIME, daily TEXT, is_group INTEGER NOT NULL)`,
 		`DROP TABLE IF EXISTS bot_metrics`,
 		`CREATE TABLE IF NOT EXISTS bot_events (
 			id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -318,12 +319,23 @@ func (db *DB) migrate() error {
 		}
 	}
 
+	if err := db.prepareAllowlist(existingAllowlist); err != nil {
+		return err
+	}
+
+	if _, err := db.conn.Exec(`INSERT OR IGNORE INTO summary_cursors
+		SELECT group_id, 0, COALESCE((SELECT MAX(id) FROM messages), 0), timestamp FROM last_summarize`); err != nil {
+		return err
+	}
+
 	// Additive migrations: add columns that may not exist in older databases.
 	additiveMigrations := []struct{ table, column, colDef string }{
 		{"messages", "forwarded_from", "TEXT"},
 		{"known_groups", "username", "TEXT NOT NULL DEFAULT ''"},
 		{"messages", "tg_message_id", "INTEGER"},
 		{"messages", "reply_to_tg_id", "INTEGER"},
+		{"messages", "edit_date", "INTEGER NOT NULL DEFAULT 0"},
+		{"messages", "edit_update_id", "INTEGER NOT NULL DEFAULT 0"},
 	}
 	for _, m := range additiveMigrations {
 		if err := db.addColumnIfNotExists(m.table, m.column, m.colDef); err != nil {
@@ -447,37 +459,77 @@ func (db *DB) AddMessage(ctx context.Context, msg *Message) error {
 // (0, nil) when the row was a duplicate (dedup index on group_id+tg_message_id).
 func (db *DB) AddMessageReturningID(ctx context.Context, msg *Message) (int64, error) {
 	defer db.metrics.DBAdd.Start()()
-	res, err := db.conn.ExecContext(ctx,
+	id, _, err := addMessage(ctx, db.conn, msg)
+	return id, err
+}
+
+type messageWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func (db *DB) AddMessageWithPhotos(ctx context.Context, msg *Message, photos []PhotoRecord) error {
+	defer db.metrics.DBAdd.Start()()
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	var allowed bool
+	if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM allowed_groups WHERE group_id=?)`, msg.GroupID).Scan(&allowed); err != nil || !allowed {
+		return err
+	}
+	id, inserted, err := addMessage(ctx, tx, msg)
+	if err != nil {
+		return err
+	}
+	if id != 0 {
+		if err := addPhotos(ctx, tx, id, photos); err != nil {
+			return err
+		}
+	}
+	if inserted {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO bot_events (metric,timestamp,duration_ns)
+			VALUES ('message_stored',?,0)`, time.Now().UTC()); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+func addMessage(ctx context.Context, conn messageWriter, msg *Message) (id int64, inserted bool, err error) {
+	res, err := conn.ExecContext(ctx,
 		`INSERT OR IGNORE INTO messages (group_id, user_hash, text, timestamp, forwarded_from, tg_message_id, reply_to_tg_id) VALUES (?, ?, ?, ?, ?, ?, ?)`,
 		msg.GroupID, msg.UserHash, msg.Text, msg.Timestamp.UTC(), msg.ForwardedFrom,
 		nullableInt64(msg.TgMessageID), nullableInt64(msg.ReplyToTgID),
 	)
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	affected, err := res.RowsAffected()
 	if err != nil {
-		return 0, err
+		return 0, false, err
 	}
 	if affected == 0 {
 		// Duplicate by (group_id, tg_message_id). Fetch the existing id so callers
 		// can still attach photos idempotently.
 		if msg.TgMessageID != 0 {
 			var id int64
-			err := db.conn.QueryRowContext(ctx,
+			err := conn.QueryRowContext(ctx,
 				`SELECT id FROM messages WHERE group_id = ? AND tg_message_id = ?`,
 				msg.GroupID, msg.TgMessageID,
 			).Scan(&id)
 			if err == nil {
-				return id, nil
+				return id, false, nil
 			}
 			if err != sql.ErrNoRows {
-				return 0, err
+				return 0, false, err
 			}
 		}
-		return 0, nil
+		return 0, false, nil
 	}
-	return res.LastInsertId()
+	id, err = res.LastInsertId()
+	return id, true, err
 }
 
 // AddMessagePhotos inserts photo metadata linked to a message. Idempotent
@@ -491,6 +543,13 @@ func (db *DB) AddMessagePhotos(ctx context.Context, messageID int64, photos []Ph
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := addPhotos(ctx, tx, messageID, photos); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func addPhotos(ctx context.Context, tx *sql.Tx, messageID int64, photos []PhotoRecord) error {
 	for _, p := range photos {
 		source := p.Source
 		if source == "" {
@@ -506,11 +565,19 @@ func (db *DB) AddMessagePhotos(ctx context.Context, messageID int64, photos []Ph
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 // GetPhotosForMessages returns photos grouped by message_id for the given message IDs.
 func (db *DB) GetPhotosForMessages(ctx context.Context, messageIDs []int64) (map[int64][]PhotoRecord, error) {
+	return photosForMessages(ctx, db.conn, messageIDs)
+}
+
+type rowQueryer interface {
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+
+func photosForMessages(ctx context.Context, conn rowQueryer, messageIDs []int64) (map[int64][]PhotoRecord, error) {
 	if len(messageIDs) == 0 {
 		return nil, nil
 	}
@@ -528,7 +595,7 @@ func (db *DB) GetPhotosForMessages(ctx context.Context, messageIDs []int64) (map
 		 ORDER BY id`,
 		strings.Join(placeholders, ","),
 	)
-	rows, err := db.conn.QueryContext(ctx, q, args...)
+	rows, err := conn.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -687,6 +754,21 @@ func (db *DB) GetOldestMessages(ctx context.Context, groupID int64, since time.T
 		 LIMIT ?`,
 		groupID, since.UTC(), limit,
 	)
+	return scanMessageRows(rows, err)
+}
+
+func (db *DB) GetSummaryBatch(ctx context.Context, groupID int64, since time.Time, limit int) ([]Message, error) {
+	defer db.metrics.DBGet.Start()()
+	rows, err := db.conn.QueryContext(ctx, `SELECT m.id, m.group_id, m.user_hash, m.text, m.timestamp,
+		m.forwarded_from, m.tg_message_id, m.reply_to_tg_id
+		FROM messages m LEFT JOIN summary_cursors c ON c.group_id=m.group_id
+		WHERE m.group_id=? AND m.id>COALESCE(c.last_id, 0) AND m.timestamp>=?
+		AND (c.legacy_since IS NULL OR m.id > c.legacy_max_id OR m.timestamp>=strftime('%Y-%m-%d %H:%M:%S', substr(c.legacy_since,1,19)))
+		ORDER BY m.id LIMIT ?`, groupID, since.UTC(), limit)
+	return scanMessageRows(rows, err)
+}
+
+func scanMessageRows(rows *sql.Rows, err error) ([]Message, error) {
 	if err != nil {
 		return nil, err
 	}
@@ -821,11 +903,37 @@ func (db *DB) GetMessagesInTgIDRange(ctx context.Context, groupID, minID, maxID 
 // runs in batches to stay within SQLite's bound-variable limit. Returns the
 // total number of rows deleted.
 func (db *DB) DeleteMessagesByIDs(ctx context.Context, ids []int64) (int64, error) {
+	return db.DeleteMessagesWithBackup(ctx, ids, nil)
+}
+
+// DeleteMessagesWithBackup writes the backup before committing any deletion.
+// The callback runs inside the transaction and must not query this DB.
+func (db *DB) DeleteMessagesWithBackup(ctx context.Context, ids []int64,
+	backup func(map[int64][]PhotoRecord) error) (int64, error) {
+	if len(ids) == 0 {
+		return 0, nil
+	}
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	allPhotos := make(map[int64][]PhotoRecord)
+
 	const batchSize = 500
 	var total int64
 	for start := 0; start < len(ids); start += batchSize {
 		end := min(start+batchSize, len(ids))
 		batch := ids[start:end]
+		if backup != nil {
+			photos, err := photosForMessages(ctx, tx, batch)
+			if err != nil {
+				return 0, err
+			}
+			for id, values := range photos {
+				allPhotos[id] = values
+			}
+		}
 		placeholders := make([]string, len(batch))
 		args := make([]any, len(batch))
 		for i, id := range batch {
@@ -834,15 +942,23 @@ func (db *DB) DeleteMessagesByIDs(ctx context.Context, ids []int64) (int64, erro
 		}
 		// #nosec G201 -- interpolated value is a comma-joined list of "?" placeholders; the ids are passed as bound args
 		query := fmt.Sprintf(`DELETE FROM messages WHERE id IN (%s)`, strings.Join(placeholders, ","))
-		result, err := db.conn.ExecContext(ctx, query, args...)
+		result, err := tx.ExecContext(ctx, query, args...)
 		if err != nil {
-			return total, err
+			return 0, err
 		}
 		affected, err := result.RowsAffected()
 		if err != nil {
-			return total, err
+			return 0, err
 		}
 		total += affected
+	}
+	if backup != nil {
+		if err := backup(allPhotos); err != nil {
+			return 0, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
 	}
 	return total, nil
 }
@@ -900,7 +1016,8 @@ func (db *DB) SetGroupSchedule(ctx context.Context, s *GroupSchedule) error {
 		lastDaily = &utc
 	}
 	_, err := db.conn.ExecContext(ctx,
-		`INSERT OR REPLACE INTO group_schedules (group_id, enabled, hour, minute, last_daily_summary) VALUES (?, ?, ?, ?, ?)`,
+		`INSERT INTO group_schedules (group_id, enabled, hour, minute, last_daily_summary) VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(group_id) DO UPDATE SET enabled=excluded.enabled,hour=excluded.hour,minute=excluded.minute`,
 		s.GroupID, enabledInt, s.Hour, s.Minute, lastDaily,
 	)
 	return err
@@ -1193,26 +1310,55 @@ func (db *DB) ClearAllMetrics(ctx context.Context) error {
 	return err
 }
 
+// prepareAllowlist records existing tables as authoritative, including empty ones.
+func (db *DB) prepareAllowlist(existing bool) error {
+	tx, err := db.conn.Begin()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if _, err := tx.Exec(`CREATE TABLE IF NOT EXISTS allowed_groups (
+		group_id INTEGER PRIMARY KEY, added_at DATETIME NOT NULL, added_by INTEGER)`); err != nil {
+		return err
+	}
+	state := "0"
+	if existing {
+		state = "1"
+	}
+	if _, err := tx.Exec(`INSERT OR IGNORE INTO bot_config (key, value) VALUES ('allowlist_seeded', ?)`, state); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
 func (db *DB) SeedAllowedGroupsIfEmpty(ctx context.Context, groupIDs []int64) error {
-	if len(groupIDs) == 0 {
+	tx, err := db.conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	result, err := tx.ExecContext(ctx, `UPDATE bot_config SET value='1' WHERE key='allowlist_seeded' AND value='0'`)
+	if err != nil {
+		return err
+	}
+	inserted, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if inserted == 0 {
 		return nil
 	}
-
 	var count int
-	if err := db.conn.QueryRowContext(ctx, `SELECT COUNT(*) FROM allowed_groups`).Scan(&count); err != nil {
-		return fmt.Errorf("failed to count allowed groups: %w", err)
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM allowed_groups`).Scan(&count); err != nil {
+		return err
 	}
-	if count > 0 {
-		return nil
-	}
-
-	for _, id := range groupIDs {
-		if _, err := db.conn.ExecContext(ctx,
-			`INSERT OR IGNORE INTO allowed_groups (group_id, added_at, added_by) VALUES (?, ?, 0)`,
-			id, time.Now().UTC(),
-		); err != nil {
-			return fmt.Errorf("failed to seed allowed group %d: %w", id, err)
+	if count == 0 {
+		for _, id := range groupIDs {
+			if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO allowed_groups
+				(group_id, added_at, added_by) VALUES (?, ?, 0)`, id, time.Now().UTC()); err != nil {
+				return fmt.Errorf("seed allowed group %d: %w", id, err)
+			}
 		}
 	}
-	return nil
+	return tx.Commit()
 }

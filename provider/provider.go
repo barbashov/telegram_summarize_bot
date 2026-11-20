@@ -3,10 +3,8 @@ package provider
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"telegram_summarize_bot/config"
@@ -14,23 +12,13 @@ import (
 	"telegram_summarize_bot/logger"
 )
 
-// debugTransport logs the outgoing request body and response status for debugging.
+// debugTransport logs response status without request or response content.
 type debugTransport struct{ inner http.RoundTripper }
 
 func (d *debugTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.Body != nil {
-		body, _ := io.ReadAll(req.Body)
-		req.Body = io.NopCloser(strings.NewReader(string(body)))
-		logger.Debug().Str("url", req.URL.String()).Str("body", string(body)).Msg("LLM request")
-	}
 	resp, err := d.inner.RoundTrip(req)
 	if resp != nil {
-		logger.Debug().Int("status", resp.StatusCode).Str("content_type", resp.Header.Get("Content-Type")).Str("url", req.URL.String()).Msg("LLM response headers")
-	}
-	if resp != nil && resp.StatusCode >= 400 {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body = io.NopCloser(strings.NewReader(string(respBody)))
-		logger.Debug().Int("status", resp.StatusCode).Str("body", string(respBody)).Str("url", req.URL.String()).Msg("LLM error response")
+		logger.Debug().Int("status", resp.StatusCode).Msg("LLM response")
 	}
 	return resp, err
 }
@@ -105,6 +93,7 @@ type CompletionResponse struct {
 
 // RateLimitWindow describes one rolling quota window (e.g. the Codex 5h or 7d limit).
 type RateLimitWindow struct {
+	UnknownUsage  bool `json:",omitempty"`
 	UsedPercent   float64
 	WindowMinutes int
 	ResetsAt      time.Time // zero if unknown
@@ -209,7 +198,10 @@ type recordingClient struct {
 
 func (c *recordingClient) Complete(ctx context.Context, req CompletionRequest) (CompletionResponse, error) {
 	resp, err := c.inner.Complete(ctx, req)
-	if err == nil && c.rec != nil && resp.Usage.TotalTokens > 0 {
+	if resp.Usage.TotalTokens == 0 {
+		resp.Usage.TotalTokens = resp.Usage.PromptTokens + resp.Usage.CompletionTokens
+	}
+	if c.rec != nil && resp.Usage.TotalTokens > 0 {
 		c.rec.RecordTokenUsage(ctx, req.Model, req.Operation, resp.Usage)
 	}
 	return resp, err
@@ -274,8 +266,9 @@ func parseCodexWindow(h http.Header, tier string) *RateLimitWindow {
 	if used == "" && window == "" {
 		return nil
 	}
-	w := &RateLimitWindow{}
-	if v, err := strconv.ParseFloat(used, 64); err == nil {
+	w := &RateLimitWindow{UnknownUsage: true}
+	if v, err := strconv.ParseFloat(used, 64); err == nil && v >= 0 && v <= 100 {
+		w.UnknownUsage = false
 		w.UsedPercent = v
 	}
 	if v, err := strconv.Atoi(window); err == nil {

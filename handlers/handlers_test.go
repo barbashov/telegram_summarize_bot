@@ -27,7 +27,7 @@ func (f *fakeTelegram) GetMe(_ context.Context) (*telego.User, error) {
 	return &telego.User{Username: "testbot"}, nil
 }
 
-func (f *fakeTelegram) UpdatesViaLongPolling(_ context.Context, _ *telego.GetUpdatesParams, _ ...telego.LongPollingOption) (<-chan telego.Update, error) {
+func (f *fakeTelegram) GetUpdates(_ context.Context, _ *telego.GetUpdatesParams) ([]telego.Update, error) {
 	return nil, nil
 }
 
@@ -140,6 +140,10 @@ func newTestBot(t *testing.T, sum summaryService) (*Bot, *db.DB, *fakeTelegram) 
 	database, err := db.New(filepath.Join(t.TempDir(), "bot.db"), metrics.New())
 	if err != nil {
 		t.Fatalf("db.New error: %v", err)
+	}
+
+	if err := database.AddAllowedGroup(t.Context(), 42, 1); err != nil {
+		t.Fatal(err)
 	}
 
 	tg := &fakeTelegram{}

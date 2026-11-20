@@ -3,8 +3,11 @@ package provider
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -28,6 +31,7 @@ type oauthClient struct {
 // ChatGPT-Account-ID header, and a Codex client version header.
 func NewOAuthClient(tokenDir, clientID, codexVersion string, timeout time.Duration, opts ...ClientOption) (LLMClient, error) {
 	store := NewTokenStore(tokenDir, clientID)
+	store.codexVersion = resolveCodexClientVersion(codexVersion)
 	if err := store.Load(); err != nil {
 		return nil, fmt.Errorf("load OAuth tokens: %w (run '%s openai auth' first)", err, os.Args[0])
 	}
@@ -62,12 +66,22 @@ func (c *oauthClient) Complete(ctx context.Context, req CompletionRequest) (Comp
 		return CompletionResponse{}, fmt.Errorf("get OAuth token: %w", err)
 	}
 
-	// Update token and account ID on the inner responses client.
-	if rc, ok := c.inner.(*responsesClient); ok {
-		rc.setCredentials(token, c.tokenStore.GetAccountID())
+	complete := func(token string) (CompletionResponse, error) {
+		if rc, ok := c.inner.(*responsesClient); ok {
+			return rc.complete(ctx, req, token, c.tokenStore.GetAccountID())
+		}
+		return c.inner.Complete(ctx, req)
 	}
-
-	return c.inner.Complete(ctx, req)
+	resp, err := complete(token)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.HTTPStatusCode != http.StatusUnauthorized || ctx.Err() != nil {
+		return resp, err
+	}
+	token, err = c.tokenStore.refreshRejected(token)
+	if err != nil {
+		return resp, fmt.Errorf("renew rejected OAuth credentials: %w", err)
+	}
+	return complete(token)
 }
 
 // CodexTokenStore exposes the underlying token store so quota helpers can reuse
@@ -103,7 +117,7 @@ func FetchWhamUsage(ctx context.Context, store *TokenStore) (RateLimitSnapshot, 
 		return RateLimitSnapshot{}, err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("version", CodexClientVersion)
+	req.Header.Set("version", resolveCodexClientVersion(store.codexVersion))
 	req.Header.Set("originator", CodexOriginator)
 	if id := store.GetAccountID(); id != "" {
 		req.Header.Set(HeaderAccountID, id)
@@ -147,16 +161,19 @@ type whamUsageBody struct {
 }
 
 type whamWindow struct {
-	UsedPercent     float64 `json:"used_percent"`
-	WindowMinutes   int     `json:"window_minutes"`
-	ResetsInSeconds int64   `json:"resets_in_seconds"`
+	UsedPercent     *float64 `json:"used_percent"`
+	WindowMinutes   int      `json:"window_minutes"`
+	ResetsInSeconds int64    `json:"resets_in_seconds"`
 }
 
 func (w *whamWindow) toWindow() *RateLimitWindow {
 	if w == nil {
 		return nil
 	}
-	out := &RateLimitWindow{UsedPercent: w.UsedPercent, WindowMinutes: w.WindowMinutes}
+	out := &RateLimitWindow{UnknownUsage: true, WindowMinutes: w.WindowMinutes}
+	if w.UsedPercent != nil && *w.UsedPercent >= 0 && *w.UsedPercent <= 100 {
+		out.UsedPercent, out.UnknownUsage = *w.UsedPercent, false
+	}
 	if w.ResetsInSeconds > 0 {
 		out.ResetsAt = time.Now().Add(time.Duration(w.ResetsInSeconds) * time.Second)
 	}
@@ -192,4 +209,59 @@ func resolveCodexClientVersion(version string) string {
 		return CodexClientVersion
 	}
 	return version
+}
+
+// ModelContext reads the advertised context size for an exact Codex model.
+func (s *TokenStore) ModelContext(ctx context.Context, model string) int {
+	if model == "" {
+		return 0
+	}
+	s.mu.Lock()
+	windows, observed := s.contextWindows, s.contextWindowsAt
+	s.mu.Unlock()
+	if time.Since(observed) < time.Hour {
+		return windows[model]
+	}
+	token, err := s.GetValidToken()
+	if err != nil {
+		return 0
+	}
+	version := resolveCodexClientVersion(s.codexVersion)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, ChatGPTCodexBaseURL+"/models?client_version="+url.QueryEscape(version), http.NoBody)
+	if err != nil {
+		return 0
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	req.Header.Set("version", version)
+	req.Header.Set("originator", CodexOriginator)
+	if account := s.GetAccountID(); account != "" {
+		req.Header.Set(HeaderAccountID, account)
+	}
+	resp, err := HTTPClient(5 * time.Second).Do(req)
+	if err != nil {
+		return 0
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return 0
+	}
+	var catalog struct {
+		Models []struct {
+			Slug    string `json:"slug"`
+			Context int    `json:"context_window"`
+		} `json:"models"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&catalog); err != nil {
+		return 0
+	}
+	windows = make(map[string]int, len(catalog.Models))
+	for _, entry := range catalog.Models {
+		if entry.Context > 0 {
+			windows[entry.Slug] = entry.Context
+		}
+	}
+	s.mu.Lock()
+	s.contextWindows, s.contextWindowsAt = windows, time.Now()
+	s.mu.Unlock()
+	return windows[model]
 }

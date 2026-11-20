@@ -32,7 +32,7 @@ See README for the full behavior, arguments, and configuration (`config/config.g
 
 ## Architecture
 
-**Data flow**: Telegram (long polling via telego) → `handlers/update.go` stores messages in SQLite → `summarize` fetches messages from DB → `summarizer/` sends them to LLM API via `provider/` → response sent back to Telegram group.
+**Data flow**: Telegram (`getUpdates` via telego) → `handlers/update.go` persists history and commands before acknowledging updates → `summarize` fetches messages from DB → `summarizer/` sends them to LLM API via `provider/` → response sent back to Telegram group.
 
 ### Key packages
 
@@ -42,7 +42,7 @@ See README for the full behavior, arguments, and configuration (`config/config.g
 - **`summarizer/`** — API-agnostic summarizer using `provider.LLMClient`. Prompt is hardcoded in Russian. Two-step process: cluster messages into topics, then summarize each topic. Each call sets `CompletionRequest.Operation` (cluster/summarize/text/url/vision) for per-operation usage accounting.
 - **`usage/`** — Shared `/usage` report: aggregates `token_usage` into windows + per-model/per-operation breakdowns, resolves the Codex quota (cached → wham → live throwaway probe), and formats a plain-text Russian report. Used by both `handlers/admin` and the `cmd usage` CLI.
 - **`cmd/`** — CLI subcommands. `auth.go` implements OAuth PKCE flow for OpenAI Codex subscription. `usage.go` prints the usage report from the CLI.
-- **`db/`** — SQLite via `github.com/glebarez/sqlite` (pure Go, no CGO). Tables: `messages`, `last_summarize`, `allowed_groups`, `known_groups`, `group_schedules`, `bot_events`, `bot_error_log`, `bot_config`, `token_usage`. Schema auto-migrates on startup. The latest Codex quota snapshot is stored in `bot_config` under `codex_rate_limits`.
+- **`db/`** — SQLite via `modernc.org/sqlite` (pure Go, no CGO). Tables: `messages`, `last_summarize`, `allowed_groups`, `known_groups`, `group_schedules`, `bot_events`, `bot_error_log`, `bot_config`, `token_usage`. Schema auto-migrates on startup. The latest Codex quota snapshot is stored in `bot_config` under `codex_rate_limits`.
 - **`config/`** — Loads `.env` via godotenv. Required: `BOT_TOKEN`. LLM config via `LLM_MODE`, `LLM_TOKEN`, `LLM_ENDPOINT`. Legacy `OPENROUTER_*` vars supported with deprecation warnings.
 - **`logger/`** — Thin wrapper around zerolog exposing package-level `Debug()`, `Info()`, `Warn()`, `Error()`, `Fatal()` functions.
 
@@ -58,7 +58,7 @@ In-memory (not persisted to DB). Keyed by group ID (one summarize per group per 
   - Shared reports rendered in Telegram (the `usage.Build()` `/usage` report) stay **Russian** even when printed by the `usage` CLI command — the same bytes appear in the Telegram admin report.
 - **Tests are split per source file** — e.g. `help.go` → `help_test.go`, not one big test file per package.
 - **Lint runs in Docker** via `make lint` (golangci-lint, which already includes `govet`). Don't run `go vet` separately or assume a local `golangci-lint` binary exists.
-- Go `1.26+`; module path is `telegram_summarize_bot` (no `go.mod` replace tricks — internal imports use that prefix).
+- Go `1.27.4+`; module path is `telegram_summarize_bot` (no `go.mod` replace tricks — internal imports use that prefix).
 
 ## Agent Workflow Rule
 

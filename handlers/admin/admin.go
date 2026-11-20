@@ -55,7 +55,7 @@ type Admin struct {
 	llm         provider.LLMClient // for live Codex quota resolution
 
 	mu                         sync.Mutex
-	pendingSummaryInstructions map[int64]int64
+	pendingSummaryInstructions map[int64]pendingInstructions
 }
 
 // New creates a new Admin handler.
@@ -69,7 +69,7 @@ func New(deps Deps, database *db.DB, m *metrics.Metrics, cfg *config.Config, sum
 		rateLimiter:                rl,
 		telegram:                   tg,
 		llm:                        llm,
-		pendingSummaryInstructions: make(map[int64]int64),
+		pendingSummaryInstructions: make(map[int64]pendingInstructions),
 	}
 }
 

@@ -74,7 +74,7 @@ func RunAuth(ctx context.Context, clientID, tokenDir, codexVersion string) error
 
 	fmt.Printf("\nAdd to your .env:\n")
 	fmt.Printf("  LLM_MODE=oauth\n")
-	fmt.Printf("  MODEL=gpt-5.6-sol\n")
+	fmt.Printf("  MODEL=gpt-6-sol\n")
 	fmt.Printf("  OAUTH_CODEX_VERSION=%s\n", codexVersion)
 
 	return nil

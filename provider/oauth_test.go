@@ -131,3 +131,30 @@ func TestResolveCodexClientVersion(t *testing.T) {
 		}
 	})
 }
+
+func TestOAuthClientRefreshesOnUnauthorizedBeforeExpiry(t *testing.T) {
+	store := NewTokenStore(t.TempDir(), "test-client")
+	if err := store.Save(&OAuthTokens{AccessToken: "old", RefreshToken: "refresh", AccountID: "account", ExpiresAt: time.Now().Add(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
+	tokenServer(t, `{"access_token":"new","refresh_token":"rotated","id_token":"missing-claims","expires_in":3600}`)
+	inner := &rejectOnceClient{}
+	client := &oauthClient{inner: inner, tokenStore: store}
+	resp, err := client.Complete(t.Context(), CompletionRequest{})
+	if err != nil || resp.Content != "ok" || inner.calls != 2 {
+		t.Fatalf("response=%+v calls=%d err=%v", resp, inner.calls, err)
+	}
+	if store.GetAccountID() != "account" {
+		t.Fatal("refresh discarded the account ID")
+	}
+}
+
+type rejectOnceClient struct{ calls int }
+
+func (c *rejectOnceClient) Complete(context.Context, CompletionRequest) (CompletionResponse, error) {
+	c.calls++
+	if c.calls == 1 {
+		return CompletionResponse{}, &APIError{HTTPStatusCode: 401}
+	}
+	return CompletionResponse{Content: "ok"}, nil
+}

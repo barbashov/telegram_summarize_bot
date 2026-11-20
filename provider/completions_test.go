@@ -33,8 +33,8 @@ func TestCompletionsClientComplete(t *testing.T) {
 		if req.Messages[0].Role != "system" {
 			t.Errorf("messages[0].role = %s, want system", req.Messages[0].Role)
 		}
-		if req.MaxTokens != 100 {
-			t.Errorf("max_tokens = %d, want 100", req.MaxTokens)
+		if req.MaxTokens != 100 { //nolint:staticcheck // Verify the compatible max_tokens wire field.
+			t.Errorf("max_tokens = %d, want 100", req.MaxTokens) //nolint:staticcheck // Verify the compatible max_tokens wire field.
 		}
 
 		resp := openai.ChatCompletionResponse{

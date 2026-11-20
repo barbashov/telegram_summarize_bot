@@ -14,13 +14,13 @@ Telegram bot that summarizes group chat messages using LLM APIs (OpenRouter, Ope
 - Rate limiting (1 request per minute per group)
 - Forwarded messages are stored with original author attribution and never treated as commands
 - Reply thread context in LLM prompts — reply-to relationships surface inline as `↩ a3f2b1c4: "quoted text"` (configurable via `REPLY_THREADS`)
-- **Privacy-preserving storage** — no Telegram user IDs or usernames are stored; messages are attributed with an 8-char anonymous hash (HMAC-SHA256, group-scoped, non-reversible)
-- **Image recognition** — when the configured model supports vision (e.g. `gpt-6-sol` or `gpt-5.6-sol` via OAuth, `gpt-4o`, `claude-3*`), photos and image documents (Twitter/Reddit/HN screenshots, cat pictures, etc.) are fed to the model at summarize time and inlined into the summary as short Russian descriptions. Results are cached by Telegram's content-stable `file_unique_id`, so the same image is described only once — even if it's re-forwarded across groups.
+- **Pseudonymized chat history** — stored group messages are attributed with an 8-char anonymous hash (HMAC-SHA256, group-scoped, non-reversible)
+- **Image recognition** — when the configured model supports vision (e.g. `gpt-6-sol` or `gpt-5.6-sol` via OAuth, `gpt-4o`, `claude-3*`), photos and image documents (Twitter/Reddit/HN screenshots, cat pictures, etc.) are fed to the model at summarize time and inlined into the summary as short Russian descriptions. Results are cached by Telegram's content-stable `file_unique_id`, per vision model and steering prompt, including across groups.
 - Automatic message cleanup (configurable retention period)
 - Optional startup/shutdown alerts to admin users
 - **URL summarization** in admin private DMs — send a link, get a summary (with SSRF protection)
 - Admin private commands (`/status`, `/groups`, `/instructions`, `/usage`): runtime metrics, dynamic group management, per-group summary instructions, and token-usage / Codex-quota reporting
-- SQLite persistence
+- SQLite persistence for chat history, queued commands, and summary delivery progress
 - Graceful shutdown
 
 ## Setup
@@ -75,12 +75,14 @@ MODEL=gpt-6-sol
 # OAUTH_CODEX_VERSION=0.161.0
 ```
 
-The `openai auth` command uses the OpenAI Codex device authorization flow: it prints a verification URL (`https://auth.openai.com/codex/device`) and a one-time code, then waits while you open that URL on any device (phone, laptop) and enter the code. Because it needs no local browser and no inbound callback port, it works on headless/remote hosts over SSH. Once you sign in, the command saves tokens locally and prints available models with suggested `.env` config. Tokens are automatically refreshed when they expire.
+The `openai auth` command uses the OpenAI Codex device authorization flow: it prints a verification URL (`https://auth.openai.com/codex/device`) and a one-time code, then waits while you open that URL on any device (phone, laptop) and enter the code. Because it needs no local browser and no inbound callback port, it works on headless/remote hosts over SSH. Once you sign in, the command saves tokens locally and prints available models with suggested `.env` config. Tokens are refreshed before expiry and renewed once after a rejected OAuth request.
 If OAuth requests return `The '<model>' model requires a newer version of Codex`, increase `OAUTH_CODEX_VERSION` (default `0.161.0`). The ChatGPT backend gates models by this client version — e.g. the `gpt-5.6-*` family requires at least `0.144.0`, the `gpt-6*` family at least `0.161.0`.
 
 ## Running
 
 ### Locally
+
+Use Go 1.27.4 or later and a separate bot token for a local instance when production is running.
 
 ```bash
 go mod download
@@ -90,10 +92,10 @@ go run main.go
 ### Docker Compose
 
 ```bash
-docker-compose up -d
+docker compose up -d
 ```
 
-The compose file references the pre-built image from GHCR (`ghcr.io/barbashov/telegram_summarize_bot:main`) and includes a **Watchtower** sidecar that polls for new image digests every 60 seconds. Once Watchtower is running, every push to `main` automatically triggers a rolling restart on the server — no manual steps needed.
+The compose file references the pre-built image from GHCR (`ghcr.io/barbashov/telegram_summarize_bot:main`) and includes a **Watchtower** sidecar that polls for new image digests every 60 seconds. Once Watchtower is running, every push to `main` automatically triggers a restart on the server after CI publishes the image. The polling heartbeat backs the image health check. A stalled polling loop exits after three minutes so the restart policy can recover it.
 
 To check Watchtower activity:
 ```bash
@@ -151,6 +153,8 @@ The allowed-group list is stored in the database and is authoritative at runtime
 
 Opens an interactive private-DM flow for configuring additional instructions for a group summary. Pick an allowed group, then choose `Edit` or `Clear`.
 
+Reply to the edit prompt within 10 minutes to save the new text. Use `/cancel` to cancel.
+
 The saved text is appended to the final summary prompt only. It can change emphasis or style, but it cannot override the bot's mandatory Russian JSON output rules. Only users listed in `ADMIN_USER_IDS` can use this command.
 
 #### `/usage` — token usage and Codex quotas
@@ -166,13 +170,13 @@ Quota freshness uses a tiered strategy: the last captured snapshot if newer than
 
 Send a URL in a private message — the bot fetches the page, extracts the article text (using readability), and replies with a summary. Only admin users can use this feature; non-admins are ignored.
 
-SSRF protection is built in: only `http`/`https` schemes are allowed, private/reserved IP ranges are blocked (including cloud metadata endpoints like `169.254.169.254`), DNS is pre-resolved and pinned to prevent rebinding, and redirect targets are re-validated.
+SSRF protection is built in: only `http`/`https` schemes and ports 80/443 are allowed, private/reserved IP ranges are blocked (including cloud metadata endpoints like `169.254.169.254`), DNS is pre-resolved and pinned to prevent rebinding, and redirect targets are re-validated.
 
 Any user not in `ADMIN_USER_IDS` receives setup guidance instead of admin commands.
 
 ### Edited messages
 
-Unlike deletions, Telegram **does** notify bots when a message is edited (the `edited_message` update). The bot subscribes to it and, on an edit, overwrites the stored text of that message in place (matched by group + message id), so any later summarization uses the current version. Caption edits on photos update the text too; the photo itself is left untouched. Edits never trigger commands and never insert a new row — only already-stored messages are updated.
+Unlike deletions, Telegram **does** notify bots when a message is edited (the `edited_message` update). The bot subscribes to it and, on an edit, overwrites the stored text of that message in place (matched by group + message id), using Telegram edit time and update ID so an older edit cannot overwrite a newer one. Caption edits on photos update the text too; the photo itself is left untouched. Edits never trigger commands and never insert a new row — only already-stored messages are updated.
 
 ### Pruning deleted messages (`prune-deleted` CLI)
 
@@ -192,10 +196,15 @@ The `prune-deleted` CLI command reconciles the database against a **Telegram Des
 
 - Matching is by Telegram `message_id` over the **id range the export covers** (`[min..max]` of the exported ids). Messages outside that range, or stored without a `tg_message_id` (very old rows), are left untouched.
 - **Supergroups/channels only** (`-100…` group IDs): in basic groups the export's message ids come from the exporting user's own id sequence and don't match the Bot API ids the bot stores, so diffing would flag live messages as deleted. The command rejects non-supergroup ids.
-- The export's own chat id is checked against `--group` (a mismatched export file is rejected); if the export carries no chat id, a warning is printed and the check is skipped.
+- The export's own chat id is checked against `--group` (a mismatched export file is rejected); if the export carries no chat ID, deletion requires an explicit `--skip-chat-check`. A dry run prints a warning.
 - **Edge case:** messages deleted *after* the newest surviving message can't be detected (no later message bounds the range). Export after the chat has newer activity to cover them.
-- `--apply` writes a backup file `pruned-<group>-<unixtime>.json` with the deleted rows before removing them. Attached photos are removed via cascade.
+- `--apply` writes a backup file `pruned-<group>-<unixtime>.json` with the format version, deleted messages, and their photo records. The delete transaction commits only after the backup is written.
 - The command reads `DB_PATH` from config; point it at a copy first if you want to verify before touching the live database.
+
+### Delivery and recovery
+
+Incoming updates are confirmed after their history or command is saved. Queued commands and pending summary parts are kept for up to 48 hours. Temporary delivery failures retry from the first unconfirmed part, including after a restart. Formatting errors retry that part as plain text. A lost Telegram response can lead to a duplicate of the unconfirmed part. Daily deliveries retry up to three times within their UTC day.
+
 
 ## Bot Commands
 
@@ -203,7 +212,7 @@ Commands are triggered by mentioning the bot in a group message:
 
 | Command | Description |
 |---------|-------------|
-| `@bot summarize [hours]` | Summarize messages from the last N hours. If the group was summarized more recently, only newer messages are included. |
+| `@bot summarize [hours]` | Summarize messages from the last N hours. Includes messages not yet covered by a successfully delivered manual summary. |
 | **Reply** + `@bot` | Reply to a message and mention the bot to act on *that message* — the word `summarize` is optional. It summarizes link(s) in it, describes image(s), and/or summarizes its text (blended into one when several are present). If the message is part of a **reply chain**, the whole branch (root→target) is summarized: each ancestor's text, links, and images are included (within `REPLY_CHAIN_*` budgets), bounded by message retention. Plain text is summarized only above `REPLY_SUMMARIZE_MIN_CHARS`; unsupported media (video/voice/sticker/non-image file) gets a short notice. Honors the group's custom summarization instructions. |
 | **Reply** + `@bot <prompt>` | Add a free-text prompt to steer the result, e.g. `@bot опиши мем`, `@bot how could we use this?`, `@bot read the text`. The prompt is sent to the vision model for images (see `VISION_STEERING`) and steers the text/link summaries; it also lets even a short replied message be answered. |
 | `@bot s [hours]` | Shorthand for `summarize` (works in reply mode too) |
@@ -234,7 +243,7 @@ All configuration is via environment variables (`.env` file):
 | `DB_PATH` | `./data/bot.db` | Path to SQLite database |
 | `SUMMARY_HOURS` | `24` | Default time window for summarization (hours) |
 | `RETENTION_DAYS` | `7` | Message retention period (days) |
-| `MAX_MESSAGES` | `250` | Max messages per summary. When a window holds more, the oldest batch is summarized first, the checkpoint advances only through it, and the bot posts a warning suggesting another run for the remainder — nothing is skipped. |
+| `MAX_MESSAGES` | `250` | Max messages per summary. Manual summaries take batches in storage order, show each batch chronologically, and advance the checkpoint after the entire summary reaches Telegram. |
 | `TOPIC_MAX` | `5` | Max number of topics in a summary |
 | `RATE_LIMIT_SEC` | `60` | Cooldown between summarize calls per group (seconds) |
 | `DAILY_SUMMARY_HOUR` | `7` | Default UTC hour for daily scheduled summaries (0–23) |
@@ -242,8 +251,8 @@ All configuration is via environment variables (`.env` file):
 | `REPLY_THREADS` | `true` | Follow reply relationships: show ancestry context in 24h summaries and walk the reply chain for `@bot` replies (`true`/`false`) |
 | `REPLY_THREAD_CONTEXT_DEPTH` | `3` | How many ancestor levels appear in the reply breadcrumb inside 24h-summary prompts |
 | `REPLY_CHAIN_MAX_DEPTH` | `25` | Max messages walked up a reply chain when summarizing a replied-to thread (hard ceiling 25) |
-| `REPLY_CHAIN_MAX_LINKS` | `5` | Max links fetched+summarized across a whole reply chain |
-| `REPLY_CHAIN_MAX_IMAGES` | `8` | Max distinct images described across a whole reply chain |
+| `REPLY_CHAIN_MAX_LINKS` | `5` | Max link fetch attempts across a whole reply chain |
+| `REPLY_CHAIN_MAX_IMAGES` | `8` | Max distinct image description attempts across a whole reply chain |
 | `URL_MAX_CHARS` | `64000` | Max extracted text chars for URL summarization |
 | `REPLY_SUMMARIZE_MIN_CHARS` | `1000` | Minimum length (characters) for a replied-to plain-text message to be summarized on its own; shorter messages are reported as too short (ignored when the message also has a link or image) |
 | `VISION_ENABLED` | `auto` | Image recognition: `auto` (detect from model name), `true` (force on), `false` (force off) |
@@ -255,9 +264,11 @@ All configuration is via environment variables (`.env` file):
 | `IMAGE_DESCRIBE_TIMEOUT_SEC` | `60` | Per-image vision call timeout (seconds) |
 | `LLM_HTTP_TIMEOUT_SEC` | `180` | HTTP client timeout for all LLM requests (cluster, summary, vision) |
 | `CODEX_QUOTA_TTL_SEC` | `900` | How long a cached Codex quota snapshot is considered fresh before `/usage` attempts a live refresh (OAuth mode) |
-| `MODEL_CONTEXT_TOKENS` | *(auto)* | Override for the context-window size used in the `/usage` context-utilization line; `0` auto-detects from the model name |
+| `MODEL_CONTEXT_TOKENS` | *(auto)* | Override for the context-window size used in the `/usage` context-utilization line; `0` uses provider or known model metadata |
 | `ALL_PROXY` / `HTTPS_PROXY` | *(unset)* | Proxy URL for Telegram + LLM traffic (`socks5://host:port`, `http://host:port`) |
 
 > **Migration note:** `OPENROUTER_API_KEY` and `OPENROUTER_URL` still work but are deprecated. Use `LLM_TOKEN` and `LLM_ENDPOINT` instead.
 
 Note: Telegram bots can send private messages only to users who already started a chat with the bot.
+
+`OPENROUTER_API_KEY` and `OPENROUTER_URL` are legacy aliases supported in `completions` mode. Use `LLM_TOKEN` and `LLM_ENDPOINT` for the Responses API.
