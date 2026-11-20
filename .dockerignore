@@ -26,5 +26,9 @@ Thumbs.db
 coverage.*
 
 # Build artifacts
+/telegram_summarize_bot
 *.test
 *.out
+
+# Local SQLite and OAuth data
+/data/

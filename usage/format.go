@@ -83,7 +83,10 @@ func writeQuota(sb *strings.Builder, q QuotaResult) {
 
 func formatWindow(name string, w *provider.RateLimitWindow) string {
 	label := name + " (" + windowLabel(w.WindowMinutes) + ")"
-	out := fmt.Sprintf("%s: %.0f%% осталось (%.0f%% исп.)", label, 100-w.UsedPercent, w.UsedPercent)
+	out := label + ": неизвестно"
+	if !w.UnknownUsage {
+		out = fmt.Sprintf("%s: %.0f%% осталось (%.0f%% исп.)", label, 100-w.UsedPercent, w.UsedPercent)
+	}
 	if !w.ResetsAt.IsZero() {
 		out += fmt.Sprintf(" • сброс через %s (%s)",
 			humanizeDuration(time.Until(w.ResetsAt)), w.ResetsAt.UTC().Format("2006-01-02 15:04 UTC"))
@@ -142,7 +145,7 @@ func abbrev(n int64) string {
 		return "0"
 	case n < 1000:
 		return strconv.FormatInt(n, 10)
-	case n < 1_000_000:
+	case n < 999_950:
 		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1000), ".0") + "k"
 	default:
 		return strings.TrimSuffix(fmt.Sprintf("%.1f", float64(n)/1_000_000), ".0") + "M"

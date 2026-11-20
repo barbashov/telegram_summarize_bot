@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 
@@ -35,143 +36,108 @@ func forwardOriginHandle(origin telego.MessageOrigin, groupID int64, salt []byte
 }
 
 func (b *Bot) handleUpdate(ctx context.Context, update telego.Update) {
-	// Handle bot membership changes (bot added to / removed from a group).
+	dispatch, err := b.acceptUpdate(ctx, update)
+	if err != nil {
+		logger.Error().Err(err).Int("update_id", update.UpdateID).Msg("failed to accept update")
+		return
+	}
+	if dispatch {
+		b.dispatchUpdate(ctx, update)
+	}
+}
+
+// acceptUpdate persists chat history and returns whether the update needs a worker.
+func (b *Bot) acceptUpdate(ctx context.Context, update telego.Update) (bool, error) {
 	if update.MyChatMember != nil {
-		b.handleMyChatMember(ctx, update.MyChatMember)
-		return
+		return update.MyChatMember.Chat.Type != "private", nil
 	}
-
 	if update.CallbackQuery != nil {
-		b.admin.HandleCallbackQuery(ctx, update.CallbackQuery)
-		return
+		return b.cfg.IsAdminUser(update.CallbackQuery.From.ID), nil
 	}
-
-	if update.EditedMessage != nil {
-		b.handleEditedMessage(ctx, update.EditedMessage)
-		return
+	if msg := update.EditedMessage; msg != nil && msg.From != nil && msg.Chat.Type != "private" {
+		text, _ := replyTextAndEntities(msg)
+		date := msg.EditDate
+		if date == 0 {
+			date = msg.Date
+		}
+		if update.UpdateID == 0 {
+			b.handleEditedMessage(ctx, msg)
+			return false, nil
+		}
+		return false, b.db.ApplyMessageEdit(ctx, msg.Chat.ID, int64(msg.MessageID), text, date, int64(update.UpdateID))
 	}
-
-	if update.Message == nil {
-		return
-	}
-
 	msg := update.Message
-	if msg.From == nil {
-		return
+	if msg == nil || msg.From == nil {
+		return false, nil
+	}
+	text, entities := replyTextAndEntities(msg)
+	if text == "" && !hasImageMedia(msg) {
+		return false, nil
+	}
+	if msg.Chat.Type == "private" {
+		return true, nil
 	}
 
 	groupID := msg.Chat.ID
-	// Media messages carry their text in msg.Caption, not msg.Text. Falling
-	// back keeps the caption alongside the photo for summarization.
-	text := msg.Text
-	if text == "" {
-		text = msg.Caption
+	if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title, msg.Chat.Username); err != nil {
+		return false, err
 	}
-	tgMessageID := int64(msg.MessageID)
-
-	// Use Telegram's send time, not ingestion time: after downtime the backlog
-	// is redelivered in one burst, and stamping time.Now() would collapse hours
-	// of history into one instant, corrupting summary windows downstream.
+	allowed, err := b.db.IsGroupAllowed(ctx, groupID)
+	if err != nil || !allowed {
+		return false, err
+	}
+	var forwardedFrom string
+	if msg.ForwardOrigin != nil {
+		forwardedFrom = forwardOriginHandle(msg.ForwardOrigin, groupID, b.userHashSalt)
+	} else if _, err := b.extractCommandFromMention(text, entities); err == nil {
+		return true, nil
+	}
 	timestamp := time.Now().UTC()
 	if msg.Date > 0 {
 		timestamp = time.Unix(msg.Date, 0).UTC()
 	}
-
 	var replyToTgID int64
 	if msg.ReplyToMessage != nil {
 		replyToTgID = int64(msg.ReplyToMessage.MessageID)
 	}
+	return false, b.db.AddMessageWithPhotos(ctx, &db.Message{
+		GroupID: groupID, UserHash: db.UserHash(msg.From.ID, groupID, b.userHashSalt),
+		Text: text, Timestamp: timestamp, ForwardedFrom: forwardedFrom, TgMessageID: int64(msg.MessageID), ReplyToTgID: replyToTgID,
+	}, extractPhotoRecords(msg))
+}
 
-	photoRecords := extractPhotoRecords(msg)
-	hasMedia := hasImageMedia(msg)
-
-	logger.Debug().
-		Int64("group_id", groupID).
-		Str("text", text).
-		Bool("has_media", hasMedia).
-		Msg("Received message")
-
-	if text == "" && !hasMedia {
-		return
+func (b *Bot) queueUpdate(ctx context.Context, update telego.Update) error {
+	dispatch, err := b.acceptUpdate(ctx, update)
+	if err != nil || !dispatch {
+		return err
 	}
-
-	if msg.Chat.Type != "private" {
-		// Track group title even for non-allowed groups.
-		if err := b.db.UpsertKnownGroup(ctx, groupID, msg.Chat.Title, msg.Chat.Username); err != nil {
-			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to upsert known group")
-		} else {
-			logger.Debug().Int64("group_id", groupID).Str("title", msg.Chat.Title).Str("username", msg.Chat.Username).Msg("upserted known group")
-		}
-		allowed, err := b.db.IsGroupAllowed(ctx, groupID)
-		if err != nil {
-			logger.Error().Err(err).Int64("group_id", groupID).Msg("failed to check group allowlist")
-			return
-		}
-		if !allowed {
-			logger.Warn().
-				Int64("group_id", groupID).
-				Str("chat_type", msg.Chat.Type).
-				Msg("ignoring message from non-allowed group")
-			return
-		}
+	// Only retain the IDs needed to send setup help to a non-admin.
+	if msg := update.Message; msg != nil && msg.Chat.Type == "private" && !b.cfg.IsAdminUser(msg.From.ID) {
+		update.Message = &telego.Message{Chat: msg.Chat, From: &telego.User{ID: msg.From.ID}}
 	}
-
-	// Private-chat messages — including forwards — route to the private handler
-	// and are never stored as group messages. This must come before the
-	// ForwardOrigin branch: otherwise anyone forwarding into the bot's private
-	// chat would have it persisted into the group-messages DB, and an admin
-	// forwarding a URL would store it instead of triggering URL summarization.
-	if msg.Chat.Type == "private" {
-		b.handlePrivateCommand(ctx, update)
-		return
-	}
-
-	// Forwarded messages are stored with original author attribution but never
-	// treated as commands — the forwarder didn't intend to issue one.
-	if msg.ForwardOrigin != nil {
-		forwardedFrom := forwardOriginHandle(msg.ForwardOrigin, groupID, b.userHashSalt)
-		msgID, err := b.db.AddMessageReturningID(ctx, &db.Message{
-			GroupID:       groupID,
-			UserHash:      db.UserHash(msg.From.ID, groupID, b.userHashSalt),
-			Text:          text,
-			Timestamp:     timestamp,
-			ForwardedFrom: forwardedFrom,
-			TgMessageID:   tgMessageID,
-			ReplyToTgID:   replyToTgID,
-		})
-		if err != nil {
-			logger.Error().Err(err).Msg("failed to add forwarded message")
-			return
-		}
-		if msgID != 0 && len(photoRecords) > 0 {
-			if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
-				logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos to forwarded message")
-			}
-		}
-		return
-	}
-
-	command, err := b.extractCommandFromMention(text, msg.Entities)
-	if err == nil {
-		b.handleCommand(ctx, update, command)
-		return
-	}
-
-	msgID, err := b.db.AddMessageReturningID(ctx, &db.Message{
-		GroupID:     groupID,
-		UserHash:    db.UserHash(msg.From.ID, groupID, b.userHashSalt),
-		Text:        text,
-		Timestamp:   timestamp,
-		TgMessageID: tgMessageID,
-		ReplyToTgID: replyToTgID,
-	})
+	payload, err := json.Marshal(update)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to add message")
-		return
+		return err
 	}
-	if msgID != 0 && len(photoRecords) > 0 {
-		if err := b.db.AddMessagePhotos(ctx, msgID, photoRecords); err != nil {
-			logger.Error().Err(err).Int64("message_id", msgID).Msg("failed to attach photos")
+	return b.db.QueueUpdate(ctx, int64(update.UpdateID), payload)
+}
+
+func (b *Bot) dispatchUpdate(ctx context.Context, update telego.Update) {
+	switch {
+	case update.MyChatMember != nil:
+		b.handleMyChatMember(ctx, update.MyChatMember)
+	case update.CallbackQuery != nil:
+		b.admin.HandleCallbackQuery(ctx, update.CallbackQuery)
+	case update.Message != nil && update.Message.Chat.Type == "private":
+		b.handlePrivateCommand(ctx, update)
+	case update.Message != nil:
+		allowed, err := b.db.IsGroupAllowed(ctx, update.Message.Chat.ID)
+		if err != nil || !allowed {
+			return
+		}
+		text, entities := replyTextAndEntities(update.Message)
+		if command, err := b.extractCommandFromMention(text, entities); err == nil {
+			b.handleCommand(ctx, update, command)
 		}
 	}
 }
@@ -183,7 +149,16 @@ func (b *Bot) handleMyChatMember(ctx context.Context, cmu *telego.ChatMemberUpda
 		return
 	}
 
+	if cmu.NewChatMember == nil {
+		return
+	}
 	newStatus := cmu.NewChatMember.MemberStatus()
+	if cmu.OldChatMember != nil {
+		oldStatus := cmu.OldChatMember.MemberStatus()
+		if oldStatus == "member" || oldStatus == "administrator" {
+			return
+		}
+	}
 	if newStatus != "member" && newStatus != "administrator" {
 		return
 	}

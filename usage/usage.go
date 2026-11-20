@@ -9,6 +9,7 @@ import (
 
 	"telegram_summarize_bot/db"
 	"telegram_summarize_bot/logger"
+	"telegram_summarize_bot/provider"
 )
 
 // Store is the read side of token-usage aggregation (satisfied by *db.DB).
@@ -27,12 +28,13 @@ type Window struct {
 
 // Report is the fully-aggregated /usage view, ready to Format.
 type Report struct {
-	Windows     []Window // today, 7d, 30d
-	ByModel     []db.TokenUsageGroup
-	ByOperation []db.TokenUsageGroup
-	ContextUsed int
-	ContextMax  int // 0 => unknown, context line omitted
-	Quota       QuotaResult
+	Windows      []Window // today, 7d, 30d
+	ByModel      []db.TokenUsageGroup
+	ByOperation  []db.TokenUsageGroup
+	ContextModel string
+	ContextUsed  int
+	ContextMax   int // 0 => unknown, context line omitted
+	Quota        QuotaResult
 	// StoreErr marks that at least one store query failed, so the report may
 	// be incomplete — a locked DB must not render as a confident "no data".
 	StoreErr bool
@@ -81,6 +83,7 @@ func Build(ctx context.Context, src Store, model string, contextOverride int, qu
 	if latestModel == "" {
 		latestModel = model
 	}
+	r.ContextModel = latestModel
 	r.ContextUsed = prompt
 	if contextOverride > 0 {
 		r.ContextMax = contextOverride
@@ -107,6 +110,8 @@ func (r Report) hasData() bool {
 func modelContextWindow(model string) int {
 	m := strings.ToLower(model)
 	switch {
+	case m == "gpt-6-sol":
+		return 1_050_000
 	case strings.Contains(m, "gpt-5.6"):
 		return 372000
 	case strings.Contains(m, "gpt-5"):
@@ -121,5 +126,16 @@ func modelContextWindow(model string) int {
 		return 200000
 	default:
 		return 0
+	}
+}
+
+// UseCodexContext replaces public API estimates with the account catalog size.
+func (r *Report) UseCodexContext(ctx context.Context, client provider.LLMClient, override int) {
+	if override > 0 || r.ContextUsed <= 0 {
+		return
+	}
+	store := provider.CodexStoreOf(client)
+	if store != nil {
+		r.ContextMax = store.ModelContext(ctx, r.ContextModel)
 	}
 }

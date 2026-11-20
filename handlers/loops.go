@@ -54,9 +54,9 @@ func (b *Bot) refreshStatsCache(ctx context.Context) {
 	}
 
 	// Derive counters from DB.
-	messagesStored, _ := b.db.CountBotEvents(ctx, "db_add", since)
-	summarizeOK, _ := b.db.CountBotEvents(ctx, "llm_summarize", since)
-	summarizeFail, _ := b.db.CountErrors(ctx, since, "llm_cluster", "llm_summarize")
+	messagesStored, _ := b.db.CountBotEvents(ctx, "message_stored", since)
+	summarizeOK, _ := b.db.CountBotEvents(ctx, "summary_delivered", since)
+	summarizeFail, _ := b.db.CountBotEvents(ctx, "summary_failed", since)
 	rateLimitHits, _ := b.db.CountBotEvents(ctx, "rate_limit", since)
 	errorCounts, _ := b.db.QueryErrorCounts(ctx, since)
 	if errorCounts == nil {

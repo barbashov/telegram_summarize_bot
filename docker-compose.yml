@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   bot:
     image: ghcr.io/barbashov/telegram_summarize_bot:main
@@ -19,7 +17,7 @@ services:
   watchtower:
     # Pinned by digest: this container holds the Docker socket (host root), so
     # an unpinned :latest would hand that to any future push of the tag.
-    image: nickfedor/watchtower@sha256:073b6bfa36527b9e03b8861cde636efac75a45c9b71e229c4f03bc5e803a9394
+    image: nickfedor/watchtower:1.24.1@sha256:617a7d5523280cb73adac4d7977604afbe66b7ea86211f2ae0cbfa2043041d61
     container_name: watchtower
     restart: unless-stopped
     volumes:

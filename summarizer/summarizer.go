@@ -310,6 +310,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 		content := strings.TrimSpace(resp.Content)
 
 		if resp.FinishReason == "length" {
+			prompt += "\nСократи формулировки, сохрани все темы и верни полный JSON."
 			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", clusterTokens).
 				Msg("cluster response truncated by token limit")
 			clusterTokens = clusterTokens * 3 / 2
@@ -320,7 +321,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 
 		var parsed topicClusterResponse
 		if err := unmarshalJSONObject(content, &parsed); err != nil {
-			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("cluster parse failed, retrying")
+			logger.Warn().Err(err).Int("attempt", attempt+1).Msg("cluster parse failed, retrying")
 			lastErr = fmt.Errorf("failed to parse topic clusters: %w", err)
 			continue
 		}
@@ -329,7 +330,7 @@ func (s *Summarizer) ClusterTopics(ctx context.Context, messages []db.Message, t
 		if err != nil {
 			// Hallucinated structure (1-based indexes, empty topics) is as
 			// retryable as unparseable JSON — don't abort the retry loop on it.
-			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("cluster sanitize failed, retrying")
+			logger.Warn().Err(err).Int("attempt", attempt+1).Msg("cluster sanitize failed, retrying")
 			lastErr = fmt.Errorf("failed to sanitize topic clusters: %w", err)
 			continue
 		}
@@ -369,6 +370,7 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 		content := strings.TrimSpace(resp.Content)
 
 		if resp.FinishReason == "length" {
+			prompt += "\nСократи формулировки, сохрани все темы и верни полный JSON."
 			logger.Warn().Int("attempt", attempt+1).Int("max_tokens", summaryTokens).
 				Msg("summary response truncated by token limit")
 			summaryTokens = summaryTokens * 3 / 2
@@ -379,11 +381,19 @@ func (s *Summarizer) SummarizeTopics(ctx context.Context, messages []db.Message,
 
 		var summary StructuredSummary
 		if err := unmarshalJSONObject(content, &summary); err != nil {
-			logger.Warn().Err(err).Int("attempt", attempt+1).Str("raw_response", content).Msg("summary parse failed, retrying")
+			logger.Warn().Err(err).Int("attempt", attempt+1).Msg("summary parse failed, retrying")
 			lastErr = fmt.Errorf("failed to parse topic summary: %w", err)
 			continue
 		}
 
+		valid := strings.TrimSpace(summary.TLDR) != "" && len(summary.Topics) == len(clusters)
+		for _, topic := range summary.Topics {
+			valid = valid && strings.TrimSpace(topic.Summary) != ""
+		}
+		if !valid {
+			lastErr = fmt.Errorf("model returned an incomplete topic summary")
+			continue
+		}
 		return normalizeStructuredSummary(summary, clusters, messages), nil
 	}
 	return nil, lastErr
@@ -831,11 +841,7 @@ func unmarshalJSONObject(content string, target interface{}) error {
 
 	raw := content[start : end+1]
 	if err := json.Unmarshal([]byte(raw), target); err != nil {
-		truncated := raw
-		if len(truncated) > 200 {
-			truncated = truncated[:200] + "..."
-		}
-		return fmt.Errorf("json unmarshal: %w; raw (truncated): %s", err, truncated)
+		return fmt.Errorf("invalid JSON in model response")
 	}
 	return nil
 }

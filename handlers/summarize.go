@@ -3,7 +3,9 @@ package handlers
 import (
 	"context"
 	"fmt"
+	"sort"
 	"strconv"
+	"telegram_summarize_bot/db"
 	"time"
 
 	"telegram_summarize_bot/logger"
@@ -31,35 +33,38 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 		hours = parsed
 	}
 
-	lastSummarize, err := b.db.GetLastSummarizeTime(ctx, groupID)
+	if _, busy := b.manualSummaries.LoadOrStore(groupID, struct{}{}); busy {
+		b.sendMessage(ctx, groupID, "Сводка уже готовится.")
+		return
+	}
+	defer b.manualSummaries.Delete(groupID)
+	key := fmt.Sprintf("manual:%d", groupID)
+	pending, err := b.db.GetDelivery(ctx, key)
 	if err != nil {
-		logger.Error().Err(err).Msg("failed to get last summarize time")
+		b.sendMessage(ctx, groupID, "Ошибка получения сообщений.")
+		return
 	}
-
+	if pending != nil {
+		b.resumeDelivery(ctx, key)
+		return
+	}
 	since := time.Now().Add(-time.Duration(hours) * time.Hour)
-	if lastSummarize != nil && since.Before(*lastSummarize) {
-		since = *lastSummarize
-	}
-	upperBound := time.Now()
-
-	// Oldest-first: when the window holds more than MaxMessages, summarize the
-	// oldest batch and advance the checkpoint only through it, so the overflow
-	// is picked up by the next run instead of being skipped forever.
-	messages, err := b.db.GetOldestMessages(ctx, groupID, since, b.cfg.MaxMessages)
+	messages, err := b.db.GetSummaryBatch(ctx, groupID, since, b.cfg.MaxMessages+1)
 	if err != nil {
 		logger.Error().Err(err).Msg("failed to get messages")
 		b.sendMessage(ctx, groupID, "Ошибка получения сообщений.")
 		return
 	}
-
 	if len(messages) == 0 {
-		if lastSummarize != nil {
-			b.sendMessage(ctx, groupID, "Нет новых сообщений с последней суммаризации.")
-		} else {
-			b.sendMessage(ctx, groupID, "Нет сообщений за последние 24 часа.")
-		}
+		b.sendMessage(ctx, groupID, fmt.Sprintf("Нет новых сообщений за последние %d ч.", hours))
 		return
 	}
+	truncated := len(messages) > b.cfg.MaxMessages
+	if truncated {
+		messages = messages[:b.cfg.MaxMessages]
+	}
+	cursor := messages[len(messages)-1].ID
+	sort.SliceStable(messages, func(i, j int) bool { return messages[i].Timestamp.Before(messages[j].Timestamp) })
 
 	allowed, grant := b.rateLimiter.Allow(groupID)
 	if !allowed {
@@ -83,34 +88,19 @@ func (b *Bot) handleSummarize(ctx context.Context, update telego.Update, args []
 	instructions := b.loadGroupSummaryInstructions(ctx, groupID)
 	summary, err := b.summarizer.SummarizeByTopics(ctx, messages, b.cfg.TopicMax, instructions)
 	if err != nil {
+		_ = b.db.InsertBotEvent(ctx, "summary_failed", time.Now(), 0)
 		logger.Error().Err(err).Msg("failed to summarize")
 		b.editWithRetry(ctx, groupID, statusMsgID, "Ошибка суммаризации. Попробуйте позже.")
 		return
 	}
 
-	if !b.sendSummary(ctx, groupID, statusMsgID, summary) {
-		b.editWithRetry(ctx, groupID, statusMsgID, "Не удалось отправить сводку в Telegram. Попробуйте позже.")
-		return
-	}
-
-	committed = true
-
-	// On a truncated window, commit only through the last summarized message so
-	// the next run continues from there instead of skipping the overflow.
-	checkpoint := upperBound
-	truncated := len(messages) == b.cfg.MaxMessages
+	raw := summarizer.FormatTelegramSummary(summary, groupID)
 	if truncated {
-		checkpoint = messages[len(messages)-1].Timestamp
+		raw += fmt.Sprintf("\n\n⚠️ В периоде больше %d сообщений. Запустите суммаризацию ещё раз для продолжения.", b.cfg.MaxMessages)
 	}
-	if err := b.db.SetLastSummarizeTime(ctx, groupID, checkpoint); err != nil {
-		logger.Error().Err(err).Msg("failed to set last summarize time")
-	}
-
-	if truncated {
-		b.sendMessage(ctx, groupID, fmt.Sprintf(
-			"⚠️ В периоде больше %d сообщений — просуммированы самые ранние. Запустите суммаризацию ещё раз для продолжения.",
-			b.cfg.MaxMessages))
-	}
+	checkpoint := messages[len(messages)-1].Timestamp
+	committed = b.deliver(ctx, db.Delivery{Key: key, ChatID: groupID, StatusID: statusMsgID,
+		Group: true, CursorID: cursor, Checkpoint: checkpoint}, raw)
 }
 
 func (b *Bot) loadGroupSummaryInstructions(ctx context.Context, groupID int64) string {
@@ -123,20 +113,4 @@ func (b *Bot) loadGroupSummaryInstructions(ctx context.Context, groupID int64) s
 		return ""
 	}
 	return item.Instructions
-}
-
-func (b *Bot) sendSummary(ctx context.Context, chatID, statusMsgID int64, summary *summarizer.StructuredSummary) bool {
-	chunks := renderMarkdown(summarizer.FormatTelegramSummary(summary, chatID))
-	if len(chunks) == 0 {
-		chunks = renderMarkdown("📝 **Суммаризация:**\n\nНет данных для суммаризации.")
-	}
-
-	if err := b.editFormattedFinal(ctx, chatID, statusMsgID, chunks[0]); err != nil {
-		logger.Error().Err(err).Int64("chat_id", chatID).Msg("failed to send summary to Telegram")
-		return false
-	}
-	for _, chunk := range chunks[1:] {
-		b.sendFormatted(ctx, chatID, chunk)
-	}
-	return true
 }

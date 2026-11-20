@@ -74,10 +74,13 @@ func (a *Admin) handleGroups(ctx context.Context, chatID, userID int64, args []s
 			}
 		}
 		if !found {
-			a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Группа %d не найдена в списке известных групп.", groupID))
-			a.sendGroupsList(ctx, chatID)
-			return
+			allowed, err := a.db.IsGroupAllowed(ctx, groupID)
+			if err != nil || !allowed {
+				a.deps.SendMessage(ctx, chatID, fmt.Sprintf("Группа %d отсутствует в списке разрешённых.", groupID))
+				return
+			}
 		}
+
 		if err := a.db.RemoveAllowedGroup(ctx, groupID); err != nil {
 			logger.Error().Err(err).Msg("failed to remove allowed group")
 			a.deps.SendMessage(ctx, chatID, "Ошибка удаления группы.")

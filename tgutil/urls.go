@@ -68,6 +68,9 @@ func ExtractURLs(text string, entities []telego.MessageEntity, limit int) []stri
 				continue
 			}
 			u = string(utf16.Decode(units[start:end]))
+			if u != "" && !strings.Contains(u, "://") && !strings.Contains(u, ":") {
+				u = "https://" + u
+			}
 		case "text_link":
 			u = e.URL
 		default:

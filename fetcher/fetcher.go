@@ -12,7 +12,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	readability "github.com/go-shiori/go-readability"
+	readability "codeberg.org/readeck/go-readability/v2"
 )
 
 const (
@@ -158,6 +158,9 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 				if err != nil {
 					return nil, err
 				}
+				if port != "80" && port != "443" {
+					return nil, fmt.Errorf("unsupported URL port %s", port)
+				}
 				ips, err := resolveAllValidated(ctx, h)
 				if err != nil {
 					return nil, err
@@ -227,11 +230,11 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 	// raw HTML here would feed login/SSO/JS-shell markup to the summarizer, so
 	// instead report it as unreadable. Raw text/plain bodies are kept as-is.
 	if strings.Contains(ct, "text/html") {
-		article, rerr := readability.FromReader(strings.NewReader(text), parsed)
-		if rerr != nil || utf8.RuneCountInString(strings.TrimSpace(article.TextContent)) < minArticleChars {
+		article, rerr := articleText(text, resp.Request.URL)
+		if rerr != nil || utf8.RuneCountInString(strings.TrimSpace(article)) < minArticleChars {
 			return "", ErrNoReadableContent
 		}
-		text = article.TextContent
+		text = article
 	}
 
 	text = strings.TrimSpace(text)
@@ -245,6 +248,23 @@ func fetch(ctx context.Context, rawURL string, maxChars int, ssrfCheck bool) (st
 	}
 
 	return text, nil
+}
+
+func articleText(body string, page *url.URL) (text string, err error) {
+	defer func() {
+		if recover() != nil {
+			text, err = "", ErrNoReadableContent
+		}
+	}()
+	article, err := readability.FromReader(strings.NewReader(body), page)
+	if err != nil {
+		return "", err
+	}
+	var out strings.Builder
+	if err := article.RenderText(&out); err != nil {
+		return "", err
+	}
+	return out.String(), nil
 }
 
 func isAllowedContentType(ct string) bool {

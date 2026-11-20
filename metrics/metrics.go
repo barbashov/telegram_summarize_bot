@@ -373,8 +373,15 @@ func formatSnapshot(snap MetricsSnapshot, model string) string {
 		issues = append(issues, fmt.Sprintf("  ⚠️ Высокий процент ошибок суммаризации (%d/%d)",
 			snap.SummarizeFail, total))
 	}
-	if len(snap.RecentErrors) >= thresholdRecentErrors {
-		issues = append(issues, fmt.Sprintf("  ⚠️ Много недавних ошибок (%d записей)", len(snap.RecentErrors)))
+	recent := 0
+	cutoff := time.Now().Add(-time.Hour)
+	for _, item := range snap.RecentErrors {
+		if !item.Ts.Before(cutoff) {
+			recent++
+		}
+	}
+	if recent >= thresholdRecentErrors {
+		issues = append(issues, fmt.Sprintf("  ⚠️ Много недавних ошибок (%d записей)", recent))
 	}
 
 	if len(issues) > 0 {

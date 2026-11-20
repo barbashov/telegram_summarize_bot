@@ -20,7 +20,7 @@ func TestHandleSummarizeNoMessages(t *testing.T) {
 	if len(tg.sentTexts) != 1 {
 		t.Fatalf("sent message count = %d, want 1", len(tg.sentTexts))
 	}
-	if tg.sentTexts[0] != "Нет сообщений за последние 24 часа." {
+	if tg.sentTexts[0] != "Нет новых сообщений за последние 24 ч." {
 		t.Fatalf("unexpected message: %q", tg.sentTexts[0])
 	}
 }
@@ -242,7 +242,7 @@ func TestHandleSummarizeTruncatedWindowAdvancesCheckpointToLastMessage(t *testin
 	}
 
 	var warned bool
-	for _, txt := range tg.sentTexts {
+	for _, txt := range append(tg.sentTexts, tg.editTexts...) {
 		if strings.Contains(txt, "⚠️") {
 			warned = true
 		}

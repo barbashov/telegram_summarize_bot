@@ -62,7 +62,7 @@ func (c *completionsClient) Complete(ctx context.Context, req CompletionRequest)
 	resp, err := c.client.CreateChatCompletion(ctx, openai.ChatCompletionRequest{
 		Model:       req.Model,
 		Messages:    messages,
-		MaxTokens:   req.MaxTokens,
+		MaxTokens:   req.MaxTokens, //nolint:staticcheck // Preserve max_tokens for OpenAI-compatible endpoints.
 		Temperature: req.Temperature,
 	})
 	if err != nil {
@@ -109,7 +109,7 @@ func wrapOpenAIError(err error) error {
 	if errors.As(err, &apiErr) {
 		return &APIError{
 			HTTPStatusCode: apiErr.HTTPStatusCode,
-			Message:        apiErr.Message,
+			Message:        "Chat Completions request rejected",
 		}
 	}
 	return err

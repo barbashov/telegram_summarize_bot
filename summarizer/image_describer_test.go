@@ -115,6 +115,7 @@ func TestCachedDescriber_FreshNegativeCacheSkipsCall(t *testing.T) {
 	s.entries["k"] = db.ImageDescription{
 		FileUniqueID: "k",
 		Error:        "transient failure",
+		Model:        "gpt-5.5",
 		CreatedAt:    time.Now().Add(-time.Hour), // fresh (<24h)
 	}
 	fetcher := &stubFetcher{bytes: []byte("x"), mime: "image/jpeg"}

@@ -14,9 +14,10 @@ import (
 )
 
 var (
-	pruneFile  string
-	pruneGroup int64
-	pruneApply bool
+	pruneFile          string
+	pruneGroup         int64
+	pruneApply         bool
+	pruneSkipChatCheck bool
 )
 
 var pruneDeletedCmd = &cobra.Command{
@@ -35,7 +36,7 @@ deleting, a backup of the removed rows is written to pruned-<group>-<unixtime>.j
 		if err != nil {
 			return fmt.Errorf("failed to load config: %w", err)
 		}
-		return runPruneDeleted(cmd.Context(), c, pruneFile, pruneGroup, pruneApply)
+		return runPruneDeleted(cmd.Context(), c, pruneFile, pruneGroup, pruneApply, pruneSkipChatCheck)
 	},
 }
 
@@ -43,6 +44,7 @@ func init() {
 	pruneDeletedCmd.Flags().StringVar(&pruneFile, "file", "", "path to the Telegram Desktop JSON export")
 	pruneDeletedCmd.Flags().Int64Var(&pruneGroup, "group", 0, "group ID in Telegram format (negative, e.g. -100123456789)")
 	pruneDeletedCmd.Flags().BoolVar(&pruneApply, "apply", false, "actually delete (without this flag, preview only)")
+	pruneDeletedCmd.Flags().BoolVar(&pruneSkipChatCheck, "skip-chat-check", false, "allow --apply when the export has no chat ID")
 	rootCmd.AddCommand(pruneDeletedCmd)
 }
 
@@ -75,7 +77,7 @@ func botAPIGroupID(exportID int64) int64 {
 	return -1_000_000_000_000 - exportID
 }
 
-func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, groupID int64, apply bool) error {
+func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, groupID int64, apply bool, skipChatCheck ...bool) error {
 	database, err := db.New(cfg.DBPath, metrics.New())
 	if err != nil {
 		return fmt.Errorf("open database %q: %w", cfg.DBPath, err)
@@ -107,12 +109,15 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 	}
 
 	// Verify the export belongs to the targeted group when it carries a chat id.
-	if export.ID != 0 {
+	switch {
+	case export.ID != 0:
 		wantGroup := botAPIGroupID(export.ID)
 		if wantGroup != groupID {
 			return fmt.Errorf("export %q is chat %q (id %d, Bot API form %d) but --group is %d: refusing to reconcile against a different chat", filePath, export.Name, export.ID, wantGroup, groupID)
 		}
-	} else {
+	case apply && (len(skipChatCheck) == 0 || !skipChatCheck[0]):
+		return fmt.Errorf("export has no chat ID; --apply requires --skip-chat-check")
+	default:
 		fmt.Fprintf(os.Stderr, "warning: export %q has no chat id; cannot verify it belongs to group %d\n", filePath, groupID)
 	}
 
@@ -146,15 +151,13 @@ func runPruneDeleted(ctx context.Context, cfg *config.Config, filePath string, g
 	}
 
 	backupPath := fmt.Sprintf("pruned-%d-%d.json", groupID, time.Now().Unix())
-	if err := writeBackup(backupPath, toDelete); err != nil {
-		return fmt.Errorf("writing backup %q: %w", backupPath, err)
-	}
-
 	ids := make([]int64, len(toDelete))
 	for i, m := range toDelete {
 		ids[i] = m.ID
 	}
-	deleted, err := database.DeleteMessagesByIDs(ctx, ids)
+	deleted, err := database.DeleteMessagesWithBackup(ctx, ids, func(photos map[int64][]db.PhotoRecord) error {
+		return writeBackupWithPhotos(backupPath, toDelete, photos)
+	})
 	if err != nil {
 		return fmt.Errorf("deleting messages: %w", err)
 	}
@@ -207,12 +210,29 @@ func parseExport(filePath string) (live map[int64]bool, minID, maxID int64, expo
 	return live, minID, maxID, export, nil
 }
 
-func writeBackup(path string, msgs []db.Message) error {
-	data, err := json.MarshalIndent(msgs, "", "  ")
+func writeBackupWithPhotos(path string, msgs []db.Message, photos map[int64][]db.PhotoRecord) error {
+	dir, err := os.OpenRoot(".")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, 0o600)
+	defer func() { _ = dir.Close() }()
+	file, err := dir.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if err := json.NewEncoder(file).Encode(struct {
+		Version  int                        `json:"version"`
+		Messages []db.Message               `json:"messages"`
+		Photos   map[int64][]db.PhotoRecord `json:"photos_by_message_id"`
+	}{2, msgs, photos}); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	return file.Close()
 }
 
 func printKnownGroups(ctx context.Context, database *db.DB) error {

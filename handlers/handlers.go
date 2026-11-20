@@ -35,7 +35,7 @@ const (
 
 type telegramClient interface {
 	GetMe(ctx context.Context) (*telego.User, error)
-	UpdatesViaLongPolling(ctx context.Context, params *telego.GetUpdatesParams, options ...telego.LongPollingOption) (<-chan telego.Update, error)
+	GetUpdates(ctx context.Context, params *telego.GetUpdatesParams) ([]telego.Update, error)
 	SendMessage(ctx context.Context, params *telego.SendMessageParams) (*telego.Message, error)
 	EditMessageText(ctx context.Context, params *telego.EditMessageTextParams) (*telego.Message, error)
 	GetChatMember(ctx context.Context, params *telego.GetChatMemberParams) (telego.ChatMember, error)
@@ -68,8 +68,11 @@ type Bot struct {
 
 	// inflight tracks running update handlers so shutdown can drain them; sem
 	// bounds their concurrency (backpressure).
-	inflight sync.WaitGroup
-	sem      chan struct{}
+	inflight        sync.WaitGroup
+	sem             chan struct{}
+	activeUpdates   sync.Map
+	manualSummaries sync.Map
+	deliveries      sync.Map
 
 	// schedRunning marks groups whose scheduled digest is currently in flight.
 	// The daily checkpoint is stamped only after a successful send, so a run
@@ -77,9 +80,6 @@ type Bot struct {
 	// next tick and the digest would be posted twice.
 	schedMu      sync.Mutex
 	schedRunning map[int64]struct{}
-	// schedFailures tracks failed daily-digest attempts per group so a broken
-	// LLM or a muted bot is retried on a backoff, not on every tick.
-	schedFailures map[int64]scheduledFailure
 }
 
 func NewBot(ctx context.Context, cfg *config.Config, database *db.DB, sum *summarizer.Summarizer, m *metrics.Metrics, llm provider.LLMClient) (*Bot, error) {
@@ -136,71 +136,23 @@ func (b *Bot) Start(ctx context.Context) error {
 		logger.Warn().Err(err).Msg("failed to register bot commands")
 	}
 
-	u := &telego.GetUpdatesParams{
-		Offset:  0,
-		Timeout: 60,
-		AllowedUpdates: []string{
-			"message",
-			"edited_message",
-			"my_chat_member",
-			"callback_query",
-		},
-	}
-
-	pollingCtx, cancelPolling := context.WithCancel(ctx)
-	defer cancelPolling()
-
-	updates, err := b.telegram.UpdatesViaLongPolling(pollingCtx, u)
-	if err != nil {
-		return fmt.Errorf("failed to start polling: %w", err)
-	}
-
 	b.scanKnownGroups(ctx)
-
 	b.refreshStatsCache(ctx)
-	go b.statsCacheLoop(ctx)
+	workerCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	go b.statsCacheLoop(workerCtx)
+	go b.cleanupLoop(workerCtx)
+	go b.rateLimitCleanupLoop(workerCtx)
 
-	go b.cleanupLoop(ctx)
-	go b.rateLimitCleanupLoop(ctx)
-	go b.schedulerLoop(ctx)
-
-	logger.Info().Msg("Bot started successfully, listening for updates...")
-
-	for {
-		select {
-		case <-ctx.Done():
-			logger.Info().Msg("Stopping bot...")
-			cancelPolling()
-			b.drainHandlers(shutdownDrainTimeout)
-			return nil
-		case update, ok := <-updates:
-			if !ok {
-				// On SIGINT both select cases can be ready at once and Go picks
-				// randomly, so this branch must drain too — otherwise ~half of
-				// shutdowns leave in-flight handlers writing to a closed DB.
-				logger.Info().Msg("Updates channel closed, stopping bot...")
-				cancelPolling()
-				b.drainHandlers(shutdownDrainTimeout)
-				return nil
-			}
-			// Acquire a slot before spawning so a flood applies backpressure to
-			// the poller instead of spawning unbounded goroutines.
-			select {
-			case b.sem <- struct{}{}:
-			case <-ctx.Done():
-				logger.Info().Msg("Stopping bot...")
-				cancelPolling()
-				b.drainHandlers(shutdownDrainTimeout)
-				return nil
-			}
-			b.inflight.Add(1)
-			go func(u telego.Update) {
-				defer b.inflight.Done()
-				defer func() { <-b.sem }()
-				b.handleUpdate(ctx, u)
-			}(update)
-		}
-	}
+	var producers sync.WaitGroup
+	producers.Go(func() { b.schedulerLoop(workerCtx) })
+	producers.Go(func() { b.updateWorker(workerCtx) })
+	producers.Go(func() { b.deliveryWorker(workerCtx) })
+	err = b.poll(workerCtx)
+	cancel()
+	producers.Wait()
+	b.drainHandlers(shutdownDrainTimeout)
+	return err
 }
 
 // drainHandlers waits up to timeout for in-flight update handlers to finish, so

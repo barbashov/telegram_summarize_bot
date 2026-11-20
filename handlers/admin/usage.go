@@ -16,6 +16,7 @@ func (a *Admin) handleUsage(ctx context.Context, chatID int64) {
 		msgID := a.deps.SendMessage(ctx, chatID, "⏳ Собираю данные об использовании…")
 		quota = usage.ResolveCodexQuota(ctx, a.db, a.llm, a.cfg.Model, a.cfg.CodexQuotaTTL())
 		report := usage.Build(ctx, a.db, a.cfg.Model, a.cfg.ModelContextTokens, quota)
+		report.UseCodexContext(ctx, a.llm, a.cfg.ModelContextTokens)
 		if msgID != 0 {
 			a.deps.EditWithRetry(ctx, chatID, msgID, report.Format())
 			return

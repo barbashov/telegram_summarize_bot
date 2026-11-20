@@ -38,8 +38,9 @@ func runUsage(ctx context.Context, cfg *config.Config) error {
 	defer func() { _ = database.Close() }()
 
 	var quota usage.QuotaResult
+	var client provider.LLMClient
 	if cfg.LLMMode == config.LLMModeOAuth {
-		client, err := provider.NewOAuthClient(
+		client, err = provider.NewOAuthClient(
 			cfg.OAuthTokenDir, cfg.OAuthClientID, cfg.OAuthCodexVersion,
 			cfg.LLMHTTPTimeout(), provider.WithRecorder(database),
 		)
@@ -51,6 +52,7 @@ func runUsage(ctx context.Context, cfg *config.Config) error {
 	}
 
 	report := usage.Build(ctx, database, cfg.Model, cfg.ModelContextTokens, quota)
+	report.UseCodexContext(ctx, client, cfg.ModelContextTokens)
 	fmt.Println(report.Format())
 	return nil
 }
